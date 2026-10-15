@@ -9,6 +9,7 @@ import { SegmentedControl } from '../SegmentedControl';
 import { CategoryStructure, SubcategoryStructure, SERVICE_TYPES } from './ExpenseTypes';
 import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../../types';
 import { SmartNumberInput } from '../SmartNumberInput';
+import { useDairy } from '../../context/DairyContext';
 
 const inputClass = "w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-lime-500 transition-colors shadow-2xs";
 const labelClass = "text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1 block";
@@ -143,7 +144,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
               {categorySearch && (
                 <button 
                   onClick={() => setCategorySearch('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
                 >
                   <X size={13} />
                 </button>
@@ -496,7 +497,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
             <div className="p-10 text-center text-slate-400 bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
               <FolderTree size={32} className="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
               <p className="font-bold text-xs text-slate-600 dark:text-slate-300">No categories found</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Try searching with a different keyword or create a new category above</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Try searching with a different keyword or create a new category above</p>
             </div>
           )}
         </div>
@@ -604,6 +605,9 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
   rememberName,
   setRememberName
 }) => {
+  const { isDayLocked } = useDairy();
+  const isDateLocked = Boolean(isDayLocked && formData.date && isDayLocked(formData.date));
+
   if (!isOpen) return null;
 
   return (
@@ -623,6 +627,14 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmitExpense} className="p-6 space-y-4 max-h-[82vh] overflow-y-auto">
+          {/* Proactive Day-Lock Warning Banner */}
+          {isDateLocked && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center gap-2.5 text-xs font-semibold text-amber-900 dark:text-amber-200 animate-in fade-in" role="alert">
+              <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              <span><strong>Day Locked ({formData.date}):</strong> This date is closed and locked for accounting. New expenses cannot be recorded for locked dates.</span>
+            </div>
+          )}
+
           {/* Amount and Payment Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -763,7 +775,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   >
                     Save
                   </button>
-                  <button type="button" onClick={() => setIsModalCreatingCat(false)} className="text-slate-400 hover:text-slate-600 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
+                  <button type="button" onClick={() => setIsModalCreatingCat(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
                 </div>
               ) : (
                 <RichSelect
@@ -827,7 +839,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   >
                     Save
                   </button>
-                  <button type="button" onClick={() => setIsModalCreatingSub(false)} className="text-slate-400 hover:text-slate-600 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
+                  <button type="button" onClick={() => setIsModalCreatingSub(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
                 </div>
               ) : (
                 <RichSelect
@@ -993,9 +1005,10 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
 
           <button 
             type="submit" 
-            disabled={isSubmitting}
-            className={`w-full text-white py-3 rounded-xl font-bold text-xs shadow-md transition-all mt-2 flex items-center justify-center gap-2 cursor-pointer ${
-              isSubmitting ? 'bg-slate-400 cursor-not-allowed shadow-none' : 'bg-lime-600 hover:bg-lime-700 shadow-lime-500/20'
+            disabled={isSubmitting || isDateLocked}
+            title={isDateLocked ? `Selected date (${formData.date}) is closed & locked` : undefined}
+            className={`w-full text-white py-3 rounded-xl font-bold text-xs shadow-md transition-all mt-2 flex items-center justify-center gap-2 ${
+              isSubmitting || isDateLocked ? 'bg-slate-400 cursor-not-allowed shadow-none' : 'bg-lime-600 hover:bg-lime-700 shadow-lime-500/20 cursor-pointer'
             }`}
           >
             {isSubmitting ? (
@@ -1090,7 +1103,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
               autoFocus
             />
             {query && (
-              <button type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400">
+              <button type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
                 <X size={12} />
               </button>
             )}
@@ -1133,7 +1146,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
                         {accountName ? ` · ${accountName}` : ''}
                       </p>
                       {preset.description && preset.description !== preset.name && (
-                        <p className="mt-0.5 truncate text-[10px] text-slate-400">{preset.description}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-slate-500 dark:text-slate-400">{preset.description}</p>
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -1467,6 +1480,9 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
   accounts,
   settings
 }) => {
+  const { isDayLocked } = useDairy();
+  const isPaymentDateLocked = Boolean(isDayLocked && paymentFormData.date && isDayLocked(paymentFormData.date));
+
   if (!isOpen) return null;
 
   return (
@@ -1503,6 +1519,14 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
         </div>
 
         <form onSubmit={handlePaymentSubmit} className="p-5 sm:p-6 space-y-4">
+          {/* Proactive Day-Lock Warning Banner */}
+          {isPaymentDateLocked && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center gap-2.5 text-xs font-semibold text-amber-900 dark:text-amber-200 animate-in fade-in" role="alert">
+              <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              <span><strong>Day Locked ({paymentFormData.date}):</strong> This date is closed and locked for accounting. Vendor transactions cannot be recorded for locked dates.</span>
+            </div>
+          )}
+
           {/* Transaction Direction Switcher */}
           <div>
             <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block mb-1.5">
@@ -1687,13 +1711,14 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
             </button>
             <button 
               type="submit" 
-              disabled={isSubmittingPayment}
-              className={`flex-1 py-2.5 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                isSubmittingPayment 
+              disabled={isSubmittingPayment || isPaymentDateLocked}
+              title={isPaymentDateLocked ? `Selected date (${paymentFormData.date}) is closed & locked` : undefined}
+              className={`flex-1 py-2.5 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5 ${
+                isSubmittingPayment || isPaymentDateLocked
                   ? 'bg-slate-400 cursor-not-allowed shadow-none'
                   : (paymentFormData.type === 'refund' 
-                    ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-500/20' 
-                    : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20')
+                    ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-500/20 cursor-pointer' 
+                    : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20 cursor-pointer')
               }`}
             >
               {isSubmittingPayment ? (

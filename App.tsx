@@ -3,6 +3,7 @@ import { DairyProvider, useDairy } from './context/DairyContext';
 import { ToastProvider } from './context/ToastContext';
 import { TabProvider, useTabs } from './context/TabContext';
 import Sidebar from './components/Sidebar';
+import TabBar from './components/TabBar';
 import WorkspaceContainer from './components/WorkspaceContainer';
 import ToastContainer from './components/ToastContainer';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -123,6 +124,17 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        const activeEl = document.activeElement as HTMLElement | null;
+        const isEditingInPosBilling = activeEl && (
+          activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.isContentEditable
+        ) && Boolean(activeEl.closest('.pos-cart-list, .pos-quick-dialog, [role="dialog"], [aria-modal="true"], .pos-checkout-section'));
+
+        if (isEditingInPosBilling) {
+          return;
+        }
+
         e.preventDefault();
         setIsCommandPaletteOpen(prev => !prev);
       }
@@ -177,8 +189,8 @@ const AppContent: React.FC = () => {
           <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-slate-200 dark:from-slate-900 to-slate-50 dark:to-slate-950 -z-10"></div>
 
           {/* Header */}
-          <header className="h-16 md:h-18 flex items-center justify-between px-3 sm:px-4 md:px-8 pt-2 md:pt-3 pb-2 z-20 shrink-0 relative gap-2 border-b border-slate-200/60 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/70 backdrop-blur-md">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <header className="h-16 md:h-18 flex items-center justify-between px-3 sm:px-4 md:px-6 lg:px-8 pt-2 md:pt-3 pb-2 z-20 shrink-0 relative gap-2 border-b border-slate-200/60 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/70 backdrop-blur-md">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 sm:flex-initial">
               {/* Mobile Menu Button */}
               <button 
                 onClick={() => setIsSidebarOpen(true)}
@@ -190,14 +202,14 @@ const AppContent: React.FC = () => {
               
               <div className="flex flex-col min-w-0">
                 <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-                  <h1 className="hidden sm:block text-base sm:text-xl font-black text-slate-900 dark:text-slate-50 capitalize tracking-tight truncate">
+                  <h1 className="hidden sm:block text-base lg:text-xl font-black text-slate-900 dark:text-slate-50 capitalize tracking-tight truncate max-w-[130px] md:max-w-[200px] lg:max-w-none">
                     {activeTitle}
                   </h1>
                   <span className="hidden lg:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-lime-100/80 text-lime-800 dark:bg-lime-900/30 dark:text-lime-300 border border-lime-200/50 dark:border-lime-700/30 shrink-0">
                     Enterprise
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden md:block">Mooco Dairy Management & Accounting ERP</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden xl:block">Mooco Dairy Management & Accounting ERP</p>
               </div>
             </div>
             
@@ -212,14 +224,14 @@ const AppContent: React.FC = () => {
               <button 
                 type="button"
                 onClick={() => setIsCommandPaletteOpen(true)}
-                className="flex items-center bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 rounded-xl p-2 sm:px-3 sm:py-2 md:px-3.5 shadow-xs hover:border-lime-500/50 transition-all cursor-pointer active:scale-95 text-left"
+                className="flex items-center bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 rounded-xl p-2 sm:px-3 sm:py-2 md:px-3 shadow-xs hover:border-lime-500/50 transition-all cursor-pointer active:scale-95 text-left"
                 title="Quick Search & Command Palette (Ctrl+K)" aria-label="Quick search"
               >
-                <Search size={16} className="text-slate-400 sm:mr-2 shrink-0"/>
-                <span className="hidden sm:inline text-xs font-medium text-slate-400 sm:w-20 md:w-32 truncate">
+                <Search size={16} className="text-slate-400 lg:mr-2 shrink-0"/>
+                <span className="hidden lg:inline text-xs font-medium text-slate-400 w-24 xl:w-32 truncate">
                   Quick search...
                 </span>
-                <kbd className="hidden lg:inline-block text-[10px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-600 ml-1">
+                <kbd className="hidden xl:inline-block text-[10px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-600 ml-1">
                   ⌘K
                 </kbd>
               </button>
@@ -244,6 +256,9 @@ const AppContent: React.FC = () => {
               </button>
             </div>
           </header>
+
+          {/* Browser-style Tab Workspace Bar */}
+          <TabBar />
 
           {/* Main Workspace Area */}
           <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">

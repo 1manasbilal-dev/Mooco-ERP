@@ -55,6 +55,19 @@ export const DenominationDialog: React.FC<DenominationDialogProps> = ({
     onChange({});
   };
 
+  React.useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [open, onClose]);
+
   const handleApply = () => {
     onApply(total);
     onClose();

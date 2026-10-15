@@ -98,6 +98,24 @@ export const TabBar: React.FC = () => {
     }
   };
 
+  // Enable smooth horizontal wheel scrolling
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY !== 0 && !e.shiftKey) {
+        // If container can scroll horizontally, redirect vertical wheel to horizontal
+        const canScroll = el.scrollWidth > el.clientWidth;
+        if (canScroll) {
+          e.preventDefault();
+          el.scrollLeft += e.deltaY;
+        }
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
+
   // Scroll active tab into view whenever it changes
   useEffect(() => {
     if (scrollContainerRef.current) {
@@ -140,7 +158,7 @@ export const TabBar: React.FC = () => {
   }, [hasPermission]);
 
   return (
-    <div className="w-full bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-2 sm:px-4 md:px-8 py-1.5 flex items-center justify-between gap-2 z-10 shrink-0 select-none backdrop-blur-xs">
+    <div className="w-full bg-slate-100/90 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-2 sm:px-3 md:px-4 lg:px-6 py-1.5 flex items-center justify-between gap-2 z-10 shrink-0 select-none backdrop-blur-xs">
       {/* Left: Scroll Left Chevron if needed */}
       <div className="flex items-center min-w-0 flex-1 gap-1">
         <button
@@ -174,7 +192,7 @@ export const TabBar: React.FC = () => {
                   }
                 }}
                 onClick={() => setActiveTabId(tab.id)}
-                className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all shrink-0 max-w-[200px] sm:max-w-[240px] border ${
+                className={`group relative flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all shrink-0 max-w-[150px] sm:max-w-[190px] lg:max-w-[240px] border ${
                   isActive
                     ? 'bg-white dark:bg-slate-850 text-slate-900 dark:text-white border-slate-200/90 dark:border-slate-700 shadow-xs'
                     : isSplitActive

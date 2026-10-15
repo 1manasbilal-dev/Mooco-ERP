@@ -19,11 +19,13 @@ import { formatQty, formatCurrency, cleanNumber, cleanQty } from '../lib/formatt
 const MotionDiv = motion.div as any;
 
 const Production: React.FC = () => {
-  const { productionBatches, updateBatchStage, cancelBatch, items, allocations } = useDairy();
+  const { productionBatches, updateBatchStage, cancelBatch, items, allocations, isDayLocked, getBusinessDate } = useDairy();
   const { showToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   
+  const isTodayLocked = Boolean(isDayLocked && getBusinessDate && isDayLocked(getBusinessDate()));
+
   // View State from URL
   const [activeView, setActiveView] = useState<'board' | 'history'>(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -160,6 +162,8 @@ const Production: React.FC = () => {
       return { loose, variantTotal, total, variantDetails };
   }, [looseOutput, variantOutputs, variants, productDef]);
 
+  const itemsMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
+
   // Estimated Cost Calculation for Active Batch (Preview)
   const financialPreview = useMemo(() => {
      if (!selectedBatch || !productDef) return null;
@@ -186,7 +190,7 @@ const Production: React.FC = () => {
      if (productDef.recipe && productDef.recipe_base_quantity) {
         const scale = (selectedBatch.quantity_input || 0) / productDef.recipe_base_quantity;
         productDef.recipe.forEach(ing => {
-           const item = items.find(i => i.id === ing.item_id);
+           const item = itemsMap.get(ing.item_id);
            const qty = ing.quantity * scale;
            const unitCost = item?.cost_price || 0;
            const cost = qty * unitCost;
@@ -208,7 +212,7 @@ const Production: React.FC = () => {
          variants.forEach(v => {
              const count = variantOutputs[v.id] || 0;
              if (count > 0 && v.packaging_item_id) {
-                 const packItem = items.find(i => i.id === v.packaging_item_id);
+                 const packItem = itemsMap.get(v.packaging_item_id);
                  if (packItem) {
                      const packQtyUsed = count * v.packaging_qty;
                      const cost = packQtyUsed * (packItem.cost_price || 0);
@@ -260,12 +264,26 @@ const Production: React.FC = () => {
         totalActualOutput: outputForCalc,
         yieldPercent
      };
-  }, [selectedBatch, productDef, allocations, items, looseOutput, variantOutputs, outputBreakdown]);
+  }, [selectedBatch, productDef, allocations, itemsMap, looseOutput, variantOutputs, outputBreakdown]);
 
   // Filter Data for Views
-  const activeBatches = productionBatches.filter(b => 
+  const activeBatches = useMemo(() => productionBatches.filter(b => 
     b.status !== ProductionStage.COMPLETED && b.status !== ProductionStage.CANCELLED
-  );
+  ), [productionBatches]);
+
+  const batchesByStage = useMemo(() => {
+    const map: Record<string, ProductionBatch[]> = {
+      [ProductionStage.PROCESSING]: [],
+      [ProductionStage.QUALITY]: [],
+      [ProductionStage.PACKAGING]: []
+    };
+    for (const b of activeBatches) {
+      if (map[b.status]) {
+        map[b.status].push(b);
+      }
+    }
+    return map;
+  }, [activeBatches]);
 
   const historyBatches = useMemo(() => {
     return productionBatches
@@ -644,7 +662,7 @@ const Production: React.FC = () => {
           {/* Mobile Quick Stage Jump Tabs (Visible on Mobile < md) */}
           <div className="flex md:hidden items-center justify-between gap-1 bg-white p-1.5 rounded-xl border border-slate-200/90 shadow-2xs shrink-0">
             {columns.map(col => {
-              const count = activeBatches.filter(b => b.status === col.id).length;
+              const count = (batchesByStage[col.id] || []).length;
               const isActive = activeMobileColumn === col.id;
               const Icon = col.icon;
               return (
@@ -671,7 +689,7 @@ const Production: React.FC = () => {
           {/* On Mobile: Smooth Snap-Scrolling 3-Stage Pipeline | On Desktop: 3-Column Grid */}
           <div className="flex-1 overflow-x-auto overflow-y-hidden flex snap-x snap-mandatory md:snap-none gap-3 pb-1 min-h-0 scrollbar-thin">
             {columns.map(col => {
-               const batchesInStage = activeBatches.filter(b => b.status === col.id);
+               const batchesInStage = batchesByStage[col.id] || [];
                const isDragOver = dragOverColumnId === col.id;
                const Icon = col.icon;
 
@@ -951,6 +969,13 @@ const Production: React.FC = () => {
 
               {/* Modal Content */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+                  {/* Proactive Day-Lock Warning Banner */}
+                  {isTodayLocked && (
+                    <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-semibold animate-in fade-in" role="alert">
+                      <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span><strong>Day Locked ({getBusinessDate()}):</strong> Today's business day is closed and locked for accounting. Completed batches cannot be transferred to inventory.</span>
+                    </div>
+                  )}
                   
                   {/* 1. Metrics Grid */}
                   <div className="grid grid-cols-3 gap-2 text-center">
@@ -1075,9 +1100,10 @@ const Production: React.FC = () => {
 
                                           <button 
                                               onClick={handleCompleteBatch}
-                                              disabled={isSubmitting}
-                                              className={`w-full py-2.5 rounded-xl font-bold shadow-md hover:bg-lime-700 active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs sm:text-sm cursor-pointer ${
-                                                isSubmitting ? 'bg-slate-400 cursor-not-allowed shadow-none' : 'bg-lime-600 text-white'
+                                              disabled={isSubmitting || isTodayLocked}
+                                              title={isTodayLocked ? `Day ${getBusinessDate()} is closed & locked` : undefined}
+                                              className={`w-full py-2.5 rounded-xl font-bold shadow-md hover:bg-lime-700 active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs sm:text-sm ${
+                                                isSubmitting || isTodayLocked ? 'bg-slate-400 cursor-not-allowed shadow-none' : 'bg-lime-600 text-white cursor-pointer'
                                               }`}
                                           >
                                               {isSubmitting ? (

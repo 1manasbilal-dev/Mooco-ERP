@@ -10,7 +10,33 @@ interface Props {
 const currency = (amount: number) => `Rs ${amount.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const quantity = (amount: number) => amount.toLocaleString('en-PK', { maximumFractionDigits: 3 });
 export default function StockProfitReport({ report, loading, error, start, end, loadedAt, search, onRefresh }: Props) {
-  if (loading) return <div className={`${MOOCO_THEME.card.panel} flex items-center gap-3`} role="status"><RefreshCw size={18} className="animate-spin" /><span>Loading complete stock and transaction history…</span></div>;
+  if (loading) {
+    return (
+      <div className="space-y-4 animate-pulse" role="status" aria-label="Loading stock and profit calculations">
+        <div className={`${MOOCO_THEME.card.panel} flex items-center justify-between gap-3`}>
+          <div className="flex items-center gap-3">
+            <RefreshCw size={18} className="animate-spin text-lime-600 shrink-0" />
+            <div>
+              <p className="font-bold text-sm text-slate-800 dark:text-slate-200">Calculating Actual Profit (Stock-Based)...</p>
+              <p className="text-xs text-slate-500">Loading opening stock, purchases, conversions, and closing inventory...</p>
+            </div>
+          </div>
+          <div className="h-8 w-28 bg-slate-200 dark:bg-slate-750 rounded-xl" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {[1, 2, 3, 4].map(n => (
+            <div key={n} className={`${MOOCO_THEME.card.stat} space-y-2`}>
+              <div className="h-3 w-20 bg-slate-200 dark:bg-slate-750 rounded" />
+              <div className="h-7 w-32 bg-slate-200 dark:bg-slate-750 rounded" />
+              <div className="h-3 w-24 bg-slate-100 dark:bg-slate-800 rounded" />
+            </div>
+          ))}
+        </div>
+        <div className={`${MOOCO_THEME.card.panel} h-44 bg-slate-100/50 dark:bg-slate-800/40 rounded-2xl`} />
+        <div className={`${MOOCO_THEME.card.panel} h-64 bg-slate-100/50 dark:bg-slate-800/40 rounded-2xl`} />
+      </div>
+    );
+  }
   if (error || !report) return <div className={`${MOOCO_THEME.card.panel} space-y-3`} role="alert"><p className="font-bold">Profit report could not load</p><p className="text-sm">{error || 'Full history is required to calculate profit.'}</p><button className={MOOCO_THEME.button.primary} onClick={onRefresh}>Retry loading</button></div>;
   const rows = report.rows.filter(row => `${row.name} ${row.location}`.toLowerCase().includes(search.toLowerCase()));
   const reconciled = report.issues.length === 0;

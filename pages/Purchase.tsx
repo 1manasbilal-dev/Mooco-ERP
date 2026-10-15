@@ -255,7 +255,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const { 
     suppliers, purchases, materialPurchases, allocations, addPurchase, 
     returnPurchase, returnMaterialPurchase, addBulkMaterialPurchase, 
-    items, settings, accounts = [], canPerform, activeShiftSession
+    items, settings, accounts = [], canPerform, activeShiftSession, isDayLocked
   } = useDairy();
   const { showToast } = useToast();
   const { openTab } = useTabs();
@@ -367,6 +367,9 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const [paidAmount, setPaidAmount] = useState<string>('');
   const [paymentMode, setPaymentMode] = useState<string>('Cash');
   const [materialAccountId, setMaterialAccountId] = useState<string>('');
+
+  const isMilkDateLocked = Boolean(isDayLocked && milkForm.date && isDayLocked(milkForm.date));
+  const isMaterialDateLocked = Boolean(isDayLocked && invoiceDate && isDayLocked(invoiceDate));
 
   const availableAccounts = useMemo(() => (accounts || []).filter(a => a.isActive !== false), [accounts]);
 
@@ -1126,6 +1129,14 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
             <form onSubmit={handleMilkSubmit} className="col-span-12 lg:col-span-8 p-3.5 sm:p-5 flex flex-col justify-between lg:border-r border-slate-200 space-y-4">
               <div className="space-y-3.5">
                 
+                {/* Proactive Day-Lock Warning Banner */}
+                {isMilkDateLocked && (
+                  <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-semibold animate-in fade-in" role="alert">
+                    <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span><strong>Day Locked ({milkForm.date}):</strong> This business date is closed and locked for accounting. Milk intake cannot be saved for locked days.</span>
+                  </div>
+                )}
+
                 {/* Row 1: Session Meta (Date, Shift Dropdown, Milk Variety Dropdown) */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
                   {/* Date */}
@@ -1405,9 +1416,10 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                   </button>
                   <button 
                     type="submit" 
-                    disabled={!milkForm.supplier_id || milkForm.quantity <= 0 || milkForm.rate <= 0 || isSubmitting || milkTypeOptions.length === 0}
+                    disabled={!milkForm.supplier_id || milkForm.quantity <= 0 || milkForm.rate <= 0 || isSubmitting || milkTypeOptions.length === 0 || isMilkDateLocked}
+                    title={isMilkDateLocked ? `Selected date (${milkForm.date}) is closed & locked` : undefined}
                     className={`font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                      milkForm.supplier_id && milkForm.quantity > 0 && milkForm.rate > 0 && !isSubmitting && milkTypeOptions.length > 0
+                      milkForm.supplier_id && milkForm.quantity > 0 && milkForm.rate > 0 && !isSubmitting && milkTypeOptions.length > 0 && !isMilkDateLocked
                         ? 'bg-lime-600 hover:bg-lime-700 text-white cursor-pointer'
                         : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                     }`}
@@ -1532,6 +1544,14 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
             
             {/* Top Invoice Controls */}
             <div className="p-3 sm:p-4 bg-slate-50 space-y-3">
+              {/* Proactive Day-Lock Warning Banner */}
+              {isMaterialDateLocked && (
+                <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-semibold animate-in fade-in" role="alert">
+                  <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span><strong>Day Locked ({invoiceDate}):</strong> This business date is closed and locked for accounting. Supplies invoice cannot be saved for locked days.</span>
+                </div>
+              )}
+
               <div className="flex items-end gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-1">
@@ -1943,9 +1963,10 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     )}
                     <button 
                       onClick={submitInvoice} 
-                      disabled={invoiceItems.length === 0 || isSubmittingInvoice || (!isCashPaidFull && !invoiceSupplier)} 
+                      disabled={invoiceItems.length === 0 || isSubmittingInvoice || (!isCashPaidFull && !invoiceSupplier) || isMaterialDateLocked} 
+                      title={isMaterialDateLocked ? `Selected date (${invoiceDate}) is closed & locked` : undefined}
                       className={`font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap flex-1 sm:flex-initial ${
-                        invoiceItems.length > 0 && !isSubmittingInvoice && (isCashPaidFull || !!invoiceSupplier)
+                        invoiceItems.length > 0 && !isSubmittingInvoice && (isCashPaidFull || !!invoiceSupplier) && !isMaterialDateLocked
                           ? 'bg-lime-600 hover:bg-lime-700 text-white cursor-pointer' 
                           : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                       }`}

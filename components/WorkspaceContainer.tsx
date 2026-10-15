@@ -1,4 +1,4 @@
-import React, { Activity, Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { useTabs, WorkspaceTab } from '../context/TabContext';
 import ProtectedRoute from './ProtectedRoute';
 import { PageLoadingFallback } from './PageLoadingFallback';
@@ -34,17 +34,22 @@ export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMod
   const {
     tabs,
     activeTabId,
+    splitTabId,
+    isSplitView,
     closeTab
   } = useTabs();
 
   const [visitedTabs, setVisitedTabs] = useState(() => new Set([activeTabId]));
   useEffect(() => {
     setVisitedTabs(previous => {
-      const next = new Set(tabs.filter(tab => tab.id === activeTabId || previous.has(tab.id)).map(tab => tab.id));
+      const activeIds = new Set(tabs.map(t => t.id));
+      const next = new Set([...previous].filter(id => activeIds.has(id)));
+      next.add(activeTabId);
+      if (isSplitView && splitTabId) next.add(splitTabId);
       if (next.size === previous.size && [...next].every(id => previous.has(id))) return previous;
       return next;
     });
-  }, [tabs, activeTabId]);
+  }, [tabs, activeTabId, isSplitView, splitTabId]);
 
   // Download the initial dashboard module while session/data requests are running.
   useEffect(() => {
@@ -174,21 +179,28 @@ export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMod
     }
   };
 
+  const isDualView = Boolean(isSplitView && splitTabId && splitTabId !== activeTabId && tabs.some(t => t.id === splitTabId));
+
   return (
     <div className="flex-1 flex flex-col min-h-0 h-full w-full overflow-hidden relative">
-      <div className="flex-1 flex flex-col min-h-0 h-full w-full overflow-hidden">
+      <div className={`flex-1 flex ${isDualView ? 'flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-200 dark:divide-slate-800' : 'flex-col'} min-h-0 h-full w-full overflow-hidden`}>
         {tabs.map(tab => {
-          const isCurrent = tab.id === activeTabId;
+          const isLeft = tab.id === activeTabId;
+          const isRight = isDualView && tab.id === splitTabId;
+          const isVisible = isDualView ? (isLeft || isRight) : isLeft;
           const isPos = tab.id === 'pos';
           const isContained = isPos || tab.id === 'reports';
-          // Saved tabs stay in navigation without downloading/mounting their pages.
-          if (!isCurrent && !visitedTabs.has(tab.id)) return null;
+
+          // Saved tabs stay in navigation without downloading/mounting their pages until first activated.
+          if (!isVisible && !visitedTabs.has(tab.id)) return null;
 
           return (
-            <Activity key={tab.id} mode={isCurrent ? 'visible' : 'hidden'}>
             <div
+              key={tab.id}
               data-module={tab.id}
-              className={`workspace-pane w-full h-full flex-1 flex flex-col min-h-0 ${isContained ? 'overflow-hidden' : 'overflow-y-auto'}`}
+              data-active={isVisible ? 'true' : 'false'}
+              style={{ display: isVisible ? 'flex' : 'none' }}
+              className={`workspace-pane w-full h-full flex-1 flex flex-col min-h-0 ${isContained ? 'overflow-hidden' : 'overflow-y-auto'} ${!isVisible ? 'hidden' : ''}`}
             >
               <div className={`workspace-page w-full ${isContained ? 'flex-1 flex flex-col min-h-0 h-full' : 'min-h-full'} ${isPos ? '' : `px-3 sm:px-4 md:px-8 ${isContained ? 'pb-4' : 'pb-8'} pt-2 max-w-[1600px] mx-auto`}`}>
                 <Suspense fallback={<PageLoadingFallback />}>
@@ -196,7 +208,6 @@ export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMod
                 </Suspense>
               </div>
             </div>
-            </Activity>
           );
         })}
       </div>

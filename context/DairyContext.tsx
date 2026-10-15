@@ -643,6 +643,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  const lastWorkCountRef = useRef<number>(-1);
+
   const reapplyLedger = async () => {
     const seen = currentEpoch();
     let work;
@@ -653,6 +655,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return;
     }
     if (currentEpoch() !== seen) return;
+    const workTotal = work.orders.length + work.customers.length + work.outbox.length;
+    if (workTotal === 0 && lastWorkCountRef.current === 0) {
+      return;
+    }
+    lastWorkCountRef.current = workTotal;
+
     const view = projectLedger(ledgerBases.current, work);
     const publish = (setter: (value: any) => void, next: any[] | null) => {
       if (!next) return;
@@ -660,7 +668,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (currentEpoch() !== seen) return prev;
         const ids = new Set(next.map(row => row?.id).filter(Boolean));
         const extras = (prev || []).filter(row => row?.id && !ids.has(row.id));
-        return [...next, ...extras];
+        const nextCombined = [...next, ...extras];
+        if (prev && prev.length === nextCombined.length) {
+          const unchanged = prev.every((item, idx) => item === nextCombined[idx]);
+          if (unchanged) return prev;
+        }
+        return nextCombined;
       });
     };
     publish(setSales, view.sales);
@@ -7893,36 +7906,46 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast(`Category "${trimmed}" removed`, "info");
   };
 
+  const contextValue = useMemo(() => ({
+    users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
+    loginWithCredentials, switchUserWithPin, switchUserByIdAndPin, setCurrentUserDirectly, logoutUser,
+    addUser, updateUser, deleteUser, createRole, updateRole, deleteRole, hasPermission, canPerform,
+    purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
+    productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
+    accounts, bankTransactions, manualAccounts, journalEntries, settings, 
+    categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
+    businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
+    refreshCashControl, getShiftTotals, startCashierShift, closeCashierShift, acceptHeadRemittance, resolveCashVariance,
+    resolveCashHandover, closeBusinessDay, reopenBusinessDay, upsertCashDrawer, getBusinessDate, submitDayCloseStockCount, addDrawerOpeningCash, closeDayCash, closeDayStock,
+    inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries,
+    openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, isDayLocked,
+    addPurchase, returnPurchase, deletePurchase, returnMaterialPurchase, deleteMaterialPurchase, addBulkMaterialPurchase, recordSupplierPayment,
+    addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
+    allocateBulkMilk, allocateFromRetailStock, setAllocations,
+    addItem, updateItem, deleteItem, reorderItems, adjustStock, setInventory,
+    setProductionBatches, createBatch, updateBatchStage, cancelBatch,
+    addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, processCreditSaleTransaction, performRetailClosing, postClosingStockSale,
+    addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
+    addExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, generateRecurringExpense, 
+    addExpenseVendor, updateExpenseVendor, deleteExpenseVendor, recordExpenseVendorPayment, deleteExpenseVendorTransaction,
+    addAccount, updateAccount, deleteAccount, recordBankTransaction, transferFunds, addManualAccount, deleteManualAccount, updateManualAccount, addJournalEntry,
+    updateSettings, resetSystem, clearData, addCategory, removeCategory,
+    addUnit, updateUnit, deleteUnit,
+    // QuickBooks-Style Smart Deletion & Financial Protection
+    getDeleteAssessment, safeDeleteCustomer, safeDeleteSupplier, safeDeleteItem,
+    safeDeleteExpense, safeDeleteAccount, reactivateEntity
+  }), [
+    users, roles, currentUser, currentRole, isUserSwitcherOpen, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError,
+    purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
+    productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
+    accounts, bankTransactions, manualAccounts, journalEntries, settings, 
+    categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
+    businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
+    inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries
+  ]);
+
   return (
-    <DairyContext.Provider value={{
-      users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
-      loginWithCredentials, switchUserWithPin, switchUserByIdAndPin, setCurrentUserDirectly, logoutUser,
-      addUser, updateUser, deleteUser, createRole, updateRole, deleteRole, hasPermission, canPerform,
-      purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
-      productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
-      accounts, bankTransactions, manualAccounts, journalEntries, settings, 
-      categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
-      businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
-      refreshCashControl, getShiftTotals, startCashierShift, closeCashierShift, acceptHeadRemittance, resolveCashVariance,
-      resolveCashHandover, closeBusinessDay, reopenBusinessDay, upsertCashDrawer, getBusinessDate, submitDayCloseStockCount, addDrawerOpeningCash, closeDayCash, closeDayStock,
-      inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries,
-      openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, isDayLocked,
-      addPurchase, returnPurchase, deletePurchase, returnMaterialPurchase, deleteMaterialPurchase, addBulkMaterialPurchase, recordSupplierPayment,
-      addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
-      allocateBulkMilk, allocateFromRetailStock, setAllocations,
-      addItem, updateItem, deleteItem, reorderItems, adjustStock, setInventory,
-      setProductionBatches, createBatch, updateBatchStage, cancelBatch,
-      addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, processCreditSaleTransaction, performRetailClosing, postClosingStockSale,
-      addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
-      addExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, generateRecurringExpense, 
-      addExpenseVendor, updateExpenseVendor, deleteExpenseVendor, recordExpenseVendorPayment, deleteExpenseVendorTransaction,
-      addAccount, updateAccount, deleteAccount, recordBankTransaction, transferFunds, addManualAccount, deleteManualAccount, updateManualAccount, addJournalEntry,
-      updateSettings, resetSystem, clearData, addCategory, removeCategory,
-      addUnit, updateUnit, deleteUnit,
-      // QuickBooks-Style Smart Deletion & Financial Protection
-      getDeleteAssessment, safeDeleteCustomer, safeDeleteSupplier, safeDeleteItem,
-      safeDeleteExpense, safeDeleteAccount, reactivateEntity
-    }}>
+    <DairyContext.Provider value={contextValue}>
       {children}
     </DairyContext.Provider>
   );

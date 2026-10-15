@@ -42,7 +42,7 @@ const Section: React.FC<{ icon: React.ReactNode; title: string; aside?: React.Re
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="flex items-start justify-between gap-4 py-2.5 border-b border-slate-100 dark:border-slate-800/80 last:border-0 last:pb-0 first:pt-0">
-    <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 shrink-0 pt-0.5">{label}</span>
+    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 shrink-0 pt-0.5">{label}</span>
     <div className="text-xs sm:text-[13px] font-bold text-slate-800 dark:text-slate-200 text-right flex flex-wrap justify-end gap-1.5">{children}</div>
   </div>
 );
@@ -178,42 +178,42 @@ export const ItemDetailView: React.FC<Props> = ({
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
           <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1"><Package size={11} className="text-blue-500" />In stock</span>
+              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Package size={11} className="text-blue-500" />In stock</span>
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${tone.pill}`}>{tone.text}</span>
             </div>
             <div className="mt-1.5 flex items-baseline gap-1">
-              <span className="text-xl font-black text-slate-900 dark:white font-mono">{formatQty(stock)}</span>
-              <span className="text-xs font-bold text-slate-500 uppercase">{item.unit}</span>
+              <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{formatQty(stock)}</span>
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">{item.unit}</span>
             </div>
             <div className="mt-2 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden" aria-hidden="true"><div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${stockPct}%` }} /></div>
-            <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold mt-1.5 block">
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1.5 block">
               {activeVariants.length > 0 ? `${formatQty(packsReady)} packs ready · ` : ''}reorder at {formatQty(reorder)}
             </span>
           </div>
 
           <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1"><Tag size={11} className="text-emerald-500" />Selling price</span>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Tag size={11} className="text-emerald-500" />Selling price</span>
             <div className="mt-1.5"><span className="text-xl font-black text-slate-900 dark:text-white font-mono">{priceHeadline.value}</span></div>
-            <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold mt-1 block">{priceHeadline.sub}</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">{priceHeadline.sub}</span>
           </div>
 
           <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1"><Briefcase size={11} className="text-slate-400" />Landed cost</span>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Briefcase size={11} className="text-slate-400" />Landed cost</span>
             <div className="mt-1.5"><span className="text-xl font-black text-slate-700 dark:text-slate-300 font-mono">{formatCurrency(cost)}</span></div>
-            <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold mt-1 block">per {item.unit}</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">per {item.unit}</span>
           </div>
 
           <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider flex items-center gap-1"><TrendingUp size={11} className="text-emerald-500" />Profit</span>
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><TrendingUp size={11} className="text-emerald-500" />Profit</span>
             {profitBasis ? (
               <>
                 <div className="mt-1.5"><span className={`text-xl font-black font-mono ${profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{profit >= 0 ? '+' : ''}{formatCurrency(profit)}</span></div>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">{marginPct.toFixed(1)}% margin · {markupPct.toFixed(0)}% markup <span className="text-slate-400 dark:text-slate-500">/ {profitBasis.per}</span></span>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">{marginPct.toFixed(1)}% margin · {markupPct.toFixed(0)}% markup <span className="text-slate-500 dark:text-slate-400">/ {profitBasis.per}</span></span>
               </>
             ) : (
               <>
                 <div className="mt-1.5"><span className="text-xl font-black text-slate-300 dark:text-slate-600 font-mono">N/A</span></div>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold mt-1 block">Needs a selling price</span>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">Needs a selling price</span>
               </>
             )}
           </div>
@@ -249,7 +249,7 @@ export const ItemDetailView: React.FC<Props> = ({
                 </div>
                 {tab === 'amount' ? cashGroup : qtyGroup}
                 {tab === 'amount' && preview.usingDefaultCash && (
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium mt-2">Auto amounts based on the rate. Use Edit → POS Quick Cash Buttons to set your own.</p>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium mt-2">Auto amounts based on the rate. Use Edit → POS Quick Cash Buttons to set your own.</p>
                 )}
               </div>
             )}
@@ -277,7 +277,7 @@ export const ItemDetailView: React.FC<Props> = ({
                     </div>
                     <div className="text-right">
                       <span className="font-mono font-black text-slate-900 dark:text-white text-sm block">{rate > 0 ? formatCurrency(rate) : 'No price'}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{formatQty(stock)} {item.unit} in stock</span>
+                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{formatQty(stock)} {item.unit} in stock</span>
                     </div>
                   </div>
                 )}

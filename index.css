@@ -843,9 +843,21 @@ select option {
     font-size: 12px !important;
   }
 
+  table {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tfoot {
+    display: table-footer-group !important;
+  }
   .print-avoid-break,
   .print-card,
-  table, tr, td, th {
+  .signature-box,
+  .kpi-box,
+  tr, td, th {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }

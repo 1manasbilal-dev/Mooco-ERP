@@ -198,6 +198,19 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
 
   const decreaseDisabled = !entry.error && entry.qty <= minQty + 0.001;
 
+  const humanQtyBadge = useMemo(() => {
+    if (entry.qty <= 0) return null;
+    const isLiter = /liter|litre|\bl\b/i.test(unit || product.unit || '');
+    const isKg = /kg|kilo/i.test(unit || product.unit || '');
+    if (isLiter && entry.qty < 1) {
+      return `~${Math.round(entry.qty * 1000)} ml`;
+    }
+    if (isKg && entry.qty < 1) {
+      return `~${Math.round(entry.qty * 1000)} g`;
+    }
+    return null;
+  }, [entry.qty, unit, product.unit]);
+
   return createPortal(
     <div className="pos-quick-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <form
@@ -339,10 +352,20 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
               </button>
             </div>
             <div id={summaryId} className="pos-quick-conversion">
-              <span>
+              <span className="flex items-center gap-1.5 flex-wrap">
                 {variant && fromBase
                   ? `= ${formatQty(entry.qty, 3)} ${unit} = ${formatQty(entry.qty * contains, 3)} ${product.unit} @ ${formatCurrency(rate)}/${unit}`
                   : `= ${formatQty(entry.qty, 3)} ${unit} @ ${formatCurrency(rate)}/${unit}`}
+                {humanQtyBadge && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-lime-100 dark:bg-lime-950/70 text-lime-800 dark:text-lime-300 font-bold text-[11px] shadow-2xs">
+                    {humanQtyBadge}
+                  </span>
+                )}
+                {amount && Number(amount) > 0 && !packaged && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-bold text-[11px] shadow-2xs">
+                    Rs. {amount} Custom Amount
+                  </span>
+                )}
               </span>
               <span>{allowNegativeStock ? 'Stock override enabled' : `${formatQty(remaining, 3)} ${unit} available`}</span>
             </div>

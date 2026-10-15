@@ -45,13 +45,37 @@ const POS: React.FC = () => {
 
   const isTodayLocked = isDayLocked(getBusinessDate()); 
   
-  const [cart, setCart] = useState<any[]>([]);
+  const [cart, setCart] = useState<any[]>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (Array.isArray(parsed.cart)) return parsed.cart;
+      }
+    } catch {}
+    return [];
+  });
   cartRef.current = cart;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isSubmittingRef = useRef(false);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-  const [paymentMode, setPaymentMode] = useState<string>('Cash');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.selectedCustomerId) return parsed.selectedCustomerId;
+      }
+    } catch {}
+    return '';
+  });
+  const [paymentMode, setPaymentMode] = useState<string>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft && draft.paymentMode) return draft.paymentMode;
+    } catch {}
+    return 'Cash';
+  });
   const [searchProduct, setSearchProduct] = useState('');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog');
@@ -98,10 +122,66 @@ const POS: React.FC = () => {
   }, []);
 
   // Discount & Tendered Amount State
-  const [discountType, setDiscountType] = useState<'flat' | 'percent'>('flat');
-  const [discountValue, setDiscountValue] = useState<string>('');
-  const [cashReceived, setCashReceived] = useState<string>('');
-  const [customerPaidAmount, setCustomerPaidAmount] = useState<string>('');
+  const [discountType, setDiscountType] = useState<'flat' | 'percent'>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.discountType) return parsed.discountType;
+      }
+    } catch {}
+    return 'flat';
+  });
+  const [discountValue, setDiscountValue] = useState<string>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.discountValue) return parsed.discountValue;
+      }
+    } catch {}
+    return '';
+  });
+  const [cashReceived, setCashReceived] = useState<string>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.cashReceived) return parsed.cashReceived;
+      }
+    } catch {}
+    return '';
+  });
+  const [customerPaidAmount, setCustomerPaidAmount] = useState<string>(() => {
+    try {
+      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.customerPaidAmount) return parsed.customerPaidAmount;
+      }
+    } catch {}
+    return '';
+  });
+
+  // Sync active counter draft to sessionStorage so switching tabs never resets state
+  useEffect(() => {
+    if (bookingId) return;
+    try {
+      if (cart.length > 0 || selectedCustomerId || discountValue || cashReceived || customerPaidAmount) {
+        sessionStorage.setItem('mooco_pos_cart_draft', JSON.stringify({
+          cart,
+          selectedCustomerId,
+          paymentMode,
+          discountType,
+          discountValue,
+          cashReceived,
+          customerPaidAmount
+        }));
+      } else {
+        sessionStorage.removeItem('mooco_pos_cart_draft');
+      }
+    } catch {}
+  }, [cart, selectedCustomerId, paymentMode, discountType, discountValue, cashReceived, customerPaidAmount, bookingId]);
 
   useEffect(() => {
     if (!bookingId) {
@@ -508,13 +588,23 @@ const POS: React.FC = () => {
           handleCheckout();
         }
       } else if (e.key === 'Escape') {
-        setQuickModalOpen(false);
-        setNewCustomerModalOpen(false);
-        setHeldOrdersModalOpen(false);
-        setShortcutsModalOpen(false);
-        setCompletedSaleModalOpen(false);
-        setCustomerDropdownOpen(false);
-        setEditingCartItem(null);
+        if (customerDropdownOpen) {
+          setCustomerDropdownOpen(false);
+        } else if (editingCartItem) {
+          setEditingCartItem(null);
+        } else if (quickModalOpen) {
+          setQuickModalOpen(false);
+        } else if (newCustomerModalOpen) {
+          setNewCustomerModalOpen(false);
+        } else if (heldOrdersModalOpen) {
+          setHeldOrdersModalOpen(false);
+        } else if (shortcutsModalOpen) {
+          setShortcutsModalOpen(false);
+        } else if (isShiftModalOpen) {
+          setIsShiftModalOpen(false);
+        } else if (completedSaleModalOpen) {
+          setCompletedSaleModalOpen(false);
+        }
       }
     };
 

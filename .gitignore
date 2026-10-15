@@ -40,3 +40,12 @@ screenshots/
 *.njsproj
 *.sln
 *.sw?
+
+# Temporary, QA, and AI artifacts
+scratch_*
+qa_*
+.agents/
+metadata.json
+dev-tracker.html
+open-tracker.bat
+

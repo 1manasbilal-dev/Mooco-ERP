@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AudioLines, Mic, MicOff } from 'lucide-react';
+import { AudioLines, Mic, MicOff, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 import { extractMoocoWakeCommand } from '../../lib/posVoiceCommand';
 
 export type PosVoiceResult = {
@@ -38,6 +38,8 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
   const [enabled, setEnabled] = useState(false);
   const [listening, setListening] = useState(false);
   const [awake, setAwake] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [voiceError, setVoiceError] = useState<'permission' | 'network' | null>(null);
   const [status, setStatus] = useState('Mic off — enable karke “Mooco” bolain');
   const [lastTranscript, setLastTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
@@ -127,6 +129,7 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
         }
 
         processingRef.current = true;
+        setIsProcessing(true);
         setStatus(`Samjha: “${commandText}”`);
         try {
           const result = await onCommandRef.current(commandText);
@@ -144,6 +147,7 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
           keepAwake();
         } finally {
           processingRef.current = false;
+          setIsProcessing(false);
         }
       }
     };
@@ -153,12 +157,16 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
       if (error === 'not-allowed' || error === 'service-not-allowed') {
         shouldListenRef.current = false;
         setEnabled(false);
-        setStatus('Microphone permission allow karein');
+        setVoiceError('permission');
+        setStatus('Microphone permission blocked — browser settings se allow karein');
         setListening(false);
         return;
       }
-      if (error !== 'no-speech' && error !== 'aborted') {
-        setStatus(error === 'network' ? 'Voice service ke liye internet check karein' : 'Mic dobara start ho raha hai…');
+      if (error === 'network') {
+        setVoiceError('network');
+        setStatus('Voice service ke liye internet check karein');
+      } else if (error !== 'no-speech' && error !== 'aborted') {
+        setStatus('Mic dobara start ho raha hai…');
       }
     };
 
@@ -189,6 +197,7 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
 
   const toggleMicrophone = () => {
     if (!supported || !recognitionRef.current) return;
+    setVoiceError(null);
 
     if (enabled) {
       shouldListenRef.current = false;
@@ -214,11 +223,15 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
     }
   };
 
-  const statusClasses = awake
-    ? 'border-lime-300 bg-lime-50 dark:border-lime-800 dark:bg-lime-950/40'
-    : enabled
-      ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/30'
-      : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900';
+  const statusClasses = voiceError
+    ? 'border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/40'
+    : isProcessing
+      ? 'border-indigo-300 bg-indigo-50/70 dark:border-indigo-900 dark:bg-indigo-950/40'
+      : awake
+        ? 'border-lime-300 bg-lime-50 dark:border-lime-800 dark:bg-lime-950/40'
+        : enabled
+          ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/30'
+          : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900';
 
   return (
     <div className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 shadow-xs shrink-0 ${statusClasses}`}>
@@ -241,11 +254,31 @@ export const PosVoiceAssistant: React.FC<PosVoiceAssistantProps> = ({ onCommand,
       </button>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <AudioLines size={14} className={awake ? 'text-lime-700 dark:text-lime-400' : 'text-slate-400'} />
-          <span className={`text-xs font-bold truncate ${awake ? 'text-lime-800 dark:text-lime-300' : 'text-slate-700 dark:text-slate-200'}`}>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <AudioLines size={14} className={awake ? 'text-lime-700 dark:text-lime-400' : isProcessing ? 'text-indigo-600 dark:text-indigo-400 animate-pulse' : 'text-slate-400'} />
+          <span className={`text-xs font-bold truncate ${awake ? 'text-lime-800 dark:text-lime-300' : isProcessing ? 'text-indigo-800 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200'}`}>
             {status}
           </span>
+          {isProcessing && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 shadow-2xs animate-pulse shrink-0">
+              <Loader2 size={10} className="animate-spin" /> Processing...
+            </span>
+          )}
+          {awake && !isProcessing && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-lime-100 dark:bg-lime-900/60 text-lime-800 dark:text-lime-300 shadow-2xs shrink-0 animate-pulse">
+              <Sparkles size={10} /> Listening...
+            </span>
+          )}
+          {voiceError === 'permission' && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 shadow-2xs shrink-0">
+              <AlertCircle size={10} /> Mic Blocked
+            </span>
+          )}
+          {voiceError === 'network' && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 shadow-2xs shrink-0">
+              <AlertCircle size={10} /> Network Offline
+            </span>
+          )}
         </div>
         {lastTranscript && (
           <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">

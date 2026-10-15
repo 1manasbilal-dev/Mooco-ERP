@@ -5,6 +5,19 @@ import { formatCurrency } from '../../lib/formatters';
 
 const MotionDiv = motion.div as any;
 
+const getHumanFriendlyBadge = (item: any) => {
+  const isLiter = /liter|litre|\bl\b/i.test(item.unit || item.baseUnit || '');
+  const isKg = /kg|kilo/i.test(item.unit || item.baseUnit || '');
+  let friendlyVol: string | null = null;
+  if (isLiter && item.qty > 0 && item.qty < 1) {
+    friendlyVol = `~${Math.round(item.qty * 1000)} ml`;
+  } else if (isKg && item.qty > 0 && item.qty < 1) {
+    friendlyVol = `~${Math.round(item.qty * 1000)} g`;
+  }
+  const hasCustomTotal = item.customTotal !== undefined;
+  return { friendlyVol, hasCustomTotal, customTotal: item.customTotal };
+};
+
 interface PosCartProps {
   expanded: boolean;
   cart: any[];
@@ -166,9 +179,28 @@ export const PosCart: React.FC<PosCartProps> = ({
                             <p className="font-bold text-slate-800 dark:text-slate-100 text-xs truncate leading-tight group-hover:text-lime-600 transition-colors">
                               {item.name}
                             </p>
-                            <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium truncate mt-0.5">
-                              {item.variantName ? `${item.variantName} · ` : ''}Rs {formatCurrency(item.price)}
-                            </p>
+                            <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                              <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium truncate">
+                                {item.variantName ? `${item.variantName} · ` : ''}Rs {formatCurrency(item.price)}
+                              </span>
+                              {(() => {
+                                const badge = getHumanFriendlyBadge(item);
+                                return (
+                                  <>
+                                    {badge.friendlyVol && (
+                                      <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-300">
+                                        {badge.friendlyVol}
+                                      </span>
+                                    )}
+                                    {badge.hasCustomTotal && (
+                                      <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
+                                        Rs {badge.customTotal} custom
+                                      </span>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
                           </button>
                         </div>
 
@@ -263,7 +295,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                         <button type="button" aria-label={`Edit ${item.name}`} onClick={() => openEditItemModal(item)} className="text-left font-semibold text-slate-900 dark:text-slate-100 text-sm leading-snug hover:text-lime-600 dark:hover:text-lime-400 transition-colors block">
                           {item.name}
                         </button>
-                        <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                           <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
                             {item.variantName ? `${item.variantName} (${item.stockDeduction} ${item.baseUnit || 'pcs'})` : `${item.unit}`}
                           </span>
@@ -271,6 +303,23 @@ export const PosCart: React.FC<PosCartProps> = ({
                           <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
                             Rs {formatCurrency(item.price)}
                           </span>
+                          {(() => {
+                            const badge = getHumanFriendlyBadge(item);
+                            return (
+                              <>
+                                {badge.friendlyVol && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-300 shadow-2xs">
+                                    {badge.friendlyVol}
+                                  </span>
+                                )}
+                                {badge.hasCustomTotal && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 shadow-2xs">
+                                    Rs {badge.customTotal} Custom Amount
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
 

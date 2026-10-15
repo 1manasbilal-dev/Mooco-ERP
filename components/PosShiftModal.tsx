@@ -308,6 +308,19 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     }
   };
 
+  useEffect(() => {
+    if (!isOpen || isClosingDenomOpen || Boolean(detailModalTab)) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isClosingDenomOpen, detailModalTab, onClose]);
+
   const formattedStartTime = activeShiftSession?.started_at
     ? new Date(activeShiftSession.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : activeShiftSession?.start_time || '—';

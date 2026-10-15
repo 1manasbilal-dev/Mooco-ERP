@@ -25,19 +25,25 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
   readOnly,
   onKeyDown,
   onBlur,
+  onFocus,
   ...rest
 }) => {
   const [internalText, setInternalText] = useState<string>(value !== undefined && value !== null ? String(value) : '');
   const inputRef = useRef<HTMLInputElement>(null);
+  const isFocusedRef = useRef(false);
 
-  // Sync when external value changes and not currently holding an active user expression
+  // Sync when external value changes and not currently holding an active user expression or focused typing
   useEffect(() => {
     const stringVal = value !== undefined && value !== null ? String(value) : '';
-    // If internal text contains an operator that evaluates to the current value, don't overwrite user's typing
-    const evalRes = evaluateMathExpression(internalText);
-    if (!evalRes?.isExpression || String(evalRes.result) !== stringVal) {
-      setInternalText(stringVal);
+    if (isFocusedRef.current) {
+      const evalRes = evaluateMathExpression(internalText);
+      if (evalRes?.isExpression) return;
+      if (internalText === stringVal) return;
+      if (Number(internalText) === Number(stringVal) && !isNaN(Number(internalText)) && !isNaN(Number(stringVal))) {
+        return;
+      }
     }
+    setInternalText(stringVal);
   }, [value]);
 
   // Live evaluation of the current input
@@ -59,15 +65,21 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
+    const cursor = e.target.selectionStart;
     setInternalText(val);
 
     const evalRes = evaluateMathExpression(val);
     if (!evalRes?.isExpression) {
       onChange(val);
-    } else if (evalRes.result !== undefined) {
-      let finalNum = evalRes.result;
-      if (!allowNegative && finalNum < 0) finalNum = 0;
-      onChange(String(finalNum));
+    }
+
+    // Preserve cursor position across parent re-renders
+    if (cursor !== null) {
+      requestAnimationFrame(() => {
+        if (inputRef.current && document.activeElement === inputRef.current) {
+          inputRef.current.setSelectionRange(cursor, cursor);
+        }
+      });
     }
   };
 
@@ -81,7 +93,13 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
     if (onKeyDown) onKeyDown(e);
   };
 
+  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    isFocusedRef.current = true;
+    if (onFocus) onFocus(e);
+  };
+
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    isFocusedRef.current = false;
     applyEvaluation();
     if (onBlur) onBlur(e);
   };
@@ -100,6 +118,7 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
         inputMode="text"
         value={internalText}
         onChange={handleChange}
+        onFocus={handleFocus}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         disabled={disabled}

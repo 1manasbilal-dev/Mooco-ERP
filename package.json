@@ -6,9 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
-    "build:zip": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node package_dist.cjs",
-    "preview": "vite preview",
-    "tracker": "start dev-tracker.html"
+    "build:zip": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node scripts/package-build.mjs",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@supabase/supabase-js": "2",

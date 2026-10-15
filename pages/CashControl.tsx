@@ -210,7 +210,7 @@ const CashControl: React.FC = () => {
     cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
     acceptHeadRemittance, resolveCashVariance,
     resolveCashHandover, closeBusinessDay, reopenBusinessDay, refreshCashControl, getBusinessDate, getShiftTotals, upsertCashDrawer, addDrawerOpeningCash, closeDayCash, closeDayStock,
-    submitDayCloseStockCount, settings
+    submitDayCloseStockCount, settings, isDayLocked
   } = useDairy();
   const location = useLocation();
   const validTabs: Tab[] = ['head', 'days', 'audit', 'drawers'];
@@ -266,6 +266,9 @@ const CashControl: React.FC = () => {
     Boolean((currentUser?.permissions || []).includes('cash_control:approve')) ||
     Boolean(currentRole?.permissions?.includes('cash_control' as any)) ||
     Boolean((currentUser?.permissions || []).includes('cash_control'));
+
+  const todayDate = getBusinessDate ? getBusinessDate() : new Date().toISOString().split('T')[0];
+  const isTodayLocked = Boolean(isDayLocked && isDayLocked(todayDate));
 
   // Real Cash Accounts from Bank & Cash acting as Drawers / Tills. Only Cash
   // accounts explicitly ENABLED as drawers appear here — never Bank/Wallet.
@@ -401,6 +404,15 @@ const CashControl: React.FC = () => {
           <span className="hidden sm:inline">Refresh</span>
         </button>
       </div>
+
+      {isTodayLocked && (
+        <div className="rounded-2xl border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3 shadow-sm">
+          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <span className="font-bold">Business Day Locked:</span> The current business date ({todayDate}) is locked. Financial entries, drawer adjustments, and day closing for this date cannot be modified.
+          </div>
+        </div>
+      )}
 
       {tab === 'head' && isHead && (
         <section className="space-y-5">
@@ -1215,6 +1227,7 @@ const CashControl: React.FC = () => {
           const raw = dayCloseCounts[row.key];
           return raw !== undefined && raw.trim() !== '' && roundQuantity(Number(raw) - row.system) !== 0;
         }).length;
+        const isThisDayLocked = Boolean(isDayLocked && isDayLocked(day.business_date));
         return (
           <div className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
             <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs" onClick={() => setDayCloseModal(null)} />
@@ -1230,6 +1243,12 @@ const CashControl: React.FC = () => {
                 <button type="button" onClick={() => setDayCloseModal(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
               </div>
               <div className="p-4 sm:p-5 overflow-y-auto">
+                {isThisDayLocked && (
+                  <div className="mb-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 px-3 py-2.5 text-xs font-bold text-amber-800 dark:text-amber-200 flex items-center gap-2">
+                    <AlertTriangle size={15} className="shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>This business date ({day.business_date}) is already locked. New closings or modifications are disabled.</span>
+                  </div>
+                )}
                 <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-2">Day summary (final)</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
@@ -1451,7 +1470,7 @@ const CashControl: React.FC = () => {
                     <span className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-4 py-2.5 text-xs font-black"><CheckCircle2 size={15} /> Cash closed ✓</span>
                   ) : (
                     <button
-                      disabled={busy}
+                      disabled={busy || isThisDayLocked}
                       onClick={() => run(async () => {
                         if (dayCountedNum === null) {
                           showToast('Cash close se pehle actual counted cash enter karein.', 'warning');
@@ -1471,7 +1490,7 @@ const CashControl: React.FC = () => {
                     <span className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-4 py-2.5 text-xs font-black"><CheckCircle2 size={15} /> Stock closed ✓</span>
                   ) : (
                     <button
-                      disabled={busy}
+                      disabled={busy || isThisDayLocked}
                       onClick={() => run(async () => {
                         const entries = Object.keys(dayCloseCounts)
                           .filter(key => (dayCloseCounts[key] || '').trim() !== '')

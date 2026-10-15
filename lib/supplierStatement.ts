@@ -941,6 +941,24 @@ const PRINT_CSS = `
   @media print {
     .screen-toolbar { display: none !important; }
     body { padding: 0 !important; }
+    table {
+      break-inside: auto !important;
+      page-break-inside: auto !important;
+    }
+    thead {
+      display: table-header-group !important;
+    }
+    tfoot {
+      display: table-footer-group !important;
+    }
+    tr, td, th {
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+    }
+    .kpi-row, .kpi-box, .profile-grid, .letterhead-bar, .signatures-grid, .signature-box, .metrics-strip, .voucher-card {
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+    }
   }
 
   /* Document Master Container */
