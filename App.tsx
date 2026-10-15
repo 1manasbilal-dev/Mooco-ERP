@@ -1,0 +1,272 @@
+import React, { Suspense, lazy, useState, useEffect } from 'react';
+import { DairyProvider, useDairy } from './context/DairyContext';
+import { ToastProvider } from './context/ToastContext';
+import { TabProvider, useTabs } from './context/TabContext';
+import Sidebar from './components/Sidebar';
+import WorkspaceContainer from './components/WorkspaceContainer';
+import ToastContainer from './components/ToastContainer';
+import ErrorBoundary from './components/ErrorBoundary';
+import SyncStatusBadge from './components/SyncStatusBadge';
+import PageLoadingFallback from './components/PageLoadingFallback';
+import { Search, Menu, Sun, Moon, Lock, LogOut, ChevronDown } from 'lucide-react';
+
+const UserSwitcherModal = lazy(() => import('./components/UserSwitcherModal'));
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(module => ({ default: module.CommandPalette })));
+
+const UserSwitcherHost: React.FC = () => {
+  const { isUserSwitcherOpen } = useDairy();
+  if (!isUserSwitcherOpen) return null;
+  return <Suspense fallback={<PageLoadingFallback variant="overlay" message="Opening secure user access" submessage="Getting your sign-in ready" />}>
+    <UserSwitcherModal />
+  </Suspense>;
+};
+
+// Header User Profile Pill with Interactive Dropdown
+const HeaderUserButton: React.FC = () => {
+  const { currentUser, currentRole, logoutUser, setIsUserSwitcherOpen } = useDairy();
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const initials = currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : 'OW';
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={menuRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen(prev => !prev)}
+        className="flex items-center gap-2 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/60 border border-slate-200 dark:border-slate-700 rounded-xl p-1.5 shadow-xs transition-all cursor-pointer"
+        title="User profile & options"
+      >
+        <div className="w-7 h-7 rounded-lg bg-lime-100 dark:bg-lime-900/50 text-lime-800 dark:text-lime-300 font-black text-xs flex items-center justify-center">
+          {initials}
+        </div>
+        <div className="flex flex-col text-left hidden sm:block min-w-0 max-w-[110px]">
+          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate leading-tight block">
+            {currentUser?.name || 'Admin'}
+          </span>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold truncate leading-none block">
+            {currentRole?.name || 'Super Admin'}
+          </span>
+        </div>
+        <ChevronDown size={14} className={`text-slate-400 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 top-[calc(100%+0.35rem)] w-48 p-2 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl z-50 space-y-1 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150">
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(false);
+              setIsUserSwitcherOpen(true);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+          >
+            <Lock size={14} className="text-slate-400 shrink-0" />
+            <span>Switch User / Lock</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsOpen(false);
+              logoutUser();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+          >
+            <LogOut size={14} className="text-rose-500 shrink-0" />
+            <span>Logout / Sign Out</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AppContent: React.FC = () => {
+  const { tabs, activeTabId } = useTabs();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('app_theme');
+    if (saved) return saved as 'light' | 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const activeTabObj = tabs.find(t => t.id === activeTabId);
+  const activeTitle = activeTabObj?.title || activeTabId.replace(/-/g, ' ');
+
+  const toggleTheme = () => {
+    if (themeMode === 'light') {
+      setThemeMode('dark');
+      localStorage.setItem('app_theme', 'dark');
+      document.documentElement.classList.add('dark');
+    } else {
+      setThemeMode('light');
+      localStorage.setItem('app_theme', 'light');
+      document.documentElement.classList.remove('dark');
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const savedScale = localStorage.getItem('app_zoom_scale');
+    if (savedScale) {
+      const scale = parseInt(savedScale, 10);
+      if (scale >= 80 && scale <= 250) {
+        document.documentElement.style.fontSize = `${(scale / 100) * 16}px`;
+      }
+    }
+
+    const savedTheme = localStorage.getItem('app_theme');
+    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (savedTheme === 'dark' || (!savedTheme && systemDark)) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, []);
+
+  return (
+    <>
+      <ToastContainer />
+      <UserSwitcherHost />
+      {isCommandPaletteOpen && (
+        <Suspense fallback={<PageLoadingFallback variant="overlay" message="Opening quick search" submessage="Your next action, a little closer" />}>
+        <CommandPalette 
+          isOpen={isCommandPaletteOpen} 
+          onClose={() => setIsCommandPaletteOpen(false)} 
+          toggleTheme={toggleTheme} 
+          themeMode={themeMode} 
+        />
+        </Suspense>
+      )}
+
+      <div data-workspace={activeTabId} className="mooco-app flex h-[100dvh] w-full font-sans bg-slate-50 dark:bg-slate-950 overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar 
+          isOpen={isSidebarOpen} 
+          onClose={() => setIsSidebarOpen(false)} 
+        />
+
+        {/* Main Content Wrapper */}
+        <div data-sidebar-content className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
+          {/* Background Decoration */}
+          <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-slate-200 dark:from-slate-900 to-slate-50 dark:to-slate-950 -z-10"></div>
+
+          {/* Header */}
+          <header className="h-16 md:h-18 flex items-center justify-between px-3 sm:px-4 md:px-8 pt-2 md:pt-3 pb-2 z-20 shrink-0 relative gap-2 border-b border-slate-200/60 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/70 backdrop-blur-md">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              {/* Mobile Menu Button */}
+              <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="md:hidden p-2 sm:p-2.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60 shadow-xs cursor-pointer transition-all shrink-0"
+                title="Open Navigation Menu" aria-label="Open navigation menu" aria-expanded={isSidebarOpen} aria-controls="mooco-sidebar"
+              >
+                <Menu size={19} />
+              </button>
+              
+              <div className="flex flex-col min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                  <h1 className="hidden sm:block text-base sm:text-xl font-black text-slate-900 dark:text-slate-50 capitalize tracking-tight truncate">
+                    {activeTitle}
+                  </h1>
+                  <span className="hidden lg:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-lime-100/80 text-lime-800 dark:bg-lime-900/30 dark:text-lime-300 border border-lime-200/50 dark:border-lime-700/30 shrink-0">
+                    Enterprise
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden md:block">Mooco Dairy Management & Accounting ERP</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 shrink-0">
+              {/* Offline/Online Background Sync Status */}
+              <SyncStatusBadge />
+
+              {/* Operator Switcher Pill */}
+              <HeaderUserButton />
+
+              {/* Command Palette Trigger Button */}
+              <button 
+                type="button"
+                onClick={() => setIsCommandPaletteOpen(true)}
+                className="flex items-center bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 rounded-xl p-2 sm:px-3 sm:py-2 md:px-3.5 shadow-xs hover:border-lime-500/50 transition-all cursor-pointer active:scale-95 text-left"
+                title="Quick Search & Command Palette (Ctrl+K)" aria-label="Quick search"
+              >
+                <Search size={16} className="text-slate-400 sm:mr-2 shrink-0"/>
+                <span className="hidden sm:inline text-xs font-medium text-slate-400 sm:w-20 md:w-32 truncate">
+                  Quick search...
+                </span>
+                <kbd className="hidden lg:inline-block text-[10px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-600 ml-1">
+                  ⌘K
+                </kbd>
+              </button>
+
+              {/* Theme Toggle Pill Button */}
+              <button 
+                onClick={toggleTheme} 
+                className="flex items-center gap-1.5 p-2 sm:px-3 sm:py-2 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-600 dark:text-slate-300 shadow-xs transition-all hover:border-lime-400/50 cursor-pointer active:scale-95 shrink-0"
+                title={themeMode === 'light' ? 'Switch to Dark Theme' : 'Switch to Light Theme'}
+              >
+                {themeMode === 'light' ? (
+                  <>
+                    <Moon size={16} className="text-slate-600 dark:text-slate-300 transition-transform duration-200 rotate-0" />
+                    <span className="text-xs font-semibold hidden md:inline">Dark</span>
+                  </>
+                ) : (
+                  <>
+                    <Sun size={16} className="text-amber-400 transition-transform duration-200 rotate-90" />
+                    <span className="text-xs font-semibold hidden md:inline text-amber-300">Light</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </header>
+
+          {/* Main Workspace Area */}
+          <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+            <WorkspaceContainer themeMode={themeMode} toggleTheme={toggleTheme} />
+          </main>
+        </div>
+      </div>
+    </>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <ErrorBoundary>
+      <ToastProvider>
+        <DairyProvider>
+          <TabProvider>
+            <AppContent />
+          </TabProvider>
+        </DairyProvider>
+      </ToastProvider>
+    </ErrorBoundary>
+  );
+};
+
+export default App;

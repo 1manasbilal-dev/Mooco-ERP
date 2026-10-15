@@ -1,0 +1,438 @@
+/** Stock based, accrual profit. Every inventory transfer carries its cost only once. */
+export type ProfitRecord = Record<string, any>;
+export interface StockProfitSource {
+  items: ProfitRecord[];
+  sales: ProfitRecord[];
+  purchases: ProfitRecord[];
+  materialPurchases: ProfitRecord[];
+  allocations: ProfitRecord[];
+  productionBatches: ProfitRecord[];
+  dailySupplyEntries: ProfitRecord[];
+  expenses: ProfitRecord[];
+  inventoryLogs: ProfitRecord[];
+  supplierTransactions: ProfitRecord[];
+  retailClosings: ProfitRecord[];
+  pendingCount?: number;
+  loadedAt?: string;
+}
+export interface ProfitIssue { code: string; message: string; item?: string }
+export interface ProfitStockRow {
+  id: string; name: string; location: string; unit: string;
+  openingQty: number; openingRate: number; openingValue: number;
+  closingQty: number; closingRate: number; closingValue: number;
+}
+export interface StockProfitReport {
+  openingStock: number; closingStock: number; grossPurchases: number; purchaseReturns: number;
+  netPurchases: number; conversionCost: number; stockAdjustments: number;
+  consumedCost: number; grossSales: number; salesReturns: number; netSales: number;
+  posSales: number; supplySales: number; expenses: number; grossProfit: number; netProfit: number;
+  margin: number; stockLoss: number; rows: ProfitStockRow[]; issues: ProfitIssue[];
+  expenseCategories: { name: string; amount: number }[];
+  movements: { date: string; description: string; amount: number; kind: string }[];
+  validRange: boolean;
+}
+export const profitNumber = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0;
+const n = profitNumber;
+const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const qty = (value: number) => Math.round(value * 1e6) / 1e6;
+const lower = (value: unknown) => String(value || '').trim().toLowerCase();
+const records = (value: unknown): ProfitRecord[] => Array.isArray(value) ? value : [];
+const EPS = 0.00001;
+const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** Date-only business dates stay intact; timestamps use the shop's timezone. */
+export function profitDay(value?: string): string {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? '' : dateFormatter.format(time);
+}
+export function flattenProfitRecord(row: ProfitRecord): ProfitRecord {
+  return { ...row.details, ...row, details: row.details || {} };
+}
+interface Bucket {
+  id: string; name: string; location: string; unit: string; current: number; rate: number;
+  quantity: number; value: number; initialRate: number;
+}
+interface Event {
+  id: string; date: string; order: number; description: string; kind: string;
+  changes: { id: string; quantity: number; value?: number; returnOf?: string }[];
+  amount?: number; source?: string; destinations?: { id: string; quantity: number; weight: number }[];
+}
+
+export function buildStockProfitReport(source: StockProfitSource, start: string, end: string): StockProfitReport {
+  const issues = new Map<string, ProfitIssue>();
+  const issue = (code: string, message: string, item?: string) => issues.set(`${code}:${item || ''}`, { code, message, item });
+  const inRange = (date: string) => profitDay(date) >= start && profitDay(date) <= end;
+  const items = source.items.map(flattenProfitRecord);
+  const purchases = source.purchases.map(flattenProfitRecord);
+  const materials = source.materialPurchases.map(flattenProfitRecord);
+  const allocations = source.allocations.map(flattenProfitRecord);
+  const batches = source.productionBatches.map(flattenProfitRecord);
+  const logs = source.inventoryLogs.map(flattenProfitRecord);
+  const sales = source.sales.map(flattenProfitRecord);
+  const supplies = source.dailySupplyEntries.map(flattenProfitRecord);
+  const buckets = new Map<string, Bucket>();
+  const events: Event[] = [];
+  const usedLogs = new Set<string>();
+  const usedHistory = new Set<string>();
+  const addBucket = (id: string, name: string, location: string, unit: string, current = 0, rate = 0) => {
+    if (!buckets.has(id)) buckets.set(id, { id, name, location, unit, current, rate, quantity: 0, value: 0, initialRate: rate });
+    return id;
+  };
+  const addEvent = (event: Event) => {
+    if (!profitDay(event.date)) { issue('missing_date', 'A stock movement has no valid business date.', event.description); return; }
+    events.push(event);
+  };
+  const findItem = (id?: string, name?: string) => items.find(item => item.id === id) || items.find(item => lower(item.name) === lower(name));
+  const milkItem = (type: string) => items.find(item => lower(item.name).includes(lower(type)) && lower(item.name).includes('milk'));
+  const itemBucket = (item: ProfitRecord, variantId?: string) => {
+    if (variantId && variantId !== 'loose') {
+      const variant = records(item.variants).find(v => v.id === variantId);
+      if (!variant) issue('missing_variant', 'Pack size is missing; its cost requires review.', `${item.name} / ${variantId}`);
+      return addBucket(`item:${item.id}:${variantId}`, `${item.name} — ${variant?.name || variantId}`, 'Packed stock', 'packs', n(item.variant_stocks?.[variantId]), n(item.cost_price) * n(variant?.quantity_in_base_unit));
+    }
+    return addBucket(`item:${item.id}:loose`, item.name, 'Counter / warehouse', item.unit || 'units', n(item.stock), n(item.cost_price));
+  };
+  const lineBucket = (line: ProfitRecord) => {
+    const item = findItem(line.itemId || line.item_id, line.name || line.item_name);
+    if (!item) {
+      issue('missing_item', 'A transaction refers to a product missing from the item register.', line.name || line.item_name || line.itemId);
+      return addBucket(`missing:${line.itemId || line.name}`, line.name || 'Missing product', 'Unmatched stock', line.unit || 'units');
+    }
+    return itemBucket(item, line.variantId || line.variant_id);
+  };
+  items.forEach(item => {
+    itemBucket(item);
+    Object.keys(item.variant_stocks || {}).forEach(id => itemBucket(item, id));
+  });
+  const allocByPurchase = new Map(allocations.map(a => [a.purchase_id, a]));
+  const rawBucket = (purchase: ProfitRecord) => {
+    const allocation = allocByPurchase.get(purchase.id);
+    const remaining = allocation?.remaining_quantity ?? (allocation ? n(allocation.original_quantity) - n(allocation.allocated_quantity) : 0);
+    return addBucket(`raw:${purchase.id}`, `${purchase.milk_type || 'Raw'} milk`, 'Unallocated milk', 'L', n(remaining), n(purchase.rate || purchase.rate_per_liter));
+  };
+  // Returns are vouchers on their own dates. Partial returns mutate purchase quantities,
+  // so restore the original invoice before applying each return voucher.
+  const supplierReturns = source.supplierTransactions.map(flattenProfitRecord).filter(tx => lower(tx.type) === 'return');
+  const returnedByPurchase = new Map<string, ProfitRecord[]>();
+  supplierReturns.forEach(tx => {
+    const id = tx.purchase_id || tx.details?.purchase_id;
+    if (!id) { issue('unlinked_purchase_return', 'A supplier return is not linked to a purchase.', tx.id); return; }
+    returnedByPurchase.set(id, [...(returnedByPurchase.get(id) || []), tx]);
+  });
+  const purchaseDocuments: ProfitRecord[] = [...purchases.map(p => ({ ...p, isMilk: true })), ...materials.map(p => ({ ...p, isMilk: false }))];
+  purchaseDocuments.forEach(p => {
+    if (lower(p.status) === 'cancelled') return;
+    const id = p.isMilk ? rawBucket(p) : lineBucket({ itemId: p.item_id, name: p.item_name });
+    const rate = n(p.rate || p.rate_per_liter) || (n(p.quantity) > 0 ? n(p.total_amount) / n(p.quantity) : 0);
+    let returns = returnedByPurchase.get(p.id) || [];
+    if (!returns.length && (lower(p.status) === 'returned' || n(p.returned_quantity) > 0)) {
+      const returnedQty = n(p.returned_quantity) || n(p.quantity);
+      const returnDate = p.returned_at || p.last_returned_at;
+      if (returnDate) returns = [{ id: `return:${p.id}`, date: returnDate, amount: returnedQty * rate }];
+      else issue('missing_return_date', 'A returned purchase has no return date.', p.item_name || p.milk_type);
+      if (p.partial_returned && returnedQty > 0) issue('return_history', 'Multiple supplier returns have only a last return date; period allocation needs review.', p.item_name || p.milk_type);
+    }
+    const returnedAmount = returns.reduce((sum, tx) => sum + n(tx.amount), 0);
+    const wasFullReturn = lower(p.status) === 'returned';
+    const originalQty = wasFullReturn ? Math.max(n(p.original_intake_quantity || p.original_quantity || p.quantity), rate > 0 ? returnedAmount / rate : 0) : n(p.quantity) + (rate > 0 ? returnedAmount / rate : 0);
+    const originalAmount = wasFullReturn ? originalQty * rate : n(p.total_amount) + returnedAmount;
+    const bucket = buckets.get(id)!;
+    if (rate > 0) bucket.initialRate = rate;
+    addEvent({ id: `purchase:${p.id}`, date: p.date, order: 10, kind: 'Purchase', description: `${p.isMilk ? p.milk_type + ' milk' : p.item_name} purchase`, changes: [{ id, quantity: originalQty, value: originalAmount }], amount: originalAmount });
+    returns.forEach(tx => {
+      if (rate <= 0) issue('return_rate', 'Supplier return quantity cannot be recovered because its purchase rate is missing.', p.item_name || p.milk_type);
+      addEvent({ id: tx.id, date: tx.date, order: 60, kind: 'Purchase return', description: 'Return to supplier', changes: [{ id, quantity: rate > 0 ? -n(tx.amount) / rate : 0, value: -n(tx.amount) }], amount: -n(tx.amount) });
+    });
+  });
+
+  const rawForAllocation = (allocation: ProfitRecord) => {
+    const purchase = purchases.find(p => p.id === allocation.purchase_id);
+    return purchase ? rawBucket(purchase) : addBucket(`raw:${allocation.purchase_id || allocation.id}`, `${allocation.milk_type || 'Raw'} milk`, 'Unallocated milk', 'L', n(allocation.remaining_quantity ?? (n(allocation.original_quantity) - n(allocation.allocated_quantity))), n(allocation.average_rate));
+  };
+  const transfer = (id: string, date: string, from: string, to: string, quantity: number, description: string, order = 20) => addEvent({ id, date, order, description, kind: 'Transfer', changes: [{ id: from, quantity: -quantity }, { id: to, quantity }], source: from, destinations: [{ id: to, quantity, weight: 1 }] });
+  // Separate delivery stock prevents an allocation being counted as a sale.
+  const supplyBucket = (allocation: ProfitRecord) => {
+    const delivered = supplies.filter(s => !['pending', 'cancelled'].includes(lower(s.status)) && (s.allocation_id === allocation.id || s.allocation_id === allocation.purchase_id)).reduce((sum, s) => sum + n(s.net_qty ?? (s.delivered_qty != null ? n(s.delivered_qty) - n(s.returned_qty) : s.quantity)), 0);
+    const histories = records(allocation.allocation_history || allocation.details?.allocation_history).filter(h => lower(h.destination) === 'home delivery');
+    const sent = histories.reduce((sum, h) => sum + n(h.quantity), 0) || (lower(allocation.destination) === 'home delivery' ? n(allocation.allocated_quantity) : 0);
+    return addBucket(`delivery:${allocation.id}`, `${allocation.milk_type || 'Raw'} milk`, 'Delivery stock', 'L', sent - delivered, n(allocation.average_rate));
+  };
+  allocations.forEach(a => {
+    const raw = rawForAllocation(a);
+    const history = records(a.allocation_history || a.details?.allocation_history);
+    history.forEach((h, index) => {
+      const historyId = `${a.id}:${index}`;
+      const dest = lower(h.destination);
+      if (dest === 'production') return; // Batch inputs below own this transfer.
+      let to: string;
+      if (dest === 'home delivery') to = supplyBucket(a);
+      else if (dest === 'retail counter') {
+        const log = logs.find(l => lower(l.reason) === 'allocation' && n(l.difference) > 0 && String(l.notes || '').includes(`Purchase #${a.purchase_id}`) && profitDay(l.date) === profitDay(h.allocated_at) && Math.abs(n(l.difference) - n(h.quantity)) < EPS && !usedLogs.has(l.id));
+        const item = findItem(log?.item_id, log?.item_name) || milkItem(a.milk_type);
+        if (!item) { issue('allocation_item', 'Retail milk allocation has no matching milk product.', a.milk_type); return; }
+        to = itemBucket(item);
+        if (log) usedLogs.add(log.id);
+      } else { issue('allocation_destination', 'An allocation has an unknown destination.', a.milk_type); return; }
+      usedHistory.add(historyId);
+      transfer(`allocation:${historyId}`, h.allocated_at || a.date, raw, to, n(h.quantity), 'Milk allocation');
+    });
+    if (!history.length && n(a.allocated_quantity) > EPS && !a.returned_from_batch_id) {
+      const retailLogs = logs.filter(l => !usedLogs.has(l.id) && lower(l.reason) === 'allocation' && n(l.difference) > 0 && (String(l.id).includes(a.id) || String(l.notes || '').includes(`Purchase #${a.purchase_id}`)));
+      const loggedQty = retailLogs.reduce((sum, log) => sum + n(log.difference), 0);
+      if (lower(a.destination) === 'retail counter' && retailLogs.length) {
+        retailLogs.forEach(log => {
+          const item = findItem(log.item_id, log.item_name) || milkItem(a.milk_type);
+          if (!item) { issue('allocation_item', 'Retail milk allocation has no matching product.', a.milk_type); return; }
+          usedLogs.add(log.id);
+          transfer(`allocation-log:${log.id}`, log.date, raw, itemBucket(item), n(log.difference), 'Milk allocation recovered from stock log');
+        });
+        if (Math.abs(loggedQty - n(a.allocated_quantity)) > 0.001) issue('allocation_history', 'Stock allocation logs do not match the allocated milk quantity.', `${a.milk_type} / ${a.id}`);
+        return;
+      }
+      issue('allocation_history', 'Allocation timestamps are missing; the purchase date is used provisionally.', `${a.milk_type} / ${a.id}`);
+      if (lower(a.destination) === 'home delivery') transfer(`allocation:${a.id}`, a.date, raw, supplyBucket(a), n(a.allocated_quantity), 'Legacy delivery allocation');
+      if (lower(a.destination) === 'retail counter') {
+        const item = milkItem(a.milk_type);
+        if (item) transfer(`allocation:${a.id}`, a.date, raw, itemBucket(item), n(a.allocated_quantity), 'Legacy retail allocation');
+      }
+    }
+  });
+
+  batches.forEach(batch => {
+    const completion = batch.completed_date || records(batch.logs).find(l => lower(l.stage) === lower(batch.status))?.timestamp;
+    const terminal = ['completed', 'cancelled'].includes(lower(batch.status));
+    const wip = addBucket(`wip:${batch.id}`, `${batch.product_name} · ${batch.batch_number}`, 'Work in progress', 'L input', terminal ? 0 : n(batch.quantity_input), n(batch.input_cost_per_unit || batch.details?.input_cost_per_unit));
+    const breakdown = records(batch.milk_breakdown || batch.details?.milk_breakdown);
+    if (!breakdown.length) issue('batch_input', 'Production milk sources are missing; the batch input cost is provisional.', batch.batch_number);
+    breakdown.forEach((part, index) => {
+      const allocation = allocations.find(a => a.id === part.allocationId || a.purchase_id === part.allocationId);
+      const item = findItem(String(part.allocationId || '').replace(/^inv_/, '')) || milkItem(part.milkType);
+      const from = part.source === 'retail' && item ? itemBucket(item) : allocation ? rawForAllocation(allocation) : '';
+      if (!from) { issue('batch_source', 'A production milk source cannot be linked to its original stock.', batch.batch_number); return; }
+      transfer(`batch-in:${batch.id}:${index}`, batch.start_date, from, wip, n(part.quantity), 'Milk into production', 25);
+      if (part.source === 'retail') {
+        const log = logs.find(l => !usedLogs.has(l.id) && l.item_id === item?.id && lower(l.reason) === 'allocation' && n(l.difference) < 0 && Math.abs(n(l.difference) + n(part.quantity)) < EPS && profitDay(l.date) === profitDay(batch.start_date));
+        if (log) usedLogs.add(log.id);
+      } else if (allocation) {
+        const history = records(allocation.allocation_history || allocation.details?.allocation_history);
+        const index = history.findIndex((h, i) => !usedHistory.has(`${allocation.id}:${i}`) && lower(h.destination) === 'production' && Math.abs(n(h.quantity) - n(part.quantity)) < EPS && profitDay(h.allocated_at) === profitDay(batch.start_date));
+        if (index >= 0) usedHistory.add(`${allocation.id}:${index}`);
+      }
+    });
+    if (!breakdown.length) addEvent({ id: `batch-in:${batch.id}`, date: batch.start_date, order: 25, kind: 'Adjustment', description: 'Unlinked production input', changes: [{ id: wip, quantity: n(batch.quantity_input), value: n(batch.quantity_input) * n(batch.input_cost_per_unit || batch.details?.input_cost_per_unit) }] });
+    if (!terminal) return;
+    if (!completion) { issue('batch_completion_date', 'A terminal batch has no completion date.', batch.batch_number); return; }
+    if (lower(batch.status) === 'cancelled') {
+      const returned = allocations.find(a => a.returned_from_batch_id === batch.id || a.details?.returned_from_batch_id === batch.id);
+      if (returned) transfer(`batch-cancel:${batch.id}`, completion, wip, rawForAllocation(returned), n(batch.quantity_input), 'Cancelled batch milk returned', 35);
+      else issue('batch_cancel', 'Cancelled batch milk has no return allocation.', batch.batch_number);
+      return;
+    }
+    const item = findItem(batch.item_id, batch.product_name);
+    if (!item) { issue('batch_product', 'Finished production product is missing from the catalog.', batch.product_name); return; }
+    const output = batch.output_breakdown || batch.details?.output_breakdown;
+    const prodLog = logs.find(l => l.id === `log_prod_${batch.id}`);
+    if (prodLog) usedLogs.add(prodLog.id);
+    const destinations: { id: string; quantity: number; weight: number }[] = [];
+    if (output) {
+      if (n(output.loose_qty) > 0) destinations.push({ id: itemBucket(item), quantity: n(output.loose_qty), weight: n(output.loose_qty) });
+      records(output.variants).forEach(v => {
+        const variantId = v.variantId || v.variant_id || records(item.variants).find(d => d.name === v.variant_name)?.id;
+        const factor = n(v.base_qty_each) || n(records(item.variants).find(d => d.id === variantId)?.quantity_in_base_unit);
+        if (!variantId || factor <= 0) issue('batch_pack', 'A production pack has no saved size.', batch.batch_number);
+        if (variantId) destinations.push({ id: itemBucket(item, variantId), quantity: n(v.count), weight: n(v.total_base_qty) || n(v.count) * factor });
+      });
+    } else {
+      const actual = n(batch.quantity_output_actual);
+      const loose = prodLog ? n(prodLog.difference) : actual;
+      if (loose > 0) destinations.push({ id: itemBucket(item), quantity: loose, weight: loose });
+      // Old batches only stored packed counts in the log text.
+      const packed = String(prodLog?.notes || '').match(/\[Packaged: (.*?)\]/)?.[1];
+      if (packed) packed.split(', ').forEach(part => {
+        const match = part.match(/^([\d.]+)x (.+)$/);
+        const variant = records(item.variants).find(v => v.name === match?.[2]);
+        if (match && variant) destinations.push({ id: itemBucket(item, variant.id), quantity: n(match[1]), weight: n(match[1]) * n(variant.quantity_in_base_unit) });
+        else issue('batch_pack', 'Old production pack output cannot be identified.', batch.batch_number);
+      });
+      if (actual <= 0 || records(item.variants).length || Math.abs(destinations.reduce((sum, d) => sum + d.weight, 0) - actual) > 0.001) issue('batch_output', 'Production has no complete saved output breakdown; check loose and packed stock.', batch.batch_number);
+    }
+    const recipeSnapshot = batch.cost_snapshot || batch.details?.cost_snapshot;
+    if ((!recipeSnapshot && (records(item.recipe).length || destinations.some(d => d.id !== itemBucket(item)))) || recipeSnapshot?.materials_posted === false) issue('production_materials', 'Ingredient / packaging consumption was not posted for this batch. Check stock and costs before relying on net profit.', batch.batch_number);
+    const extra = n(recipeSnapshot?.external_conversion_cost);
+    if (extra > 0) addEvent({ id: `conversion:${batch.id}`, date: completion, order: 29, kind: 'Conversion cost', description: 'Production conversion cost', changes: [{ id: wip, quantity: 0, value: extra }], amount: extra });
+    if (destinations.length) addEvent({ id: `batch-out:${batch.id}`, date: completion, order: 30, kind: 'Transfer', description: 'Finished production', changes: [{ id: wip, quantity: -n(batch.quantity_input) }, ...destinations.map(d => ({ id: d.id, quantity: d.quantity }))], source: wip, destinations });
+    else issue('batch_output', 'Production output quantity is missing.', batch.batch_number);
+  });
+  // Unmatched production transfers are still assets until their batch is identified.
+  allocations.forEach(a => records(a.allocation_history || a.details?.allocation_history).forEach((h, index) => {
+    if (lower(h.destination) !== 'production' || usedHistory.has(`${a.id}:${index}`)) return;
+    issue('unlinked_production', 'Milk sent to production has no linked batch input.', a.id);
+    const holding = addBucket(`holding:${a.id}:${index}`, `${a.milk_type} milk`, 'Unmatched production stock', 'L', n(h.quantity), n(a.average_rate));
+    transfer(`holding-in:${a.id}:${index}`, h.allocated_at || a.date, rawForAllocation(a), holding, n(h.quantity), 'Unlinked production transfer');
+  }));
+
+  sales.forEach(sale => {
+    if (['cancelled', 'draft'].includes(lower(sale.status))) return;
+    addEvent({ id: `sale:${sale.id}`, date: sale.date, order: 40, description: `Invoice ${sale.bill_number || sale.id}`, kind: 'POS sale', amount: n(sale.total), changes: records(sale.items).map(line => ({ id: lineBucket(line), quantity: -n(line.qty) })) });
+    let returns = records(sale.returned_items || sale.details?.returned_items);
+    if (!returns.length && (n(sale.refund_amount) > 0 || lower(sale.status) === 'returned')) {
+      const returnDate = sale.returned_at;
+      if (returnDate) returns = records(sale.items).map(line => ({ ...line, returnDate, action: sale.return_type || sale.details?.return_type || 'refund', restock: sale.restock_action || sale.details?.restock_action || 'restock' }));
+      else issue('sales_return_date', 'A returned sale has no return date.', sale.bill_number);
+    }
+    const refundLines = returns.filter(line => line.action !== 'replace');
+    const beforeDiscount = records(sale.items).reduce((sum, line) => sum + n(line.total ?? n(line.qty) * n(line.price)), 0);
+    const discountFactor = beforeDiscount > 0 ? n(sale.total) / beforeDiscount : 0;
+    const lineRefundTotal = refundLines.reduce((sum, line) => sum + n(line.qty) * n(line.price) * discountFactor, 0);
+    const refundTotal = sale.refund_amount != null ? n(sale.refund_amount) : lineRefundTotal;
+    returns.forEach((line, index) => {
+      const date = line.returnDate || sale.returned_at;
+      const isReplacement = line.action === 'replace';
+      const restock = line.restock !== 'scrap_spoilage';
+      const amount = !isReplacement && lineRefundTotal > 0 ? -refundTotal * (n(line.qty) * n(line.price) * discountFactor / lineRefundTotal) : 0;
+      addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(line), quantity: n(line.qty), returnOf: `sale:${sale.id}` }] : [] });
+    });
+  });
+  supplies.forEach(s => {
+    if (['pending', 'cancelled'].includes(lower(s.status))) return;
+    const a = allocations.find(a => s.allocation_id === a.id || s.allocation_id === a.purchase_id);
+    const delivered = n(s.net_qty ?? (s.delivered_qty != null ? n(s.delivered_qty) - n(s.returned_qty) : s.quantity));
+    if (!a) issue('supply_stock', 'A delivery sale has no linked milk allocation.', s.id);
+    addEvent({ id: `supply:${s.id}`, date: s.date, order: 40, description: 'Home delivery sale', kind: 'Supply sale', amount: n(s.total_amount), changes: a ? [{ id: supplyBucket(a), quantity: -delivered }] : [] });
+  });
+  logs.forEach(log => {
+    if (usedLogs.has(log.id)) return;
+    const reason = lower(log.reason);
+    if (['sale', 'pos sale'].includes(reason)) {
+      if (sales.some(sale => String(log.id).includes(sale.id) || log.sale_id === sale.id || log.details?.sale_id === sale.id)) return;
+      issue('orphan_sale_log', 'A stock sale log has no matching invoice.', log.item_name);
+    }
+    if (['purchase', 'production', 'sales return', 'supply return'].includes(reason)) return; // Document owns movement.
+    const item = findItem(log.item_id, log.item_name) || items.find(i => String(log.item_name || '').startsWith(i.name + ' ('));
+    if (!item) { if (Math.abs(n(log.difference)) > EPS) issue('unknown_log', 'A stock adjustment has no matching product.', log.item_name); return; }
+    const variant = records(item.variants).find(v => log.item_name === `${item.name} (${v.name})`);
+    const id = itemBucket(item, log.variant_id || variant?.id);
+    const delta = n(log.difference);
+    if (reason === 'allocation') {
+      issue('unlinked_allocation_log', 'An allocation stock movement is not linked to its source history.', item.name);
+      // Preserve unmatched movement, but prevent it being labelled verified profit.
+    }
+    if (!delta) return;
+    const loss = /spoil|wastage|consumption|theft|loss|production usage/.test(reason) || ['sale', 'pos sale'].includes(reason) || (reason === 'stock count correction' && delta < 0);
+    addEvent({ id: `log:${log.id}`, date: log.date, order: 50, description: `${log.reason}: ${item.name}`, kind: loss ? 'Stock loss' : 'Adjustment', changes: [{ id, quantity: delta }] });
+  });
+  source.retailClosings.map(flattenProfitRecord).forEach(closing => {
+    if (n(closing.total_unrecorded_revenue) > 0 && !closing.auto_posted_sale_id && !sales.some(s => s.details?.retail_closing_id === closing.id)) issue('unposted_sales', 'A retail closing contains sales that were not posted to invoices.', closing.date);
+  });
+  if (source.pendingCount) issue('pending_sync', `${source.pendingCount} local record(s) are waiting for sync. This is a provisional report.`);
+  const today = profitDay(new Date().toISOString());
+  if (end > today) issue('future_range', 'The range includes future dates; closing stock is only available up to today.');
+  const validRange = /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end) && start <= end;
+  if (!validRange) issue('invalid_range', 'Select a valid start and end date.');
+  const daysWithoutTimes = new Set(events.filter(e => e.date.length === 10).map(e => profitDay(e.date)));
+  events.sort((a, b) => {
+    const day = profitDay(a.date).localeCompare(profitDay(b.date));
+    if (day) return day;
+    // Date-only invoices have no time; use lifecycle order before timestamp ordering.
+    if (daysWithoutTimes.has(profitDay(a.date))) return a.order - b.order || a.id.localeCompare(b.id);
+    return new Date(a.date).getTime() - new Date(b.date).getTime() || a.order - b.order || a.id.localeCompare(b.id);
+  });
+  // Recover the quantity before the earliest stored movement from today's stock.
+  const deltas = new Map<string, number>();
+  events.forEach(e => e.changes.forEach(c => deltas.set(c.id, (deltas.get(c.id) || 0) + c.quantity)));
+  // Never use today's catalog cost for a historical item that has a recorded receipt.
+  const seededRates = new Set<string>();
+  events.forEach(event => event.changes.forEach(change => {
+    if (event.kind === 'Purchase' && change.quantity > 0 && change.value != null && !seededRates.has(change.id)) {
+      buckets.get(change.id)!.initialRate = change.value / change.quantity;
+      seededRates.add(change.id);
+    }
+  }));
+  buckets.forEach(b => {
+    b.quantity = qty(b.current - (deltas.get(b.id) || 0));
+    if (Math.abs(b.quantity) > EPS) issue('opening_history', 'Stock exists before the first recorded movement. Its quantity is recovered from current stock; its historical cost needs confirmation.', `${b.name} (${b.location})`);
+    if (b.quantity < -EPS) issue('negative_opening', 'Stock history does not reconcile with current stock; a movement may be missing or duplicated.', `${b.name} (${b.location})`);
+    b.value = b.quantity * b.initialRate;
+    if (b.quantity > EPS && b.initialRate <= 0) issue('missing_cost', 'Stock has no purchase or saved cost rate.', b.name);
+  });
+  const snapshot = () => new Map([...buckets].map(([id, b]) => [id, { quantity: b.quantity, value: b.value }]));
+  let opening = snapshot();
+  let closing = snapshot();
+  let grossPurchases = 0, purchaseReturns = 0, posSales = 0, supplySales = 0, salesReturns = 0, conversionCost = 0, stockAdjustments = 0, stockLoss = 0;
+  const movements: StockProfitReport['movements'] = [];
+  const soldCosts = new Map<string, { quantity: number; value: number }>();
+  for (const event of events) {
+    const day = profitDay(event.date);
+    if (day > end) break;
+    const period = day >= start && validRange;
+    let transferred = 0;
+    if (event.source) {
+      const b = buckets.get(event.source)!;
+      const out = -(event.changes.find(c => c.id === event.source)?.quantity || 0);
+      const unitCost = b.quantity > EPS ? b.value / b.quantity : b.initialRate;
+      transferred = out * unitCost;
+    }
+    let adjustmentValue = 0, lossValue = 0;
+    const weights = (event.destinations || []).reduce((sum, d) => sum + d.weight, 0);
+    event.changes.forEach(change => {
+      const b = buckets.get(change.id)!;
+      const rate = b.quantity > EPS ? b.value / b.quantity : b.initialRate;
+      let value = change.value ?? change.quantity * rate;
+      if (change.returnOf) {
+        const sold = soldCosts.get(`${change.returnOf}:${change.id}`);
+        if (sold && sold.quantity > 0) value = change.quantity * sold.value / sold.quantity;
+        else issue('return_cost', 'Returned stock has no original sale cost to reverse.', b.name);
+      }
+      if (event.source === change.id) value = -transferred;
+      else if (event.source) {
+        const destination = event.destinations?.find(d => d.id === change.id);
+        value = weights > 0 ? transferred * (destination?.weight || 0) / weights : 0;
+      }
+      if (event.kind === 'POS sale') {
+        const key = `${event.id}:${change.id}`;
+        const sold = soldCosts.get(key) || { quantity: 0, value: 0 };
+        soldCosts.set(key, { quantity: sold.quantity - change.quantity, value: sold.value - value });
+      }
+      if (change.quantity > EPS && value <= 0) issue('missing_cost', 'Incoming stock has no recoverable cost.', b.name);
+      b.quantity = qty(b.quantity + change.quantity);
+      b.value += value;
+      if (b.quantity < -EPS) issue('negative_stock', 'Stock became negative while replaying history; check missing receipts and timing.', b.name);
+      if (Math.abs(b.quantity) < EPS) {
+        if (Math.abs(b.value) > 0.02) issue('cost_reconciliation', 'Stock quantity reached zero with a remaining cost difference.', b.name);
+        // Keep the difference for reconciliation; never silently invent a profit.
+      }
+      if (event.kind === 'Adjustment') adjustmentValue += value;
+      if (event.kind === 'Stock loss') lossValue -= value;
+    });
+    if (!period) { opening = snapshot(); closing = opening; continue; }
+    closing = snapshot();
+    if (event.kind === 'Purchase') grossPurchases += n(event.amount);
+    if (event.kind === 'Purchase return') purchaseReturns -= n(event.amount);
+    if (event.kind === 'POS sale') posSales += n(event.amount);
+    if (event.kind === 'Supply sale') supplySales += n(event.amount);
+    if (event.kind === 'Sales return') salesReturns -= n(event.amount);
+    if (event.kind === 'Conversion cost') conversionCost += n(event.amount);
+    stockAdjustments += adjustmentValue;
+    stockLoss += lossValue;
+    if (event.kind !== 'Transfer') movements.push({ date: day, description: event.description, kind: event.kind, amount: money(event.amount ?? (event.kind === 'Stock loss' ? lossValue : adjustmentValue)) });
+  }
+  const rows = [...buckets.values()].map(b => {
+    const o = opening.get(b.id) || { quantity: 0, value: 0 };
+    const c = closing.get(b.id) || o;
+    return { id: b.id, name: b.name, location: b.location, unit: b.unit, openingQty: qty(o.quantity), openingRate: money(o.quantity > EPS ? o.value / o.quantity : b.initialRate), openingValue: money(o.value), closingQty: qty(c.quantity), closingRate: money(c.quantity > EPS ? c.value / c.quantity : b.initialRate), closingValue: money(c.value) };
+  }).filter(r => Math.abs(r.openingQty) > EPS || Math.abs(r.closingQty) > EPS || Math.abs(r.openingValue) > 0.01 || Math.abs(r.closingValue) > 0.01).sort((a, b) => a.location.localeCompare(b.location) || a.name.localeCompare(b.name));
+  const categories = new Map<string, number>();
+  source.expenses.map(flattenProfitRecord).filter(e => validRange && inRange(e.date) && !['cancelled', 'returned'].includes(lower(e.status))).forEach(e => categories.set(e.category || 'General', (categories.get(e.category || 'General') || 0) + n(e.amount)));
+  const expenses = money([...categories.values()].reduce((sum, amount) => sum + amount, 0));
+  const openingStock = money(rows.reduce((sum, r) => sum + r.openingValue, 0));
+  const closingStock = money(rows.reduce((sum, r) => sum + r.closingValue, 0));
+  const netPurchases = money(grossPurchases - purchaseReturns);
+  const consumedCost = money(openingStock + netPurchases + conversionCost + stockAdjustments - closingStock);
+  const grossSales = money(posSales + supplySales);
+  const netSales = money(grossSales - salesReturns);
+  const grossProfit = money(netSales - consumedCost);
+  const netProfit = money(grossProfit - expenses);
+  if (consumedCost < -0.02) issue('negative_cost', 'Consumed stock cost is negative. Review opening balances, returns and adjustments.');
+  return { openingStock, closingStock, grossPurchases: money(grossPurchases), purchaseReturns: money(purchaseReturns), netPurchases, conversionCost: money(conversionCost), stockAdjustments: money(stockAdjustments), consumedCost, grossSales, salesReturns: money(salesReturns), netSales, posSales: money(posSales), supplySales: money(supplySales), expenses, grossProfit, netProfit, margin: netSales > 0 ? netProfit / netSales * 100 : 0, stockLoss: money(stockLoss), rows, issues: [...issues.values()], expenseCategories: [...categories].map(([name, amount]) => ({ name, amount: money(amount) })), movements, validRange };
+}
