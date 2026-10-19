@@ -505,7 +505,7 @@ const Allocation: React.FC = () => {
                 className="bg-transparent outline-none text-xs font-medium w-full text-slate-800 dark:text-slate-200 placeholder:text-slate-400"
               />
               {searchQuery && (
-                <button onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-0.5 shrink-0 cursor-pointer">
+                <button aria-label="Hatayen" onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-0.5 shrink-0 cursor-pointer">
                   <X size={13} />
                 </button>
               )}
@@ -595,7 +595,7 @@ const Allocation: React.FC = () => {
                           </p>
                         </div>
 
-                        <button 
+                        <button aria-label={isInCart ? 'Edit quantity' : 'Add to cart'} 
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -673,7 +673,7 @@ const Allocation: React.FC = () => {
                           </p>
                         </div>
 
-                        <button 
+                        <button aria-label={isInCart ? 'Edit quantity' : 'Add to cart'} 
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -781,7 +781,7 @@ const Allocation: React.FC = () => {
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <button 
+                      <button aria-label="Remove" 
                         onClick={() => removeFromCart(item.allocationId)}
                         className="text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 p-1 rounded-md transition-colors shrink-0 cursor-pointer"
                         title="Remove"
@@ -973,7 +973,7 @@ const Allocation: React.FC = () => {
                   <Sliders size={16} className="text-lime-600 dark:text-lime-400" />
                   <span>Allocate Milk Volume</span>
                 </h3>
-                <button 
+                <button aria-label="Band karein" 
                   onClick={() => setModalData(null)} 
                   className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg transition-colors cursor-pointer"
                 >

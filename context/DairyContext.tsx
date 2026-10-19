@@ -8791,7 +8791,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 export const DairyFreeze: React.FC<{ frozen: boolean; children: ReactNode }> = ({ frozen, children }) => {
   const live = useContext(DairyContext);
   const snapshotRef = useRef(live);
-  if (!frozen) snapshotRef.current = live;
+  // Sign-out / user switch always reaches hidden pages, so they lock instead of keeping old data.
+  if (!frozen || live?.currentUser?.id !== snapshotRef.current?.currentUser?.id || live?.currentRole?.id !== snapshotRef.current?.currentRole?.id) {
+    snapshotRef.current = live;
+  }
   return (
     <DairyContext.Provider value={frozen ? snapshotRef.current : live}>
       {children}

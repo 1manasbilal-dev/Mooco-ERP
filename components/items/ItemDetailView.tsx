@@ -178,7 +178,7 @@ export const ItemDetailView: React.FC<Props> = ({
             </button>
           ) : null}
           {canDelete && !item.isSystem && (
-            <button type="button" onClick={onDelete} title="Delete product"
+            <button aria-label="Delete product" type="button" onClick={onDelete} title="Delete product"
               className="p-2.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900 rounded-xl transition-all cursor-pointer"><Trash2 size={16} /></button>
           )}
         </div>
@@ -235,7 +235,7 @@ export const ItemDetailView: React.FC<Props> = ({
         <Section
           icon={<Boxes size={13} className="text-indigo-500 dark:text-indigo-400" />}
           title="Stock by unit"
-          aside={<span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{formatCurrency(picture.costValue)} at cost</span>}
+          aside={<span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{formatCurrency(picture.costValue)} at cost</span>}
         >
           <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
             {picture.piles.map(pile => (
@@ -363,7 +363,7 @@ export const ItemDetailView: React.FC<Props> = ({
                               </span>
                             )}
                           </div>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                          <span className="text-xs text-slate-500 dark:text-slate-400 block mt-0.5">
                             {formatCurrency(each)}/{item.unit}
                             {differs ? ` · loose ${formatCurrency(rate)}/${item.unit}` : ''}
                             {fromBase ? ' · shares main stock pool' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · independent shelf stock')}
@@ -384,7 +384,7 @@ export const ItemDetailView: React.FC<Props> = ({
                               title={`Sell ${n} ${v.name} = ${formatQty(n * contains, 3)} ${item.unit}`}
                               className="min-w-[3.25rem] px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/40 text-center transition-all enabled:hover:bg-indigo-100 dark:enabled:hover:bg-indigo-900/40 enabled:hover:border-indigo-400 enabled:active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
                               <span className="text-xs font-black text-indigo-800 dark:text-indigo-300 block">{n} {v.name}</span>
-                              <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 block">{formatCurrency(price * n)}</span>
+                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">{formatCurrency(price * n)}</span>
                             </button>
                           );
                         })}

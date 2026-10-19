@@ -25,6 +25,7 @@ import {
   PosNewCustomerModal, 
   PosEditItemModal 
 } from '../components/pos/PosModals';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 /** Packs of one packed variant already sitting in the cart, excluding one line. Packed twin of reservedBaseQty. */
 const reservedPackedQty = (cart: any[], productId: string, variantId: string, exceptCartItemId?: string): number => cleanQty(cart
@@ -1048,10 +1049,16 @@ const POS: React.FC = () => {
     setCustomerPaidAmount('');
   };
 
-  const handleRecallOrder = (held: HeldOrder) => {
+  const handleRecallOrder = async (held: HeldOrder) => {
     if (bookingId) return;
     if (cart.length > 0) {
-      const confirmReplace = window.confirm("Aapki active cart men pehle se items mojood hain. Kya aap inko replace karke parked order ko recall karna chahte hain?");
+      const confirmReplace = await confirmAction({
+        tone: 'warning',
+        title: 'Cart mein pehle se items hain',
+        message: 'Parked order wapas laane se abhi wali cart hat jayegi.',
+        consequences: [`Cart ke ${cart.length} item(s) hat jayenge.`, 'Parked order ke items, customer aur payment wapas aa jayenge.'],
+        confirmLabel: 'Haan, replace karein',
+      });
       if (!confirmReplace) return;
     }
     isRecallingRef.current = true;

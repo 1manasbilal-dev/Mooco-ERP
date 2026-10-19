@@ -300,7 +300,7 @@ const Inventory: React.FC = () => {
             onChange={e => setSearchTerm(e.target.value)} 
           />
           {searchTerm && (
-            <button onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
+            <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
               <X size={14} />
             </button>
           )}
@@ -414,7 +414,7 @@ const Inventory: React.FC = () => {
                     }`}>
                       {isOut ? 'Out' : isLow ? 'Low' : 'In Stock'}
                     </span>
-                    <button 
+                    <button aria-label="Audit / Adjust Stock" 
                       onClick={() => handleQuickAudit(item, 'loose')}
                       className="p-1.5 text-blue-600 hover:bg-blue-50 bg-slate-50 border border-slate-200 rounded-lg transition-all active:scale-95 cursor-pointer"
                       title="Audit / Adjust Stock"
@@ -454,7 +454,7 @@ const Inventory: React.FC = () => {
                     {valuation.costMissing ? (
                       <span className="text-[9px] font-bold text-amber-600 block">Cost not set</span>
                     ) : isProduct && valuation.retailValue > 0 ? (
-                      <span className="text-[9px] font-semibold text-slate-400 block">Retail {formatCurrency(valuation.retailValue)}</span>
+                      <span className="text-xs font-semibold text-slate-400 block">Retail {formatCurrency(valuation.retailValue)}</span>
                     ) : null}
                   </div>
                 </div>
@@ -500,13 +500,13 @@ const Inventory: React.FC = () => {
                             <div key={v.id} className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between text-xs">
                               <div>
                                 <span className="font-bold text-slate-800">{v.name}</span>
-                                <span className="text-[10px] text-slate-400 block">{formatQty(v.quantity_in_base_unit)} {item.unit} · {formatCurrency(vPrice)}</span>
+                                <span className="text-xs text-slate-400 block">{formatQty(v.quantity_in_base_unit)} {item.unit} · {formatCurrency(vPrice)}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`font-mono font-bold px-2 py-0.5 rounded border ${vStock > 0 ? 'text-amber-800 bg-amber-50 border-amber-200' : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
                                   {formatQty(vStock)} Units
                                 </span>
-                                <button 
+                                <button aria-label="Audit Packaged Stock" 
                                   onClick={() => handleQuickAudit(item, v.id)} 
                                   className="p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded cursor-pointer"
                                   title="Audit Packaged Stock"
@@ -636,7 +636,7 @@ const Inventory: React.FC = () => {
                              {valuation.costMissing ? (
                                 <span className="block text-[10px] font-bold text-amber-600 font-sans">Cost not set</span>
                              ) : isProduct && valuation.retailValue > 0 ? (
-                                <span className="block text-[10px] font-semibold text-slate-400">Retail {formatCurrency(valuation.retailValue)}</span>
+                                <span className="block text-xs font-semibold text-slate-400">Retail {formatCurrency(valuation.retailValue)}</span>
                              ) : null}
                           </td>
                           <td className="px-6 py-4 text-center">
@@ -649,7 +649,7 @@ const Inventory: React.FC = () => {
                              </span>
                           </td>
                           <td className="px-5 py-4 text-center">
-                             <button
+                             <button aria-label="Audit Stock"
                                onClick={() => handleQuickAudit(item, 'loose')}
                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                                title="Audit Stock"
@@ -705,7 +705,7 @@ const Inventory: React.FC = () => {
                                  </span>
                               </td>
                               <td className="px-5 py-3.5 text-center">
-                                 <button
+                                 <button aria-label="Audit Packaged Stock"
                                    onClick={() => handleQuickAudit(item, v.id)}
                                    className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
                                    title="Audit Packaged Stock"
@@ -742,7 +742,7 @@ const Inventory: React.FC = () => {
                     </h3>
                     <p className="text-xs text-slate-400 font-medium mt-0.5">Reconcile physical stock with system counts</p>
                   </div>
-                  <button onClick={closeAudit} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-white transition-all"><X size={20}/></button>
+                  <button aria-label="Band karein" onClick={closeAudit} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-white transition-all"><X size={20}/></button>
                </div>
                
                <div className="flex border-b border-slate-200 shrink-0 bg-white">

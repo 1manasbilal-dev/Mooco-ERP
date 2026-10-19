@@ -772,7 +772,7 @@ const SalesHistory: React.FC = () => {
               onChange={e => setSearchTerm(e.target.value)}
             />
             {searchTerm && (
-              <button 
+              <button aria-label="Clear Search" 
                 onClick={() => setSearchTerm('')} 
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
                 title="Clear Search"
@@ -1297,12 +1297,12 @@ const SalesHistory: React.FC = () => {
                           {formatCurrency((sale.total || 0))}
                         </span>
                         {sale.discount > 0 && (
-                          <span className="text-[10px] text-emerald-600 font-semibold font-mono">
+                          <span className="text-xs text-emerald-600 font-semibold font-mono">
                             Disc: {formatCurrency(sale.discount)}
                           </span>
                         )}
                         {sale.refund_amount && sale.refund_amount > 0 && (
-                          <span className="text-[10px] text-red-600 font-semibold font-mono">
+                          <span className="text-xs text-red-600 font-semibold font-mono">
                             Ref: {formatCurrency(sale.refund_amount)}
                           </span>
                         )}
@@ -1355,14 +1355,14 @@ const SalesHistory: React.FC = () => {
                     {/* Actions */}
                     <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-1.5">
-                        <button
+                        <button aria-label="View Invoice Details"
                           onClick={() => openDetailSale(sale)}
                           className="p-1.5 bg-slate-100 hover:bg-lime-100 text-slate-700 hover:text-lime-800 rounded-lg transition-colors"
                           title="View Invoice Details"
                         >
                           <Eye size={13} />
                         </button>
-                        <button
+                        <button aria-label="View / Print Receipt"
                           onClick={() => openReceiptSale(sale)}
                           className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
                           title="View / Print Receipt"
@@ -1371,7 +1371,7 @@ const SalesHistory: React.FC = () => {
                         </button>
 
                         {sale.payment_mode !== 'Credit' && !isReturned && (
-                          <button
+                          <button aria-label="Payment Mode Tabdeel Karein (Cash ⇄ Online)"
                             onClick={() => openModeEditModal(sale)}
                             className="p-1.5 bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-800 rounded-lg transition-colors border border-transparent hover:border-blue-200"
                             title="Payment Mode Tabdeel Karein (Cash ⇄ Online)"
@@ -1508,7 +1508,7 @@ const SalesHistory: React.FC = () => {
                   </p>
                 </div>
               </div>
-              <button 
+              <button aria-label="Band karein" 
                 onClick={() => openDetailSale(null)} 
                 className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
               >
@@ -1701,7 +1701,7 @@ const SalesHistory: React.FC = () => {
                   <p className="text-[11px] text-slate-500 font-mono">Bill: {returnModalSale.bill_number}</p>
                 </div>
               </div>
-              <button onClick={() => setReturnModalSale(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+              <button aria-label="Band karein" onClick={() => setReturnModalSale(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                 <X size={18} />
               </button>
             </div>
@@ -1824,7 +1824,7 @@ const SalesHistory: React.FC = () => {
                     {returnAction === 'replace' ? 'Rs 0.00' : `${formatCurrency(currentRefundAmount)}`}
                   </span>
                   {returnAction === 'replace' && (
-                    <span className="text-[10px] text-slate-400 block">(Fresh stock worth {formatCurrency(currentRefundAmount)} issued)</span>
+                    <span className="text-xs text-slate-400 block">(Fresh stock worth {formatCurrency(currentRefundAmount)} issued)</span>
                   )}
                 </div>
               </div>
@@ -2033,7 +2033,7 @@ const SalesHistory: React.FC = () => {
                 >
                   <Printer size={12} /> Print
                 </button>
-                <button onClick={() => openReceiptSale(null)} className="text-slate-400 hover:text-white p-1 rounded-lg">
+                <button aria-label="Band karein" onClick={() => openReceiptSale(null)} className="text-slate-400 hover:text-white p-1 rounded-lg">
                   <X size={16} />
                 </button>
               </div>
@@ -2139,10 +2139,10 @@ const SalesHistory: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-black text-sm tracking-tight">Payment Mode Tabdeel Karein</h3>
-                  <p className="text-[11px] text-blue-100">Bill #{modeEditSale.bill_number} • {formatCurrency((modeEditSale.total || 0))}</p>
+                  <p className="text-xs text-blue-100">Bill #{modeEditSale.bill_number} • {formatCurrency((modeEditSale.total || 0))}</p>
                 </div>
               </div>
-              <button
+              <button aria-label="Band karein"
                 onClick={() => setModeEditSale(null)}
                 className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
               >

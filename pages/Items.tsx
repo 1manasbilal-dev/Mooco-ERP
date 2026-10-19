@@ -745,7 +745,7 @@ const Items: React.FC = () => {
                    onChange={e => setSearchTerm(e.target.value)} 
                  />
                  {searchTerm && (
-                    <button onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
+                    <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
                        <X size={14} />
                     </button>
                  )}
@@ -902,7 +902,7 @@ const Items: React.FC = () => {
                     <GripVertical size={16} />
                   </div>
                   <div className="flex items-center gap-0.5">
-                    <button
+                    <button aria-label="Move up"
                       type="button"
                       onClick={() => handleMoveStep(item.id, 'up')}
                       disabled={index === 0}
@@ -911,7 +911,7 @@ const Items: React.FC = () => {
                     >
                       <ArrowUp size={13} strokeWidth={2.5} />
                     </button>
-                    <button
+                    <button aria-label="Move down"
                       type="button"
                       onClick={() => handleMoveStep(item.id, 'down')}
                       disabled={index === filteredItems.length - 1}
@@ -1124,7 +1124,7 @@ const Items: React.FC = () => {
 
                                    {/* Quick Up/Down buttons (visible on hover) */}
                                    <div className="flex flex-col -my-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
+                                      <button aria-label="Move up"
                                         type="button"
                                         onClick={() => handleMoveStep(item.id, 'up')}
                                         disabled={index === 0}
@@ -1133,7 +1133,7 @@ const Items: React.FC = () => {
                                       >
                                         <ArrowUp size={11} strokeWidth={3} />
                                       </button>
-                                      <button
+                                      <button aria-label="Move down"
                                         type="button"
                                         onClick={() => handleMoveStep(item.id, 'down')}
                                         disabled={index === filteredItems.length - 1}
@@ -1232,7 +1232,7 @@ const Items: React.FC = () => {
                              {/* Actions */}
                              <td className="px-5 py-3.5 text-center">
                                 <div className="flex items-center justify-center gap-1.5" onClick={e => e.stopPropagation()}>
-                                   <button 
+                                   <button aria-label="Edit Product" 
                                      onClick={() => handleOpenEdit(item)}
                                      className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                                      title="Edit Product"
@@ -1240,7 +1240,7 @@ const Items: React.FC = () => {
                                       <Edit size={16} />
                                    </button>
                                    {!item.isSystem ? (
-                                      <button 
+                                      <button aria-label="Delete Product" 
                                          onClick={() => handleDeleteClick(item)}
                                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
                                          title="Delete Product"
@@ -1248,7 +1248,7 @@ const Items: React.FC = () => {
                                          <Trash2 size={16} />
                                       </button>
                                    ) : (
-                                      <button 
+                                      <button aria-label={item.isActive ? "System Protected (Click to Deactivate / Archive)" : "System Protected (Inactive)"} 
                                          onClick={() => handleDeleteClick(item)}
                                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
                                          title={item.isActive ? "System Protected (Click to Deactivate / Archive)" : "System Protected (Inactive)"}
@@ -1350,7 +1350,7 @@ const Items: React.FC = () => {
                       
                       <div className="flex items-center gap-1.5">
                         {drawerMode === 'edit' && selectedItem && canDelete && !formData.isSystem && (
-                          <button 
+                          <button aria-label="Delete Product" 
                             type="button" 
                             onClick={() => handleDeleteClick(selectedItem)}
                             className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-all cursor-pointer"
@@ -1359,7 +1359,7 @@ const Items: React.FC = () => {
                             <Trash2 size={18} />
                           </button>
                         )}
-                        <button onClick={handleCloseDrawer} className="p-2 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-xl transition-all cursor-pointer" title="Close"><X size={18} /></button>
+                        <button aria-label="Close" onClick={handleCloseDrawer} className="p-2 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-xl transition-all cursor-pointer" title="Close"><X size={18} /></button>
                       </div>
                    </div>
                      
@@ -1875,7 +1875,7 @@ const Items: React.FC = () => {
                                    </div>
                                    <div className="flex gap-2">
                                       <input type="number" className={`${inputClass} w-28`} placeholder="Qty" value={newIngredient.qty} onChange={e => setNewIngredient({...newIngredient, qty: e.target.value})}/>
-                                      <button type="button" onClick={addIngredient} className="bg-slate-800 text-white px-4 rounded-xl font-bold hover:bg-slate-700 transition-all flex items-center justify-center cursor-pointer"><Plus size={18}/></button>
+                                      <button aria-label="Naya add karein" type="button" onClick={addIngredient} className="bg-slate-800 text-white px-4 rounded-xl font-bold hover:bg-slate-700 transition-all flex items-center justify-center cursor-pointer"><Plus size={18}/></button>
                                    </div>
                                 </div>
                                 {formData.recipe && formData.recipe.length > 0 && (
@@ -1891,7 +1891,7 @@ const Items: React.FC = () => {
                                             </div>
                                             <div className="flex items-center gap-3">
                                                <span className="font-mono font-bold text-slate-600 text-xs sm:text-sm">{ing.quantity} {ing.unit}</span>
-                                               <button type="button" onClick={() => removeIngredient(idx)} className="text-slate-300 hover:text-red-500 transition-colors p-1 cursor-pointer"><X size={16}/></button>
+                                               <button aria-label="Band karein" type="button" onClick={() => removeIngredient(idx)} className="text-slate-300 hover:text-red-500 transition-colors p-1 cursor-pointer"><X size={16}/></button>
                                             </div>
                                          </div>
                                       ))}
@@ -2137,7 +2137,7 @@ const Items: React.FC = () => {
             <MotionDiv initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-800">
                <div className="px-5 py-3.5 sm:px-6 sm:py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex justify-between items-center">
                   <h3 className="font-bold text-slate-800 dark:text-white flex items-center gap-2 text-sm sm:text-base"><Tag size={17} className="text-blue-500"/> Item Categories</h3>
-                  <button onClick={() => setIsConfigOpen(false)} className="text-slate-400 hover:text-slate-600 p-1"><X size={20}/></button>
+                  <button aria-label="Band karein" onClick={() => setIsConfigOpen(false)} className="text-slate-400 hover:text-slate-600 p-1"><X size={20}/></button>
                </div>
                <div className="p-4 sm:p-6 space-y-4 max-h-[500px] overflow-y-auto">
                   <div className="flex gap-2">
@@ -2148,7 +2148,7 @@ const Items: React.FC = () => {
                      {categories.map(cat => (
                         <div key={cat} className="flex items-center justify-between p-2.5 sm:p-3 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700 group">
                            <span className="text-xs sm:text-sm font-bold text-slate-700">{cat}</span>
-                           <button onClick={() => removeCategory(cat)} className="text-slate-400 hover:text-red-500 p-1 transition-all"><X size={15}/></button>
+                           <button aria-label="Band karein" onClick={() => removeCategory(cat)} className="text-slate-400 hover:text-red-500 p-1 transition-all"><X size={15}/></button>
                         </div>
                      ))}
                   </div>

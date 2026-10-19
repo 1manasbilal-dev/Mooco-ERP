@@ -16,6 +16,7 @@ import { formatQty, formatCurrency, cleanNumber, cleanQty, normalizeTransactionT
 import { businessDate } from '../lib/dashboardAnalytics';
 import { SmartNumberInput } from '../components/SmartNumberInput';
 import { roundCurrency, roundQuantity } from '../lib/db';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 // Fix Framer Motion Types
 const MotionDiv = motion.div as any;
@@ -140,7 +141,7 @@ const SearchableSupplierDropdown: React.FC<{
           onKeyDown={handleKeyDown}
         />
         {value ? (
-          <button
+          <button aria-label="Clear Selection"
             type="button"
             onClick={(e) => {
               e.stopPropagation();
@@ -1056,7 +1057,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
             onFocus={() => setIsOpen(true)} 
           />
           {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1">
+            <button aria-label="Hatayen" onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1">
               <X size={13} />
             </button>
           )}
@@ -1721,7 +1722,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                             {/* Col 2: Quantity Stepper (col-span-4) */}
                             <div className="col-span-4 flex items-center justify-center">
                               <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
-                                <button 
+                                <button aria-label="Decrease Qty" 
                                   type="button"
                                   onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))} 
                                   className="w-6 h-6 rounded-md hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
@@ -1737,7 +1738,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                                   onChange={e => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)}
                                   className="w-8 text-center text-xs font-bold font-mono text-slate-900 bg-transparent outline-none"
                                 />
-                                <button 
+                                <button aria-label="Increase Qty" 
                                   type="button"
                                   onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)} 
                                   className="w-6 h-6 rounded-md hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
@@ -1830,7 +1831,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                             </td>
                             <td className="px-3 py-3">
                               <div className="flex items-center bg-slate-50 rounded-lg border border-slate-200 p-0.5 focus-within:border-lime-500 focus-within:bg-white transition-all max-w-[120px] mx-auto">
-                                <button
+                                <button aria-label="Kam karein"
                                   type="button"
                                   onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))}
                                   className="w-6 h-6 rounded hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
@@ -1845,7 +1846,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                                   value={item.quantity} 
                                   onChange={(e) => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)} 
                                 />
-                                <button
+                                <button aria-label="Zyada karein"
                                   type="button"
                                   onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)}
                                   className="w-6 h-6 rounded hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
@@ -1878,7 +1879,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                               />
                             </td>
                             <td className="px-3 py-3 text-center">
-                              <button 
+                              <button aria-label="Remove Item" 
                                 onClick={() => removeLineItem(item.tempId)} 
                                 className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors"
                                 title="Remove Item"
@@ -2001,8 +2002,13 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     {invoiceItems.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => {
-                          if (window.confirm("Clear current invoice?")) {
+                        onClick={async () => {
+                          if (await confirmAction({
+                            tone: 'warning',
+                            title: 'Yeh invoice saaf karein?',
+                            consequences: ['Invoice ke sab items, supplier aur paid amount hat jayenge.', 'Abhi tak kuch save nahi hua, is liye kisi khaate par asar nahi hoga.'],
+                            confirmLabel: 'Haan, saaf karein',
+                          })) {
                             setInvoiceItems([]);
                             setInvoiceSupplier('');
                             setPaidAmount('');
@@ -2055,7 +2061,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                   Unit: <strong className="text-lime-700 dark:text-lime-400 font-bold">{editItemUnit || editingLineItem.unit}</strong>
                 </p>
               </div>
-              <button onClick={() => setEditingLineItem(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg">
+              <button aria-label="Band karein" onClick={() => setEditingLineItem(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg">
                 <X size={16} />
               </button>
             </div>
@@ -2243,7 +2249,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     <button type="button" onClick={() => setLogScope('all')} className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${logScope === 'all' ? 'bg-lime-600 text-white' : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'}`}>All dates</button>
                   </div>
                 </div>
-                <button onClick={() => toggleHistory(false)} className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors">
+                <button aria-label="Band karein" onClick={() => toggleHistory(false)} className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors">
                   <X size={16} />
                 </button>
               </div>
@@ -2260,7 +2266,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium outline-none focus:border-lime-500"
                   />
                   {historySearch && (
-                    <button onClick={() => setHistorySearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    <button aria-label="Hatayen" onClick={() => setHistorySearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                       <X size={12} />
                     </button>
                   )}
@@ -2326,7 +2332,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                                 </p>
                                 <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                                   {entry.paid_amount > 0 ? (
-                                    <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-bold border border-emerald-200">
+                                    <span className="text-xs bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-bold border border-emerald-200">
                                       Paid: {formatCurrency(entry.paid_amount)} ({entry.payment_mode || 'Cash'})
                                     </span>
                                   ) : (
@@ -2335,7 +2341,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                                     </span>
                                   )}
                                   {entry.due_amount > 0 && entry.paid_amount > 0 && (
-                                    <span className="text-[9px] bg-amber-50 text-amber-700 px-1.5 py-0.2 rounded font-semibold border border-amber-200">
+                                    <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.2 rounded font-semibold border border-amber-200">
                                       Due: {formatCurrency(entry.due_amount)}
                                     </span>
                                   )}
@@ -2383,7 +2389,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                 <h3 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
                   <RotateCcw size={15} className="text-amber-600" /> Return to Supplier
                 </h3>
-                <button onClick={() => setReturnModalEntry(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+                <button aria-label="Band karein" onClick={() => setReturnModalEntry(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                   <X size={16} />
                 </button>
               </div>

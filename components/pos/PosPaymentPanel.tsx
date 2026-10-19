@@ -316,7 +316,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                 </div>
                 
                 {cashGiven > 0 && (
-                  <div className={`px-2 py-0.5 rounded-md text-[11px] font-bold font-mono shrink-0 border ${cashGiven >= grandTotal ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800'}`}>
+                  <div className={`px-2 py-0.5 rounded-md text-xs font-bold font-mono shrink-0 border ${cashGiven >= grandTotal ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800'}`}>
                     {cashGiven >= grandTotal ? `Change: ${formatCurrency(Math.abs(cashGiven - grandTotal))}` : `Short: ${formatCurrency(Math.abs(cashGiven - grandTotal))}`}
                   </div>
                 )}
@@ -372,7 +372,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
         <div>
           <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide block">Grand Total</span>
           {(discountAmount > 0 || totalItemDiscount > 0) && (
-            <span className="text-[10px] text-slate-400 line-through font-mono">
+            <span className="text-xs text-slate-400 line-through font-mono">
               {formatCurrency((subtotal + totalItemDiscount))}
             </span>
           )}
@@ -390,7 +390,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
       )}
 
       {walkInShort > 0 && (
-        <p role="status" className="text-[11px] font-semibold text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-2 py-1">
+        <p role="status" className="text-xs font-semibold text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-2 py-1">
           {formatCurrency(walkInShort)} kam hain. Poori raqam lein, ya customer select karein taake baqi khaate mein jaye.
         </p>
       )}

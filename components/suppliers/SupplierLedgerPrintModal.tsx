@@ -185,7 +185,7 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
               </p>
             </div>
           </div>
-          <button
+          <button aria-label="Band karein"
             onClick={props.onClose}
             className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/10 transition-colors cursor-pointer"
           >

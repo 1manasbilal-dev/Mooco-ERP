@@ -35,7 +35,7 @@ const DenominationChips: React.FC<{ value: Record<string | number, number> | und
   return (
     <div className="flex flex-wrap gap-1.5">
       {entries.map(([denomination, count]) => (
-        <span key={denomination} className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+        <span key={denomination} className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-xs font-bold text-slate-600 dark:text-slate-300">
           {count} × {formatCurrency(denomination)}
         </span>
       ))}
@@ -97,7 +97,7 @@ const DenominationDialog: React.FC<{
               </p>
             </div>
           </div>
-          <button 
+          <button aria-label="Band karein" 
             type="button" 
             onClick={onClose} 
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
@@ -586,7 +586,7 @@ const CashControl: React.FC = () => {
                         className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3.5 pr-11 py-3 text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 transition-all"
                         placeholder={String(remittance.declared_amount || 0)}
                       />
-                      <button
+                      <button aria-label="Note count — har note ginti (details)"
                         type="button"
                         onClick={() => setHeadDenomDialogId(remittance.id)}
                         className={`absolute right-1.5 p-2 rounded-lg transition-all cursor-pointer ${headDenomTotal > 0 ? 'bg-lime-500 text-slate-950 hover:bg-lime-400 shadow-xs' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
@@ -984,7 +984,7 @@ const CashControl: React.FC = () => {
                   <p className="text-[11px] text-slate-400 mt-0.5">{cashDrawers.find(d => d.id === addCashDrawerId)?.name || 'Drawer'} — agli shift isi se start hogi</p>
                 </div>
               </div>
-              <button type="button" onClick={() => setAddCashModalOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
+              <button aria-label="Band karein" type="button" onClick={() => setAddCashModalOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
             </div>
             <div className="p-4 sm:p-5">
               <label className="block text-xs font-bold text-slate-500 mb-2">Amount (Rs)</label>
@@ -996,7 +996,7 @@ const CashControl: React.FC = () => {
                   placeholder="5000"
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 pl-3.5 pr-11 py-3 text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20"
                 />
-                <button
+                <button aria-label="Note count — har note ginti"
                   type="button"
                   onClick={() => setAddCashDenomOpen(true)}
                   className={`absolute right-1.5 p-2 rounded-lg cursor-pointer transition-all ${denominationTotalOf(addCashDenoms) > 0 ? 'bg-lime-500 text-slate-950' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
@@ -1130,7 +1130,7 @@ const CashControl: React.FC = () => {
                     <p className="text-[11px] text-slate-400 mt-0.5">{day.business_date} — audit trail par reason record hoga</p>
                   </div>
                 </div>
-                <button type="button" onClick={() => setReopenModalDay(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
+                <button aria-label="Band karein" type="button" onClick={() => setReopenModalDay(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
               </div>
               <div className="p-4 sm:p-5">
                 <label className="block text-xs font-bold text-slate-500 mb-2">Reopen reason (zaroori)</label>
@@ -1256,7 +1256,7 @@ const CashControl: React.FC = () => {
                     <p className="text-[11px] text-slate-400 mt-0.5">{day.business_date} — locked after closing, Owner can reopen</p>
                   </div>
                 </div>
-                <button type="button" onClick={() => setDayCloseModal(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
+                <button aria-label="Band karein" type="button" onClick={() => setDayCloseModal(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"><X size={18} /></button>
               </div>
               <div className="p-4 sm:p-5 overflow-y-auto">
                 {isThisDayLocked && (
@@ -1408,7 +1408,7 @@ const CashControl: React.FC = () => {
                             placeholder={String(expectedCash)}
                             className="w-full rounded-xl bg-white/10 border border-white/20 pl-3.5 pr-11 py-2.5 text-sm font-bold text-white outline-none focus:border-lime-400 placeholder:text-slate-500"
                           />
-                          <button
+                          <button aria-label="Note count — har note ginti"
                             type="button"
                             onClick={() => setDayCashDenomDialogOpen(true)}
                             className={`absolute right-1.5 p-2 rounded-lg cursor-pointer transition-all ${dayDenomTotal > 0 ? 'bg-lime-500 text-slate-950' : 'text-slate-300 hover:bg-white/10'}`}

@@ -120,7 +120,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
               onChange={e => setSearchTerm(e.target.value)} 
             />
             {searchTerm && (
-              <button onClick={() => setSearchTerm('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 p-0.5 cursor-pointer">
+              <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 p-0.5 cursor-pointer">
                 <X size={12} />
               </button>
             )}
@@ -306,7 +306,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
               onChange={e => setSearchTerm(e.target.value)} 
             />
             {searchTerm && (
-              <button onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
+              <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
                 <X size={13} />
               </button>
             )}
@@ -583,14 +583,14 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/90 dark:border-amber-800 shadow-2xs">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Partial
                             </span>
-                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
+                            <span className="text-xs text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
                           </div>
                         ) : (
                           <div className="flex flex-col items-center gap-0.5">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200/90 dark:border-rose-800 shadow-2xs">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> Unpaid
                             </span>
-                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
+                            <span className="text-xs text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
                           </div>
                         )}
                       </div>
@@ -600,7 +600,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1">
-                        <button
+                        <button aria-label="Save for quick record"
                           type="button"
                           onClick={() => onSaveRecorded(exp)}
                           className="p-1.5 text-slate-400 hover:text-lime-600 hover:bg-lime-50 dark:hover:bg-lime-950/40 rounded-lg transition-colors cursor-pointer"
@@ -608,7 +608,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                         >
                           <BookmarkPlus size={14} />
                         </button>
-                        <button
+                        <button aria-label="Edit Expense"
                           type="button"
                           onClick={() => handleEditExpense(exp)}
                           className="p-1.5 text-slate-400 hover:text-lime-600 hover:bg-lime-50 dark:hover:bg-lime-950/40 rounded-lg transition-colors cursor-pointer"
@@ -617,7 +617,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                           <Edit size={14} />
                         </button>
                         {canDelete && (
-                          <button
+                          <button aria-label="Delete Expense"
                             type="button"
                             onClick={() => handleDeleteExpense(exp.id)}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
@@ -671,21 +671,21 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
               <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
                 <span className="text-slate-400 text-[11px]">{exp.paymentMode || 'Cash'}</span>
                 <div className="flex items-center gap-1">
-                  <button
+                  <button aria-label="Save for quick record"
                     onClick={() => onSaveRecorded(exp)}
                     className="p-1 text-slate-400 hover:text-lime-600 cursor-pointer"
                     title="Save for quick record"
                   >
                     <BookmarkPlus size={14} />
                   </button>
-                  <button
+                  <button aria-label="Edit karein"
                     onClick={() => handleEditExpense(exp)}
                     className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
                   >
                     <Edit size={14} />
                   </button>
                   {canDelete && (
-                    <button
+                    <button aria-label="Delete karein"
                       onClick={() => handleDeleteExpense(exp.id)}
                       className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
                     >

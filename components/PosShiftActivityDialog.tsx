@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { money } from './DenominationDialog';
 import { formatTransactionTime, formatCurrency } from '../lib/formatters';
+import { confirmAction, isConfirmOpen } from './ui/ConfirmDialog';
 
 export type ShiftActivityTab = 'bills' | 'sales' | 'collections' | 'expenses';
 
@@ -258,7 +259,8 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // A confirmation opened from this dialog handles its own Esc.
+      if (e.key === 'Escape' && !isConfirmOpen()) {
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -431,7 +433,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-rose-500"
                   />
                   {searchTerm && (
-                    <button
+                    <button aria-label="Hatayen"
                       type="button"
                       onClick={() => setSearchTerm('')}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
@@ -510,10 +512,13 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                           </span>
                         </div>
                         {canDelete && onDeleteVendorTx && item.referenceId && (item.category === 'Vendor / Staff Payment' || item.group === 'Vendor & Staff') && (
-                          <button
+                          <button aria-label="Delete Vendor Payment"
                             type="button"
-                            onClick={() => {
-                              if (window.confirm("Are you sure you want to delete this vendor payment record? Financial accounts and vendor dues will be automatically restored.")) {
+                            onClick={async () => {
+                              if (await confirmAction({
+                                title: 'Yeh vendor payment delete karein?',
+                                consequences: ['Payment ki raqam wapas drawer / account mein aa jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+                              })) {
                                 onDeleteVendorTx(item.referenceId!);
                               }
                             }}
@@ -627,10 +632,13 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                           </span>
                         </div>
                         {canDelete && onDeleteVendorTx && item.referenceId && (item.category === 'Vendor Refund' || item.source === 'Vendor / Staff Refund') && (
-                          <button
+                          <button aria-label="Delete Vendor Refund"
                             type="button"
-                            onClick={() => {
-                              if (window.confirm("Are you sure you want to delete this vendor refund record? Financial accounts and vendor dues will be automatically restored.")) {
+                            onClick={async () => {
+                              if (await confirmAction({
+                                title: 'Yeh vendor refund delete karein?',
+                                consequences: ['Refund ki raqam account se wapas nikal jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+                              })) {
                                 onDeleteVendorTx(item.referenceId!);
                               }
                             }}

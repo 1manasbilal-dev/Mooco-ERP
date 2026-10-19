@@ -37,6 +37,7 @@ import {
   shareMilkReportImage
 } from '../lib/milkSupplierReport';
 import { formatCurrency } from '../lib/formatters';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 const Suppliers: React.FC = () => {
   const { 
@@ -442,7 +443,7 @@ const Suppliers: React.FC = () => {
     e.preventDefault();
     const trimmedName = formData.name?.trim();
     if (!trimmedName) {
-      showToast('Supplier name is required', 'warning');
+      showToast('Supplier ka naam zaroori hai', 'warning');
       return;
     }
     if (isSubmitting || isSubmittingSupplierRef.current) return;
@@ -475,17 +476,17 @@ const Suppliers: React.FC = () => {
         const { pending_balance: _ignoredBalance, ...profileOnly } = payload;
         const ok = await updateSupplier(editingSupplier.id, profileOnly);
         if (!ok) return;
-        showToast('Supplier updated successfully', 'success');
+        showToast('Supplier update ho gaya', 'success');
       } else {
         const ok = await addSupplier(payload as Omit<Supplier, 'id'>);
         if (!ok) return;
-        showToast('Supplier added successfully', 'success');
+        showToast('Supplier add ho gaya', 'success');
       }
 
       setIsFormOpen(false);
       setEditingSupplier(null);
     } catch (err: any) {
-      showToast('Error saving supplier: ' + (err?.message || 'Failed'), 'error');
+      showToast('Supplier save nahi hua: ' + (err?.message || 'dobara koshish karein'), 'error');
     } finally {
       setIsSubmitting(false);
       setTimeout(() => {
@@ -513,7 +514,7 @@ const Suppliers: React.FC = () => {
     
     const amountNum = parseFloat(paymentData.amount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      showToast('Please enter a valid payment amount', 'warning');
+      showToast('Sahi payment amount likhein', 'warning');
       return;
     }
 
@@ -542,10 +543,10 @@ const Suppliers: React.FC = () => {
       );
       if (!ok) return;
 
-      showToast('Payment recorded successfully', 'success');
+      showToast('Payment record ho gayi', 'success');
       setSelectedPaymentSupplierId(null);
     } catch (err: any) {
-      showToast('Error recording payment: ' + (err?.message || 'Failed'), 'error');
+      showToast('Payment record nahi hui: ' + (err?.message || 'dobara koshish karein'), 'error');
     } finally {
       setIsSubmittingPayment(false);
       setTimeout(() => {
@@ -573,15 +574,15 @@ const Suppliers: React.FC = () => {
      const balanceNow = Number(supplier?.pending_balance || 0);
      const balanceAfter = balanceNow + amount;
      const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(dena hai)' : value < 0 ? '(advance)' : ''}`.trim();
-     const message = [
-       `Payment ${formatCurrency(amount)} delete karein?`,
-       '',
-       `• ${supplier?.name || 'Supplier'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
-       isWaiver ? '• Ye maafi (waiver) thi, koi account nahi badlega' : account ? `• ${formatCurrency(amount)} wapas "${account.name}" mein aayenge` : '• Kisi account mein paisa wapas nahi aayega',
-       '',
-       'Ye wapas nahi hoga.'
-     ].join('\n');
-     if (!window.confirm(message)) return;
+     const confirmed = await confirmAction({
+       title: `Payment ${formatCurrency(amount)} delete karein?`,
+       consequences: [
+         `${supplier?.name || 'Supplier'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
+         isWaiver ? 'Ye maafi (waiver) thi, koi account nahi badlega' : account ? `${formatCurrency(amount)} wapas "${account.name}" mein aayenge` : 'Kisi account mein paisa wapas nahi aayega',
+         'Ye wapas nahi hoga.',
+       ],
+     });
+     if (!confirmed) return;
      const ok = await deleteSupplierTransaction(id);
      if (ok) showToast("Entry delete ho gayi", "success");
   };
@@ -598,7 +599,7 @@ const Suppliers: React.FC = () => {
   });
 
   const warnIfPrintBlocked = (opened: boolean) => {
-    if (!opened) showToast('Allow popups to print this statement.', 'warning');
+    if (!opened) showToast('Statement print karne ke liye browser mein popups allow karein.', 'warning');
   };
 
   const handlePrintLedger = () => {
@@ -651,10 +652,10 @@ const Suppliers: React.FC = () => {
         }),
         phone: input.supplier.whatsapp || input.supplier.phone
       });
-      if (result === 'shared') showToast('Milk slip is ready to send.', 'success');
-      else if (result === 'downloaded') showToast('Milk slip image saved. Attach it in WhatsApp.', 'success');
+      if (result === 'shared') showToast('Milk slip bhejne ke liye tayyar hai.', 'success');
+      else if (result === 'downloaded') showToast('Milk slip ki image save ho gayi. WhatsApp mein attach karein.', 'success');
     } catch {
-      showToast('Could not create the milk slip image.', 'error');
+      showToast('Milk slip ki image nahi ban saki.', 'error');
     } finally {
       setSharingMilkImage(false);
     }
@@ -690,7 +691,7 @@ const Suppliers: React.FC = () => {
   const handleSendWhatsAppReminder = (supplier: Supplier) => {
     const cleanPhone = (supplier.whatsapp || supplier.phone || '').replace(/[^0-9]/g, '');
     if (!cleanPhone) {
-      showToast('Supplier does not have a valid phone number', 'warning');
+      showToast('Supplier ka sahi phone number nahi hai', 'warning');
       return;
     }
 
@@ -744,7 +745,7 @@ const Suppliers: React.FC = () => {
               </button>
 
               <div className="flex items-center gap-1.5">
-                <button
+                <button aria-label="Share WhatsApp Statement"
                   onClick={() => handleSendWhatsAppReminder(activeSupplier)}
                   className="p-2 rounded-xl text-emerald-600 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all cursor-pointer"
                   title="Share WhatsApp Statement"
@@ -752,7 +753,7 @@ const Suppliers: React.FC = () => {
                   <MessageCircle size={15} />
                 </button>
 
-                <button
+                <button aria-label="Edit Supplier"
                   onClick={() => handleEdit(activeSupplier)}
                   className="p-2 rounded-xl text-slate-600 bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-all cursor-pointer"
                   title="Edit Supplier"
@@ -840,7 +841,7 @@ const Suppliers: React.FC = () => {
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-800/40 p-2 rounded-xl border border-slate-100 dark:border-slate-700/50">
                       <span className="text-[9px] text-slate-400 block font-semibold">Amount</span>
-                      <span className="font-mono font-bold text-amber-600 text-[11px]">{formatCurrency(milkReport.amount)}</span>
+                      <span className="font-mono font-bold text-amber-600 text-xs">{formatCurrency(milkReport.amount)}</span>
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-800/40 p-2 rounded-xl border border-slate-100 dark:border-slate-700/50">
                       <span className="text-[9px] text-slate-400 block font-semibold">Rate</span>
@@ -883,7 +884,7 @@ const Suppliers: React.FC = () => {
                   <span>+ Record Payment</span>
                 </button>
 
-                <button
+                <button aria-label="Supplier Information"
                   onClick={() => setShowMobileInfo(!showMobileInfo)}
                   className={`p-2.5 rounded-xl text-xs font-semibold transition-all border cursor-pointer ${
                     showMobileInfo ? 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 border-lime-200 dark:border-lime-800' : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
@@ -900,7 +901,7 @@ const Suppliers: React.FC = () => {
               <div className="bg-white rounded-2xl border border-slate-200 p-3.5 space-y-2.5 shadow-2xs text-xs animate-in fade-in duration-150">
                 <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                   <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Contact & Procurement Terms</span>
-                  <button onClick={() => setShowMobileInfo(false)} className="text-slate-400 hover:text-slate-600">
+                  <button aria-label="Hatayen" onClick={() => setShowMobileInfo(false)} className="text-slate-400 hover:text-slate-600">
                     <X size={14} />
                   </button>
                 </div>
@@ -968,7 +969,7 @@ const Suppliers: React.FC = () => {
                   onChange={e => setLedgerSearchTerm(e.target.value)}
                 />
                 {ledgerSearchTerm && (
-                  <button onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600">
+                  <button aria-label="Hatayen" onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600">
                     <X size={14} />
                   </button>
                 )}
@@ -1099,7 +1100,7 @@ const Suppliers: React.FC = () => {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <h3 className="text-base font-black text-slate-900 leading-tight truncate">{activeSupplier.name}</h3>
-                      <button
+                      <button aria-label="Send WhatsApp Statement"
                         onClick={() => handleSendWhatsAppReminder(activeSupplier)}
                         className="p-1 text-emerald-600 hover:bg-emerald-50 bg-emerald-50/60 border border-emerald-200 rounded-lg transition-all cursor-pointer"
                         title="Send WhatsApp Statement"
@@ -1306,7 +1307,7 @@ const Suppliers: React.FC = () => {
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Paid Out (Dr)</span>
                       <span className="text-lg font-black text-emerald-600 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.netPaid)}</span>
-                      {ledgerDetails.refunds > 0 && <span className="text-[10px] font-semibold text-amber-600">Refund {formatCurrency(ledgerDetails.refunds)}</span>}
+                      {ledgerDetails.refunds > 0 && <span className="text-xs font-semibold text-amber-600">Refund {formatCurrency(ledgerDetails.refunds)}</span>}
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Closing Balance</span>
@@ -1476,7 +1477,7 @@ const Suppliers: React.FC = () => {
                   onChange={e => setSearchTerm(e.target.value)}
                 />
                 {searchTerm && (
-                  <button onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
+                  <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0">
                     <X size={14} />
                   </button>
                 )}
@@ -1774,7 +1775,7 @@ const Suppliers: React.FC = () => {
                           <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-1">
                               {canPay && (
-                                <button
+                                <button aria-label="Record Payment"
                                   onClick={() => handleOpenPaymentModal(s)}
                                   className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                                   title="Record Payment"
@@ -1783,7 +1784,7 @@ const Suppliers: React.FC = () => {
                                 </button>
                               )}
                               {canEdit && (
-                                <button
+                                <button aria-label="Edit Supplier"
                                   onClick={() => handleEdit(s)}
                                   className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
                                   title="Edit Supplier"
@@ -1828,7 +1829,7 @@ const Suppliers: React.FC = () => {
                         <p className="text-xs text-slate-500 dark:text-slate-400">Supplier profile, supply category & starting khata</p>
                      </div>
                   </div>
-                  <button onClick={() => setIsFormOpen(false)} className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                  <button aria-label="Band karein" onClick={() => setIsFormOpen(false)} className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
                      <X size={20}/>
                   </button>
                </div>
@@ -2107,7 +2108,7 @@ const Suppliers: React.FC = () => {
                     <h3 className="font-bold text-base text-slate-900 dark:text-white">Record Payment to Supplier</h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">{activePaymentSupplier.name}</p>
                  </div>
-                 <button onClick={() => setSelectedPaymentSupplierId(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg"><X size={18}/></button>
+                 <button aria-label="Band karein" onClick={() => setSelectedPaymentSupplierId(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg"><X size={18}/></button>
               </div>
 
               <form onSubmit={handlePaymentSubmit} className="p-6 space-y-4">

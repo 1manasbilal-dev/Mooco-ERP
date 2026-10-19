@@ -150,9 +150,14 @@ const ensureHost = () => {
   createRoot(container).render(<ConfirmHost />);
 };
 
-/** Opens the shared confirmation dialog and resolves true when the user confirms. */
+/**
+ * Opens the shared confirmation dialog and resolves true when the user confirms.
+ * window.confirm blocked the page, so a double click could never ask twice. To keep
+ * that guarantee, a second request while a dialog is already open resolves false.
+ */
 export const confirmAction = (options: ConfirmOptions): Promise<boolean> => {
   ensureHost();
+  if (queue.length > 0) return Promise.resolve(false);
   return new Promise(resolve => {
     queue = [...queue, { id: nextId++, options, resolve }];
     emit();

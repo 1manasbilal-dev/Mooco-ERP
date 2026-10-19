@@ -18,6 +18,7 @@ import { getTodayLocalDate, formatCurrency } from '../lib/formatters';
 import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { LoadMoreRow } from '../components/ui/LoadMoreRow';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 interface AdditionalPhone {
   phone: string;
@@ -546,7 +547,7 @@ const Customers: React.FC = () => {
   const handleSubmitCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim() || isSubmitting || isSubmittingCustomerRef.current) {
-      if (!formData.name.trim()) showToast('Customer name is required', 'warning');
+      if (!formData.name.trim()) showToast('Customer ka naam zaroori hai', 'warning');
       return;
     }
 
@@ -569,17 +570,17 @@ const Customers: React.FC = () => {
       if (editingCustomer) {
         const ok = await updateCustomer(editingCustomer.id, payload);
         if (!ok) return;
-        showToast('Customer details updated', 'success');
+        showToast('Customer ki maloomat update ho gayi', 'success');
       } else {
         const newId = await addCustomer(payload as any);
         if (newId === false) return;
-        showToast('New customer added', 'success');
+        showToast('Naya customer add ho gaya', 'success');
       }
 
       setIsFormOpen(false);
       setEditingCustomer(null);
     } catch (err: any) {
-      showToast('Error saving customer: ' + (err?.message || 'Failed'), 'error');
+      showToast('Customer save nahi hua: ' + (err?.message || 'dobara koshish karein'), 'error');
     } finally {
       setIsSubmitting(false);
       setTimeout(() => {
@@ -594,7 +595,7 @@ const Customers: React.FC = () => {
 
     const amountNum = parseFloat(paymentData.amount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      showToast('Please enter a valid amount', 'warning');
+      showToast('Sahi amount likhein', 'warning');
       return;
     }
 
@@ -617,7 +618,7 @@ const Customers: React.FC = () => {
       );
       if (!ok) return;
 
-      showToast(paymentType === 'Payment' ? 'Payment recorded successfully' : 'Charge recorded successfully', 'success');
+      showToast(paymentType === 'Payment' ? 'Payment record ho gayi' : 'Charge record ho gaya', 'success');
 
       if (sendWhatsAppReceipt && (activePaymentCustomer.whatsapp || activePaymentCustomer.phone)) {
         const rawPhone = activePaymentCustomer.whatsapp || activePaymentCustomer.phone;
@@ -636,7 +637,7 @@ const Customers: React.FC = () => {
       setSelectedPaymentCustomerId(null);
       setPaymentData({ amount: '', date: getTodayLocalDate(), mode: 'Cash', accountId: '', note: '' });
     } catch (err: any) {
-      showToast('Error recording transaction: ' + (err?.message || 'Failed'), 'error');
+      showToast('Entry record nahi hui: ' + (err?.message || 'dobara koshish karein'), 'error');
     } finally {
       setIsSubmittingPayment(false);
       setTimeout(() => {
@@ -655,23 +656,23 @@ const Customers: React.FC = () => {
      const balanceNow = Number(customer?.balance || 0);
      const balanceAfter = balanceNow + (isPayment ? amount : -amount);
      const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(customer ne dena hai)' : value < 0 ? '(advance)' : ''}`.trim();
-     const lines = [
-       `${isPayment ? 'Payment' : 'Charge'} ${formatCurrency(amount)} delete karein?`,
-       '',
-       `• ${customer?.name || 'Customer'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
-       isPayment && account ? `• "${account.name}" se ${formatCurrency(amount)} nikal jayenge` : isPayment ? '• Kisi account se paisa nahi niklega (is entry ka account nahi tha)' : '',
-       '',
-       'Ye wapas nahi hoga.'
-     ].filter(line => line !== null);
-     if (!window.confirm(lines.join('\n'))) return;
-     const ok = await deleteCustomerTransaction(id);
-     if (ok) showToast("Entry delete ho gayi", "success");
+     const ok = await confirmAction({
+       title: `${isPayment ? 'Payment' : 'Charge'} ${formatCurrency(amount)} delete karein?`,
+       consequences: [
+         `${customer?.name || 'Customer'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
+         ...(isPayment && account ? [`"${account.name}" se ${formatCurrency(amount)} nikal jayenge`] : isPayment ? ['Kisi account se paisa nahi niklega (is entry ka account nahi tha)'] : []),
+         'Ye wapas nahi hoga.',
+       ],
+     });
+     if (!ok) return;
+     const deleted = await deleteCustomerTransaction(id);
+     if (deleted) showToast("Entry delete ho gayi", "success");
   };
 
   const handleSendWhatsAppReminder = (customer: Customer) => {
     const rawPhone = customer.whatsapp || customer.phone;
     if (!rawPhone) {
-      showToast("No phone number available for WhatsApp", "warning");
+      showToast("WhatsApp ke liye phone number nahi hai", "warning");
       return;
     }
     const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
@@ -856,7 +857,7 @@ const Customers: React.FC = () => {
   const handleWhatsAppShareInvoice = (sale: POSBill) => {
     const phone = activeCustomer?.whatsapp || activeCustomer?.phone;
     if (!phone) {
-      showToast('Customer phone number not recorded', 'warning');
+      showToast('Customer ka phone number record nahi hai', 'warning');
       return;
     }
     const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -979,7 +980,7 @@ const Customers: React.FC = () => {
                   <div className="flex items-center gap-1 shrink-0">
                     {hasPermission('customer_orders') && <button type="button" title="Customer Orders" aria-label="Customer Orders" onClick={() => navigate(`/customer-orders?customer=${encodeURIComponent(activeCustomer.id)}`)} className="rounded-xl border border-lime-200 bg-lime-50 p-1.5 text-lime-700 dark:border-lime-800 dark:bg-lime-950/40 dark:text-lime-300"><ShoppingCart size={14} /></button>}
                     {hasWhatsApp && (
-                      <button
+                      <button aria-label="WhatsApp Statement"
                         onClick={() => handleSendWhatsAppReminder(activeCustomer)}
                         className="p-1.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60 rounded-xl cursor-pointer"
                         title="WhatsApp Statement"
@@ -988,7 +989,7 @@ const Customers: React.FC = () => {
                       </button>
                     )}
                     {canEdit && (
-                      <button
+                      <button aria-label="Edit"
                         onClick={() => handleEdit(activeCustomer)}
                         className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl cursor-pointer"
                         title="Edit"
@@ -1068,7 +1069,7 @@ const Customers: React.FC = () => {
                       </button>
                     )}
 
-                    <button
+                    <button aria-label="Print Statement"
                       onClick={() => window.print()}
                       className="px-3 py-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 active:scale-95 transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
                       title="Print Statement"
@@ -1076,7 +1077,7 @@ const Customers: React.FC = () => {
                       <Printer size={14} />
                     </button>
 
-                    <button
+                    <button aria-label="Contact & Details"
                       onClick={() => setShowMobileInfo(!showMobileInfo)}
                       className={`px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer border ${showMobileInfo ? 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 border-lime-200 dark:border-lime-800' : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'}`}
                       title="Contact & Details"
@@ -1091,7 +1092,7 @@ const Customers: React.FC = () => {
                   <div className="bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 p-3.5 space-y-2.5 shadow-2xs text-xs animate-in fade-in duration-150">
                     <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-800">
                       <span className="font-bold text-slate-700 dark:text-slate-200 text-[11px] uppercase tracking-wider">Contact & Address</span>
-                      <button onClick={() => setShowMobileInfo(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                      <button aria-label="Hatayen" onClick={() => setShowMobileInfo(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
                         <X size={14} />
                       </button>
                     </div>
@@ -1135,7 +1136,7 @@ const Customers: React.FC = () => {
                       onChange={e => setLedgerSearchTerm(e.target.value)}
                     />
                     {ledgerSearchTerm && (
-                      <button onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                      <button aria-label="Hatayen" onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
                         <X size={14} />
                       </button>
                     )}
@@ -1206,7 +1207,7 @@ const Customers: React.FC = () => {
                                 <span>{entry.type === 'Sale' || entry.sale || entry.description.includes('POS Bill') ? 'Bill' : 'Voucher'}</span>
                               </button>
                               {entry.canDelete && (
-                                <button
+                                <button aria-label="Delete Manual Transaction"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleDeleteTransaction(entry.id);
@@ -1301,7 +1302,7 @@ const Customers: React.FC = () => {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h3 className="text-base font-black text-slate-900 dark:text-white leading-tight truncate">{activeCustomer.name}</h3>
                           {hasWhatsApp && (
-                            <button
+                            <button aria-label="Send WhatsApp Statement"
                               onClick={() => handleSendWhatsAppReminder(activeCustomer)}
                               className="p-1 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-lg transition-all cursor-pointer"
                               title="Send WhatsApp Statement"
@@ -1423,7 +1424,7 @@ const Customers: React.FC = () => {
                       >
                         <Edit size={13} /> Edit Customer
                       </button>
-                      <button
+                      <button aria-label="Delete Customer Record"
                         onClick={() => initiateDelete(activeCustomer)}
                         className="p-2.5 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/50 font-bold rounded-xl text-xs transition-all cursor-pointer"
                         title="Delete Customer Record"
@@ -1503,7 +1504,7 @@ const Customers: React.FC = () => {
                           onChange={e => setLedgerSearchTerm(e.target.value)}
                         />
                         {ledgerSearchTerm && (
-                          <button onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer">
+                          <button aria-label="Hatayen" onClick={() => setLedgerSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer">
                             <X size={13} />
                           </button>
                         )}
@@ -1641,7 +1642,7 @@ const Customers: React.FC = () => {
                                         </div>
                                       )}
                                       {entry.refund_amount !== undefined && entry.refund_amount > 0 && (
-                                        <div className="text-[10px] text-rose-600 dark:text-rose-400 font-mono mt-0.5 font-semibold">
+                                        <div className="text-xs text-rose-600 dark:text-rose-400 font-mono mt-0.5 font-semibold">
                                           Refund: {formatCurrency(entry.refund_amount)}
                                         </div>
                                       )}
@@ -1739,7 +1740,7 @@ const Customers: React.FC = () => {
                                           <span>Partial</span>
                                         </button>
                                       ) : (
-                                        <button
+                                        <button aria-label="View Voucher Details"
                                           type="button"
                                           onClick={() => handleOpenEntryDetail(entry)}
                                           className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors cursor-pointer"
@@ -1750,7 +1751,7 @@ const Customers: React.FC = () => {
                                       )}
 
                                       {entry.canDelete && (
-                                        <button
+                                        <button aria-label="Delete Manual Transaction"
                                           type="button"
                                           onClick={(e) => {
                                             e.stopPropagation();
@@ -1846,7 +1847,7 @@ const Customers: React.FC = () => {
                      onChange={e => setSearchTerm(e.target.value)}
                    />
                    {searchTerm && (
-                      <button onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer shrink-0">
+                      <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer shrink-0">
                          <X size={14} />
                       </button>
                    )}
@@ -2078,7 +2079,7 @@ const Customers: React.FC = () => {
                                 </td>
                                <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
                                   <div className="flex items-center justify-center gap-1.5">
-                                     <button 
+                                     <button aria-label="View Statement Ledger" 
                                        onClick={() => selectCustomer(c.id)}
                                        className="p-1.5 text-slate-400 hover:text-lime-700 dark:hover:text-lime-400 hover:bg-lime-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                                        title="View Statement Ledger"
@@ -2086,7 +2087,7 @@ const Customers: React.FC = () => {
                                         <FileText size={16} />
                                      </button>
                                      {canEdit && (
-                                        <button 
+                                        <button aria-label="Edit Customer" 
                                           onClick={() => handleEdit(c)}
                                           className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                                           title="Edit Customer"
@@ -2095,7 +2096,7 @@ const Customers: React.FC = () => {
                                         </button>
                                       )}
                                       {canDelete && (
-                                        <button 
+                                        <button aria-label="Delete Customer" 
                                           onClick={() => initiateDelete(c)}
                                           className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-rose-400 hover:bg-red-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
                                           title="Delete Customer"
@@ -2130,7 +2131,7 @@ const Customers: React.FC = () => {
               <h3 className="font-black text-lg text-slate-800 flex items-center gap-2">
                 <UserPlus size={20} className="text-lime-600"/> {editingCustomer ? 'Edit Customer' : 'Add New Customer'}
               </h3>
-              <button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer">
+              <button aria-label="Band karein" onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer">
                 <X size={20}/>
               </button>
             </div>
@@ -2190,7 +2191,7 @@ const Customers: React.FC = () => {
                 <div key={index} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-600">Secondary Contact #{index + 1}</span>
-                    <button 
+                    <button aria-label="Hatayen" 
                       type="button" 
                       onClick={() => handleRemovePhoneField(index)}
                       className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
@@ -2336,7 +2337,7 @@ const Customers: React.FC = () => {
                 </h3>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">{activePaymentCustomer.name}</p>
               </div>
-              <button onClick={() => setSelectedPaymentCustomerId(null)} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer">
+              <button aria-label="Band karein" onClick={() => setSelectedPaymentCustomerId(null)} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer">
                 <X size={20}/>
               </button>
             </div>
@@ -2741,7 +2742,7 @@ const Customers: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                <button 
+                <button aria-label="Close Dialog" 
                   onClick={() => setSelectedInvoiceSale(null)} 
                   className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                   title="Close Dialog"
@@ -2945,7 +2946,7 @@ const Customers: React.FC = () => {
                   </p>
                 </div>
               </div>
-              <button 
+              <button aria-label="Close Dialog" 
                 onClick={() => setSelectedTxEntry(null)} 
                 className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 title="Close Dialog"

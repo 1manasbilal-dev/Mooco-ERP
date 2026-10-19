@@ -121,7 +121,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Manage chart of accounts, disable unused heads, and create custom sub-categories</p>
             </div>
           </div>
-          <button 
+          <button aria-label="Band karein" 
             onClick={onClose} 
             className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
@@ -143,7 +143,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                 onChange={e => setCategorySearch(e.target.value)} 
               />
               {categorySearch && (
-                <button 
+                <button aria-label="Hatayen" 
                   onClick={() => setCategorySearch('')}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
                 >
@@ -252,7 +252,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                   cat.isActive ? 'bg-white dark:bg-slate-800' : 'bg-slate-100/50 dark:bg-slate-900/50'
                 }`}>
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                    <button 
+                    <button aria-label="Khol / band karein" 
                       type="button" 
                       onClick={() => setExpandedCatsInModal(prev => ({ ...prev, [cat.name]: !isExpanded }))}
                       className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
@@ -281,7 +281,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                           }}
                           autoFocus
                         />
-                        <button 
+                        <button aria-label="Save Name" 
                           type="button" 
                           onClick={() => handleSaveEditCategory(cat)}
                           className="p-1.5 bg-lime-600 hover:bg-lime-700 text-white rounded-lg transition-colors cursor-pointer"
@@ -289,7 +289,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                         >
                           <Check size={13} />
                         </button>
-                        <button 
+                        <button aria-label="Cancel" 
                           type="button" 
                           onClick={() => setEditingCatName(null)}
                           className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
@@ -321,7 +321,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                     )}
 
                     {!isEditing && (
-                      <button 
+                      <button aria-label="Rename Category" 
                         type="button" 
                         onClick={() => handleStartEditCategory(cat)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
@@ -351,7 +351,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                     </div>
 
                     {/* Delete Button */}
-                    <button 
+                    <button aria-label={isLocked ? 'Cannot delete category with recorded transactions' : 'Delete Category'} 
                       type="button" 
                       onClick={() => handleDeleteCategory(cat)} 
                       disabled={isLocked}
@@ -399,7 +399,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                                     }}
                                     autoFocus
                                   />
-                                  <button 
+                                  <button aria-label="Save" 
                                     type="button" 
                                     onClick={() => handleSaveEditSubcategory(cat.name, sub)}
                                     className="p-1 bg-lime-600 hover:bg-lime-700 text-white rounded cursor-pointer"
@@ -407,7 +407,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                                   >
                                     <Check size={11} />
                                   </button>
-                                  <button 
+                                  <button aria-label="Cancel" 
                                     type="button" 
                                     onClick={() => setEditingSubcatKey(null)}
                                     className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
@@ -431,7 +431,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                               )}
 
                               {!isSubEditing && (
-                                <button 
+                                <button aria-label="Rename Sub-category" 
                                   type="button" 
                                   onClick={() => handleStartEditSubcategory(cat.name, sub)}
                                   className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors cursor-pointer"
@@ -454,7 +454,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                                 }`} />
                               </button>
 
-                              <button 
+                              <button aria-label={isSubLocked ? 'Cannot delete: transactions recorded under this sub-category' : 'Delete Sub-category'} 
                                 type="button" 
                                 onClick={() => handleDeleteSubcategory(cat.name, sub)}
                                 disabled={isSubLocked}
@@ -622,7 +622,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             <h3 className="font-bold text-base text-slate-900 dark:text-slate-100">Record New Expense</h3>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">Record cash/bank expenses or vendor bills on credit</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer">
+          <button aria-label="Band karein" onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer">
             <X size={20}/>
           </button>
         </div>
@@ -776,7 +776,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   >
                     Save
                   </button>
-                  <button type="button" onClick={() => setIsModalCreatingCat(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
+                  <button aria-label="Hatayen" type="button" onClick={() => setIsModalCreatingCat(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
                 </div>
               ) : (
                 <RichSelect
@@ -840,7 +840,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   >
                     Save
                   </button>
-                  <button type="button" onClick={() => setIsModalCreatingSub(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
+                  <button aria-label="Hatayen" type="button" onClick={() => setIsModalCreatingSub(false)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1.5 shrink-0 cursor-pointer"><X size={14}/></button>
                 </div>
               ) : (
                 <RichSelect
@@ -972,7 +972,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   <span className="font-semibold text-slate-800 dark:text-slate-200 font-mono">
                     {formatCurrency(selectedPaymentAccount.balance)}
                     {formData.paidAmount && formData.paidAmount > 0 ? (
-                      <span className={`ml-2 text-[11px] font-bold ${selectedPaymentAccount.balance - formData.paidAmount < 0 ? 'text-red-600' : 'text-slate-500 dark:text-slate-400'}`}>
+                      <span className={`ml-2 text-xs font-bold ${selectedPaymentAccount.balance - formData.paidAmount < 0 ? 'text-red-600' : 'text-slate-500 dark:text-slate-400'}`}>
                         ➔ Left: {formatCurrency((selectedPaymentAccount.balance - formData.paidAmount))}
                       </span>
                     ) : null}
@@ -1087,7 +1087,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
               <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">Tap one to fill Record Expense. Date stays today.</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+          <button aria-label="Band karein" type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200">
             <X size={18} />
           </button>
         </div>
@@ -1104,7 +1104,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
               autoFocus
             />
             {query && (
-              <button type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
+              <button aria-label="Hatayen" type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
                 <X size={12} />
               </button>
             )}
@@ -1157,7 +1157,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
                       <ChevronRight size={14} className="text-slate-300" />
                     </div>
                   </button>
-                  <button
+                  <button aria-label="Remove saved expense"
                     type="button"
                     onClick={() => onDelete(preset.id)}
                     className="shrink-0 border-l border-slate-100 px-3 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:border-slate-700 dark:hover:bg-rose-950/30"
@@ -1223,7 +1223,7 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
               <p className="text-[11px] text-slate-500 dark:text-slate-400">Landlord, utility provider, packaging supplier, or staff</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer"><X size={20}/></button>
+          <button aria-label="Band karein" onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer"><X size={20}/></button>
         </div>
         
         <form onSubmit={handleVendorSubmit} className="p-6 space-y-3.5 max-h-[82vh] overflow-y-auto">
@@ -1514,7 +1514,7 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer">
+          <button aria-label="Band karein" onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg cursor-pointer">
             <X size={20}/>
           </button>
         </div>

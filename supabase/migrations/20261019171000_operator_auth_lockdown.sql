@@ -239,7 +239,10 @@ grant execute on function public.app_delete_user(text) to authenticated, service
 -- 4. Future objects: never auto-exposed to anon. -----------------------------------------------
 alter default privileges for role postgres in schema public revoke all on tables from anon;
 alter default privileges for role postgres in schema public revoke all on sequences from anon;
-alter default privileges for role postgres in schema public revoke execute on functions from public, anon;
+alter default privileges for role postgres in schema public revoke execute on functions from anon;
+-- PUBLIC's built-in EXECUTE default can only be removed role-wide (a per-schema revoke is a no-op).
+-- authenticated/service_role keep EXECUTE on new public functions through the per-schema default.
+alter default privileges for role postgres revoke execute on functions from public;
 
 -- 5. Central request gate. --------------------------------------------------------------------
 alter role authenticator set pgrst.db_pre_request = 'app_private.check_request';

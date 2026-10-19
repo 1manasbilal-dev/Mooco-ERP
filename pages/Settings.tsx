@@ -18,6 +18,7 @@ import {
 import { UnitManagerModal } from '../components/units/UnitManagerModal';
 import { getAllAvailableUnits, getUnitFactorDescription } from '../lib/unitConversion';
 import { formatCurrency } from '../lib/formatters';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 interface SettingsProps {
   onBack?: () => void;
@@ -718,7 +719,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
       <header className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800 sticky top-0 z-30 shadow-2xs">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-8 py-2.5 sm:py-3.5 flex items-center justify-between gap-2.5 sm:gap-4">
           <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
-            <button 
+            <button aria-label="Return to Dashboard" 
               onClick={onBack} 
               className="p-2 sm:p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shadow-2xs shrink-0"
               title="Return to Dashboard"
@@ -965,7 +966,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                       >
                         <Clock size={13} className="text-lime-600" />
                         <span>{shift}</span>
-                        <button 
+                        <button aria-label="Remove Shift" 
                           type="button" 
                           onClick={() => handleRemoveShift(shift)}
                           className="text-slate-400 hover:text-rose-500 transition-colors ml-1 cursor-pointer"
@@ -1702,11 +1703,15 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                                 {!isSuperAdmin && (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      if (window.confirm(`Kya aap waqai user "${u.name}" ko delete karna chahte hain?`)) {
+                                    onClick={async () => {
+                                      if (await confirmAction({
+                                        title: `User "${u.name}" delete karein?`,
+                                        consequences: ['Yeh user ab login nahi kar sakega.', 'Is ke purane records (sales, payments) waise hi rahenge.', 'Yeh kaam wapas nahi ho sakta.'],
+                                      })) {
                                         deleteUser(u.id);
                                       }
                                     }}
+                                    aria-label={`User ${u.name} delete karein`}
                                     className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 text-slate-400 transition-colors cursor-pointer"
                                     title="Delete User"
                                   >
@@ -1813,7 +1818,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
 
                                   <td className="py-3.5 px-4 text-right">
                                     <div className="flex items-center justify-end gap-1.5">
-                                      <button
+                                      <button aria-label="Edit Operator"
                                         type="button"
                                         onClick={() => handleOpenEditUser(u)}
                                         className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
@@ -1824,11 +1829,15 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                                       {!isSuperAdmin && (
                                         <button
                                           type="button"
-                                          onClick={() => {
-                                            if (window.confirm(`Kya aap waqai user "${u.name}" ko delete karna chahte hain?`)) {
+                                          onClick={async () => {
+                                            if (await confirmAction({
+                                              title: `User "${u.name}" delete karein?`,
+                                              consequences: ['Yeh user ab login nahi kar sakega.', 'Is ke purane records (sales, payments) waise hi rahenge.', 'Yeh kaam wapas nahi ho sakta.'],
+                                            })) {
                                               deleteUser(u.id);
                                             }
                                           }}
+                                          aria-label={`User ${u.name} delete karein`}
                                           className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 text-slate-400 transition-colors cursor-pointer"
                                           title="Delete User"
                                         >
@@ -1947,7 +1956,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                               <div className="flex items-center gap-1 shrink-0">
                                 {!role.is_system && (
                                   <div className="flex items-center gap-1 sm:border-l sm:border-slate-200 dark:sm:border-slate-700 sm:pl-2">
-                                    <button
+                                    <button aria-label="Edit Role Sub-Permissions"
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -1960,12 +1969,16 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.stopPropagation();
-                                        if (window.confirm(`Role "${role.name}" delete karein?`)) {
+                                        if (await confirmAction({
+                                          title: `Role "${role.name}" delete karein?`,
+                                          consequences: ['Is role ki permissions hat jayengi.', 'Yeh kaam wapas nahi ho sakta.'],
+                                        })) {
                                           deleteRole(role.id);
                                         }
                                       }}
+                                      aria-label={`Role ${role.name} delete karein`}
                                       className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                                       title="Delete Role"
                                     >

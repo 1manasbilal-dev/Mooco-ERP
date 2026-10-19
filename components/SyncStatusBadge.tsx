@@ -368,7 +368,7 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = fals
                 </div>
               </div>
 
-              <button
+              <button aria-label="Close dialog (Escape)"
                 type="button"
                 onClick={() => setIsModalOpen(false)}
                 className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"

@@ -521,7 +521,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                   className="w-full pl-9 pr-8 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:bg-white dark:focus:bg-slate-900 focus:outline-none focus:border-lime-500 transition-all"
                 />
                 {paymentsSearchTerm && (
-                  <button onClick={() => setPaymentsSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
+                  <button aria-label="Hatayen" onClick={() => setPaymentsSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
                     <X size={13} />
                   </button>
                 )}
@@ -604,7 +604,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               </div>
 
               {/* Print Report */}
-              <button
+              <button aria-label="Print Payments Register"
                 onClick={() => window.print()}
                 className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl transition-colors cursor-pointer shrink-0"
                 title="Print Payments Register"
@@ -752,7 +752,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                           {/* Actions */}
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1">
-                              <button
+                              <button aria-label="View Vendor Ledger"
                                 type="button"
                                 onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
                                 className="p-1.5 bg-slate-100 hover:bg-lime-100 text-slate-600 hover:text-lime-800 rounded-lg transition-colors cursor-pointer"
@@ -762,7 +762,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                               </button>
 
                               {row.isDeletable && canDelete && handleDeleteVendorTransaction && (
-                                <button
+                                <button aria-label="Delete Payment Entry"
                                   type="button"
                                   onClick={() => handleDeleteVendorTransaction(row.id)}
                                   className="p-1.5 bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
@@ -844,7 +844,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                     <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
                       <span className="text-slate-400 truncate min-w-0">{row.accountName} • {row.paymentMode}</span>
                       <div className="flex items-center gap-1 shrink-0">
-                        <button
+                        <button aria-label="View Vendor Ledger"
                           type="button"
                           onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
                           className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-lime-100 text-slate-600 hover:text-lime-800 rounded-lg transition-colors cursor-pointer"
@@ -853,7 +853,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                           <ChevronRight size={14} />
                         </button>
                         {row.isDeletable && canDelete && handleDeleteVendorTransaction && (
-                          <button
+                          <button aria-label="Delete Payment Entry"
                             type="button"
                             onClick={() => handleDeleteVendorTransaction(row.id)}
                             className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
@@ -894,7 +894,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                     onChange={e => setSearchTerm(e.target.value)}
                   />
                   {searchTerm && (
-                    <button onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
+                    <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
                       <X size={13} />
                     </button>
                   )}
@@ -1029,7 +1029,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                 {/* Vendor Header */}
                 <div className="p-3 sm:p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/50 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3 min-w-0">
                   <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                    <button
+                    <button aria-label="Wapas jayen"
                       onClick={() => setIsMobileLedgerOpen(false)}
                       className="lg:hidden p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300 shrink-0"
                     >
@@ -1090,7 +1090,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                       <span className="hidden sm:inline">Print</span>
                     </button>
 
-                    <button
+                    <button aria-label="Edit Profile"
                       onClick={() => handleOpenEditVendorModal(selectedVendor)}
                       className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl transition-colors cursor-pointer"
                       title="Edit Profile"
@@ -1098,7 +1098,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                       <Edit size={14} />
                     </button>
 
-                    <button
+                    <button aria-label="Delete Vendor"
                       onClick={() => handleDeleteVendor(selectedVendor)}
                       className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-xl transition-colors cursor-pointer"
                       title="Delete Vendor"
@@ -1265,7 +1265,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                               {canDelete && (
                                 <td className="px-3 py-2.5 text-center whitespace-nowrap">
                                   {handleDeleteVendorTransaction && (row.type === 'Payment' || row.type === 'Refund') ? (
-                                    <button
+                                    <button aria-label="Delete Vendor Transaction"
                                       type="button"
                                       onClick={() => handleDeleteVendorTransaction(row.id)}
                                       className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
@@ -1310,7 +1310,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                                 {row.type === 'Payment' ? 'Payment Di' : row.type === 'Refund' ? 'Payment Li' : row.type}
                               </span>
                               {canDelete && handleDeleteVendorTransaction && (row.type === 'Payment' || row.type === 'Refund') && (
-                                <button
+                                <button aria-label="Delete Vendor Transaction"
                                   type="button"
                                   onClick={() => handleDeleteVendorTransaction(row.id)}
                                   className="p-1 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
@@ -1328,13 +1328,13 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                           <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800 text-center">
                             <div className="min-w-0">
                               <span className="block text-[9px] font-bold uppercase text-slate-400">Bill</span>
-                              <span className="block text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400 truncate">
+                              <span className="block text-xs font-mono font-bold text-rose-600 dark:text-rose-400 truncate">
                                 {row.debit > 0 ? `${formatCurrency(row.debit)}` : '—'}
                               </span>
                             </div>
                             <div className="min-w-0">
                               <span className="block text-[9px] font-bold uppercase text-slate-400">Paid</span>
-                              <span className="block text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate">
+                              <span className="block text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate">
                                 {row.credit > 0 ? `${formatCurrency(row.credit)}` : '—'}
                               </span>
                             </div>

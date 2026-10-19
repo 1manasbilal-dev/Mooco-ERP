@@ -83,7 +83,7 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
                 📒 Khata
               </span>
             )}
-            <button
+            <button aria-label="Reset to Walk-in Customer"
               type="button"
               onClick={() => {
                 setSelectedCustomerId('');
@@ -156,11 +156,11 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
                               {c.name}
                             </span>
                             {bal > 0 ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 font-mono">
+                              <span className="text-xs font-bold px-1.5 py-0.2 rounded bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 font-mono">
                                 Due {formatCurrency(bal)}
                               </span>
                             ) : bal < 0 ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono">
+                              <span className="text-xs font-bold px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono">
                                 Adv {formatCurrency(Math.abs(bal))}
                               </span>
                             ) : null}
@@ -183,7 +183,7 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
       </div>
 
       {/* Add New Customer Action */}
-      <button
+      <button aria-label="Quick Add Customer"
         type="button"
         onClick={() => setNewCustomerModalOpen(true)}
         className="p-1.5 bg-lime-600 hover:bg-lime-700 text-white rounded-lg shadow-sm transition-all active:scale-95 flex items-center justify-center shrink-0 cursor-pointer"

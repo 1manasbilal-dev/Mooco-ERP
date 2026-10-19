@@ -2644,7 +2644,7 @@ const Reports: React.FC = () => {
                     <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 block">
                       {formatCurrency(pnlData.totalRevenue)}
                     </span>
-                    <span className="text-[11px] text-slate-400 mt-1 block">POS: {formatCurrency(pnlData.posRevenue)} • Supply: {formatCurrency(pnlData.supplyRevenue)}</span>
+                    <span className="text-xs text-slate-400 mt-1 block">POS: {formatCurrency(pnlData.posRevenue)} • Supply: {formatCurrency(pnlData.supplyRevenue)}</span>
                   </div>
 
                   <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
@@ -2652,7 +2652,7 @@ const Reports: React.FC = () => {
                     <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 block">
                       {formatCurrency(pnlData.totalCOGS)}
                     </span>
-                    <span className="text-[11px] text-slate-400 mt-1 block">Milk: {formatCurrency(pnlData.milkCost)} ({Math.round(pnlData.milkLiters)} L)</span>
+                    <span className="text-xs text-slate-400 mt-1 block">Milk: {formatCurrency(pnlData.milkCost)} ({Math.round(pnlData.milkLiters)} L)</span>
                   </div>
 
                   <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
@@ -3250,7 +3250,7 @@ const Reports: React.FC = () => {
                           <p className="text-lg sm:text-xl font-black font-mono text-slate-900 dark:text-white mt-1">
                             {dayBookData.milk.counterMilkLitres.toFixed(1)} <span className="text-xs font-bold text-slate-400">L</span>
                           </p>
-                          <span className="text-[10px] text-emerald-600 font-bold mt-0.5 block font-mono">
+                          <span className="text-xs text-emerald-600 font-bold mt-0.5 block font-mono">
                             Revenue: {formatCurrency(dayBookData.milk.counterMilkRevenue)}
                           </span>
                         </div>
@@ -3276,7 +3276,7 @@ const Reports: React.FC = () => {
                           <p className="text-lg sm:text-xl font-black font-mono text-slate-900 dark:text-white mt-1">
                             {dayBookData.milk.supplyMilkLitres.toFixed(1)} <span className="text-xs font-bold text-slate-400">L</span>
                           </p>
-                          <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                          <span className="text-xs text-slate-400 mt-0.5 block font-mono">
                             Revenue: {formatCurrency(dayBookData.milk.supplyMilkRevenue)}
                           </span>
                         </div>
@@ -3319,14 +3319,14 @@ const Reports: React.FC = () => {
                             <div key={idx} className="bg-white dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2">
                               <span className="font-bold text-slate-800 dark:text-slate-200">{s.name}:</span>
                               <span className="font-mono text-sky-600 font-bold">{s.totalL.toFixed(1)} L</span>
-                              <span className="text-slate-400 text-[11px] font-mono">({formatCurrency(s.totalAmt)})</span>
+                              <span className="text-slate-400 text-xs font-mono">({formatCurrency(s.totalAmt)})</span>
                               {s.paidAmt > 0 && (
-                                <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                                <span className="text-xs font-black px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
                                   Paid Cash: {formatCurrency(s.paidAmt)}
                                 </span>
                               )}
                               {s.dueAmt > 0 && (
-                                <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                <span className="text-xs font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
                                   Pending Due: {formatCurrency(s.dueAmt)}
                                 </span>
                               )}
@@ -3954,7 +3954,7 @@ const Reports: React.FC = () => {
                           </button>
 
                           {/* Close */}
-                          <button
+                          <button aria-label="Band karein"
                             type="button"
                             onClick={() => setIsDayBookSlipModalOpen(false)}
                             className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 cursor-pointer"
@@ -4065,7 +4065,7 @@ const Reports: React.FC = () => {
                                 <span className="text-base font-black font-mono text-sky-700 block mt-0.5">
                                   {dayBookData.milk.totalMilkInLitres.toFixed(1)} L
                                 </span>
-                                <span className="text-[9px] text-slate-500 font-mono">Cost: {formatCurrency(Math.round(dayBookData.milk.totalMilkInCost))}</span>
+                                <span className="text-xs text-slate-500 font-mono">Cost: {formatCurrency(Math.round(dayBookData.milk.totalMilkInCost))}</span>
                               </div>
 
                               <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
@@ -4097,7 +4097,7 @@ const Reports: React.FC = () => {
                                 <span className="text-base font-black font-mono text-indigo-700 block mt-0.5">
                                   {formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}
                                 </span>
-                                <span className="text-[9px] text-slate-500">Float: {formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}</span>
+                                <span className="text-xs text-slate-500">Float: {formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}</span>
                               </div>
 
                               <div className="bg-lime-50/70 border border-lime-200 rounded-lg p-2.5">
@@ -4590,7 +4590,7 @@ const Reports: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider block">Total Collected</span>
                       {customerSalesData.totalAdvances > 0 && (
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
                           Adv: {formatCurrency(customerSalesData.totalAdvances)}
                         </span>
                       )}
@@ -4898,7 +4898,7 @@ const Reports: React.FC = () => {
                           </button>
 
                           {/* Close */}
-                          <button
+                          <button aria-label="Band karein"
                             type="button"
                             onClick={() => setIsCustomerBalanceModalOpen(false)}
                             className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 cursor-pointer"

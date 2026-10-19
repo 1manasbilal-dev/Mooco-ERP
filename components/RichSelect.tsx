@@ -193,7 +193,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
                   autoFocus
                 />
                 {searchTerm && (
-                  <button
+                  <button aria-label="Hatayen"
                     type="button"
                     onClick={() => setSearchTerm('')}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"

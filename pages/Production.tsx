@@ -504,7 +504,7 @@ const Production: React.FC = () => {
 
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] sm:text-xs text-slate-400 font-mono font-bold">{batch.batch_number}</span>
-              <button 
+              <button aria-label={isExpanded ? "Collapse Card" : "Expand Card"} 
                 onClick={(e) => toggleCardExpand(batch.id, e)} 
                 className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
                 title={isExpanded ? "Collapse Card" : "Expand Card"}
@@ -769,7 +769,7 @@ const Production: React.FC = () => {
                    value={historySearch} onChange={e => setHistorySearch(e.target.value)}
                  />
                  {historySearch && (
-                   <button onClick={() => setHistorySearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
+                   <button aria-label="Hatayen" onClick={() => setHistorySearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
                      <X size={12} />
                    </button>
                  )}
@@ -781,7 +781,7 @@ const Production: React.FC = () => {
                    value={historyDate} onChange={e => setHistoryDate(e.target.value)}
                  />
                  {historyDate && (
-                   <button onClick={() => setHistoryDate('')} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+                   <button aria-label="Hatayen" onClick={() => setHistoryDate('')} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                      <X size={12} />
                    </button>
                  )}
@@ -968,7 +968,7 @@ const Production: React.FC = () => {
                       </span>
                    </p>
                  </div>
-                 <button onClick={() => setSelectedBatch(null)} className="p-1.5 bg-white rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors border border-slate-200 cursor-pointer">
+                 <button aria-label="Band karein" onClick={() => setSelectedBatch(null)} className="p-1.5 bg-white rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors border border-slate-200 cursor-pointer">
                      <X size={15}/>
                  </button>
               </div>

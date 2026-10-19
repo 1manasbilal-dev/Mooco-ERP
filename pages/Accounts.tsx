@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { ManualAccount, BankTransaction, JournalLine, FinancialAccount } from '../types';
 import { formatCurrency, formatMoneyRaw } from '../lib/formatters';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 // --- Type Fix for Framer Motion ---
 const MotionDiv = motion.div as any;
@@ -310,17 +311,17 @@ const Accounts: React.FC = () => {
           isActive: true
         });
         if (!ok) return;
-        showToast(`Bank & Cash Account "${newAccount.name}" created successfully!`, "success");
+        showToast(`Bank / Cash account "${newAccount.name}" ban gaya`, "success");
       } else {
         const ok = await addManualAccount(newAccount as any);
         if (!ok) return;
-        showToast("New Ledger Account Created", "success");
+        showToast("Naya ledger account ban gaya", "success");
       }
 
       setIsAddOpen(false);
       setNewAccount({ name: '', type: 'Liability', balance: 0, description: '', parentId: '', isActive: true });
     } catch (err: any) {
-      showToast("Error creating account: " + (err?.message || "Failed"), "error");
+      showToast("Account nahi ban saka: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -331,18 +332,23 @@ const Accounts: React.FC = () => {
     setIsAddOpen(true);
   };
 
-  const handleDelete = (node: COANode) => {
-    if (node.isSystem) { showToast(`Cannot delete system account.`, 'warning'); return; }
-    if (node.children && node.children.length > 0) { showToast("Cannot delete account with sub-accounts.", 'error'); return; }
-    
+  const handleDelete = async (node: COANode) => {
+    if (node.isSystem) { showToast(`System account delete nahi ho sakta.`, 'warning'); return; }
+    if (node.children && node.children.length > 0) { showToast("Is account ke neeche sub-accounts hain, pehle unhein hatayen.", 'error'); return; }
+
     if (Math.abs(node.balance) > 0) {
-        showToast("Account has non-zero balance. Deactivate instead.", 'warning');
+        showToast("Account mein balance baqi hai. Delete ke bajaye Inactive karein.", 'warning');
         return;
     }
 
-    if (confirm(`Are you sure you want to delete ${node.name}? This is permanent.`)) { 
-        deleteManualAccount(node.id); 
-        showToast("Account deleted successfully", "success"); 
+    const ok = await confirmAction({
+      title: `"${node.name}" delete karein?`,
+      message: 'Yeh account chart of accounts se hamesha ke liye hat jayega.',
+      consequences: ['Is ka balance zero hai, is liye kisi ledger par asar nahi hoga.', 'Yeh kaam wapas nahi ho sakta.'],
+    });
+    if (ok) {
+        deleteManualAccount(node.id);
+        showToast("Account delete ho gaya", "success");
     }
   };
 
@@ -350,7 +356,7 @@ const Accounts: React.FC = () => {
      if (node.isSystem) return;
      const newStatus = !node.isActive;
      updateManualAccount(node.id, { isActive: newStatus });
-     showToast(`Account marked as ${newStatus ? 'Active' : 'Inactive'}`, "info");
+     showToast(`Account ${newStatus ? "Active" : "Inactive"} kar diya gaya`, "info");
   };
 
   // --- JOURNAL ENTRY LOGIC ---
@@ -390,8 +396,8 @@ const Accounts: React.FC = () => {
   };
 
   const handlePostJournal = async () => {
-    if (!isBalanced) { showToast("Journal Entry must be balanced (Debit = Credit)", "error"); return; }
-    if (journalLines.some(l => !l.accountId)) { showToast("All lines must have an account selected", "error"); return; }
+    if (!isBalanced) { showToast("Journal entry balance nahi: Debit aur Credit barabar hone chahiyen", "error"); return; }
+    if (journalLines.some(l => !l.accountId)) { showToast("Har line mein account chunein", "error"); return; }
     if (isSubmittingJournal) return;
 
     setIsSubmittingJournal(true);
@@ -404,7 +410,7 @@ const Accounts: React.FC = () => {
         totalAmount: totalDebit
       });
 
-      showToast("Journal Entry Posted Successfully", "success");
+      showToast("Journal entry post ho gayi", "success");
       setJournalRef('');
       setJournalNarration('');
       setJournalLines([
@@ -412,7 +418,7 @@ const Accounts: React.FC = () => {
         { id: '2', accountId: '', accountName: '', accountType: '', debit: 0, credit: 0 }
       ]);
     } catch (err: any) {
-      showToast("Error posting journal entry: " + (err?.message || "Failed"), "error");
+      showToast("Journal entry post nahi hui: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmittingJournal(false);
     }
@@ -469,7 +475,7 @@ const Accounts: React.FC = () => {
           {/* Left: Caret + Code + Name & Badges */}
           <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
             {hasChildren ? (
-              <button 
+              <button aria-label="Khol / band karein" 
                 onClick={() => toggleGroup(node.id)} 
                 className={`p-1 rounded-lg transition-colors shrink-0 cursor-pointer ${
                   isHeader ? 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400'
@@ -527,7 +533,7 @@ const Accounts: React.FC = () => {
               <div className="flex items-center gap-0.5">
                 {/* Add sub-account */}
                 {(node.isGroup || !node.isSystem || ['inc_sales_group'].includes(node.id)) && (
-                   <button 
+                   <button aria-label="Add Sub-account" 
                      onClick={() => handleOpenAddSub(node)} 
                      className="text-slate-400 hover:text-emerald-600 p-1 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer" 
                      title="Add Sub-account"
@@ -537,7 +543,7 @@ const Accounts: React.FC = () => {
                 )}
 
                 {!node.isSystem && (
-                    <button 
+                    <button aria-label={node.isActive !== false ? "Deactivate" : "Activate"} 
                       onClick={() => toggleActiveStatus(node)} 
                       className={`p-1 rounded-lg transition-colors cursor-pointer ${node.isActive !== false ? 'text-slate-400 hover:text-amber-600 hover:bg-amber-50' : 'text-amber-600 bg-amber-50'}`} 
                       title={node.isActive !== false ? "Deactivate" : "Activate"}
@@ -551,7 +557,7 @@ const Accounts: React.FC = () => {
                       <Lock size={12} />
                    </div>
                 ) : (
-                   <button 
+                   <button aria-label="Delete Account" 
                      onClick={() => handleDelete(node)} 
                      className="text-slate-400 hover:text-rose-600 p-1 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" 
                      title="Delete Account"
@@ -635,7 +641,7 @@ const Accounts: React.FC = () => {
                     onChange={e => setCoaSearch(e.target.value)}
                   />
                   {coaSearch && (
-                     <button onClick={() => setCoaSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
+                     <button aria-label="Hatayen" onClick={() => setCoaSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
                         <X size={12} />
                      </button>
                   )}
@@ -704,7 +710,7 @@ const Accounts: React.FC = () => {
                            <div className="flex items-center justify-between gap-2">
                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Line #{idx + 1}</span>
                               {journalLines.length > 2 && (
-                                 <button onClick={() => removeLine(line.id)} className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer">
+                                 <button aria-label="Delete karein" onClick={() => removeLine(line.id)} className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer">
                                     <Trash2 size={13}/>
                                  </button>
                               )}
@@ -875,7 +881,7 @@ const Accounts: React.FC = () => {
                         <Plus size={16} className="text-lime-600"/> 
                         <span>{newAccount.parentId ? 'Add Sub-Account' : 'Add Ledger Account'}</span>
                      </h3>
-                     <button onClick={() => setIsAddOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
+                     <button aria-label="Band karein" onClick={() => setIsAddOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
                   </div>
 
                   <form onSubmit={handleAddSubmit} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">

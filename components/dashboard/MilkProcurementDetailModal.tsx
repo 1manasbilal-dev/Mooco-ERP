@@ -293,7 +293,7 @@ export const MilkProcurementDetailModal: React.FC<MilkProcurementDetailModalProp
               </button>
             )}
             {!isPage && (
-            <button
+            <button aria-label="Close modal (Esc)"
               type="button"
               onClick={onClose}
               className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
@@ -731,7 +731,7 @@ export const MilkProcurementDetailModal: React.FC<MilkProcurementDetailModalProp
                                     <div className="font-mono font-black text-slate-900 dark:text-white">
                                       {formatQty(slip.quantity)} L @ Rs {cleanNumber(slip.rate, 1).toFixed(1)}
                                     </div>
-                                    <div className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                                    <div className="text-xs font-mono text-emerald-600 dark:text-emerald-400 font-bold">
                                       Total: {formatCurrency(slip.total_amount)}
                                     </div>
                                   </div>

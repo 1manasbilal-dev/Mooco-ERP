@@ -583,7 +583,7 @@ function FarmerLedger({
                 <span className="text-right">
                   <span className="block font-mono font-semibold text-slate-950 dark:text-white">{formatQty(farmer.liters)} L</span>
                   <span className="block font-mono text-xs text-slate-500">{formatCurrency(farmer.amount)}</span>
-                  {farmer.due > 0 && <span className="block font-mono text-[11px] text-rose-600">{formatCurrency(farmer.due)} unpaid</span>}
+                  {farmer.due > 0 && <span className="block font-mono text-xs text-rose-600">{formatCurrency(farmer.due)} unpaid</span>}
                 </span>
               </button>
               {open && (

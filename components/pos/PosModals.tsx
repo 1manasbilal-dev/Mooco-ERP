@@ -50,7 +50,7 @@ export const PosHeldOrdersModal: React.FC<PosHeldOrdersModalProps> = ({
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">Recall parked orders back to POS cart</p>
             </div>
-            <button onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
+            <button aria-label="Band karein" onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
               <X size={18} className="text-slate-500 dark:text-slate-400"/>
             </button>
           </div>
@@ -78,7 +78,7 @@ export const PosHeldOrdersModal: React.FC<PosHeldOrdersModalProps> = ({
                     >
                       <PlayCircle size={14} /> Recall
                     </button>
-                    <button 
+                    <button aria-label="Delete karein" 
                       onClick={() => handleDeleteHeldOrder(held.id)}
                       className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
                     >
@@ -118,7 +118,7 @@ export const PosShortcutsModal: React.FC<PosShortcutsModalProps> = ({ open, onCl
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">Fast hands-free counter hotkeys</p>
             </div>
-            <button onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
+            <button aria-label="Band karein" onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
               <X size={18} className="text-slate-500 dark:text-slate-400"/>
             </button>
           </div>
@@ -170,7 +170,7 @@ export const PosReceiptModal: React.FC<PosReceiptModalProps> = ({
             <span className="font-bold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-1.5">
               <CheckCircle2 className="text-emerald-600" size={18}/> Sale Completed
             </span>
-            <button onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
+            <button aria-label="Band karein" onClick={onClose} className="bg-white dark:bg-slate-800 p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 cursor-pointer">
               <X size={16} className="text-slate-500 dark:text-slate-400"/>
             </button>
           </div>
@@ -301,7 +301,7 @@ export const PosNewCustomerModal: React.FC<PosNewCustomerModalProps> = ({
                 <p className="text-xs text-slate-500 dark:text-slate-400">Register new customer and auto-select in active bill</p>
               </div>
             </div>
-            <button 
+            <button aria-label="Band karein" 
               onClick={onClose} 
               className="p-1.5 rounded-full hover:bg-slate-200/80 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
             >
@@ -572,12 +572,12 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
               </div>
               <div>
                 <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 leading-tight">{editingCartItem.name}</h3>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                   Unit: {editingCartItem.unit} • Base Rate: {formatCurrency(editingCartItem.originalPrice || editingCartItem.price)}
                 </p>
               </div>
             </div>
-            <button 
+            <button aria-label="Band karein" 
               type="button" 
               onClick={() => setEditingCartItem(null)} 
               className="bg-white dark:bg-slate-800 p-1.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
@@ -608,7 +608,7 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
                       }`}
                     >
                       <div className="text-xs font-bold truncate">1 {baseUnit}</div>
-                      <div className={`text-[11px] font-mono font-bold mt-0.5 ${editVariantId === 'base' ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
+                      <div className={`text-xs font-mono font-bold mt-0.5 ${editVariantId === 'base' ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
                         Rs {formatCurrency(productDef?.selling_price || 0)}
                       </div>
                     </button>
@@ -629,7 +629,7 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
                         }`}
                       >
                         <div className="text-xs font-bold truncate">{v.name} ({contains} {baseUnit})</div>
-                        <div className={`text-[11px] font-mono font-bold mt-0.5 ${isSelected ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
+                        <div className={`text-xs font-mono font-bold mt-0.5 ${isSelected ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
                           Rs {formatCurrency(price)}
                         </div>
                       </button>

@@ -12,6 +12,7 @@ import {
   Layers, Lock, SlidersHorizontal, Check, Info, ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { confirmAction } from '../ui/ConfirmDialog';
 
 const MotionDiv = motion.div as any;
 
@@ -129,12 +130,12 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
     const factorNum = parseFloat(formData.factor);
 
     if (!name || !symbol) {
-      showToast("Unit name and symbol are required", "warning");
+      showToast("Unit ka naam aur symbol zaroori hain", "warning");
       return;
     }
 
     if (isNaN(factorNum) || factorNum <= 0) {
-      showToast("Conversion factor must be a positive number greater than 0", "warning");
+      showToast("Conversion factor 0 se bara number hona chahiye", "warning");
       return;
     }
 
@@ -142,7 +143,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
       const original = allUnits.find(u => u.id === editingUnitId);
       const inUse = Boolean(original && (usageMap[original.symbol.toLowerCase()] || 0) > 0);
       if (original && inUse && (symbol !== original.symbol || formData.type !== (original.type || 'Count') || factorNum !== Number(original.factor))) {
-        showToast(`"${original.symbol}" is used by products. Only its name and note can change.`, "warning");
+        showToast(`"${original.symbol}" products mein istemal ho raha hai. Sirf naam aur note badal sakte hain.`, "warning");
         return;
       }
       const ok = await updateUnit(editingUnitId, {
@@ -179,11 +180,15 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
   const handleDelete = async (unit: UnitDefinition) => {
     const usageCount = usageMap[unit.symbol.toLowerCase()] || 0;
     if (usageCount > 0) {
-      showToast(`Cannot delete: ${usageCount} product(s) are actively using "${unit.symbol}". Reassign those products first.`, "warning");
+      showToast(`Delete nahi ho sakta: ${usageCount} product(s) "${unit.symbol}" istemal kar rahe hain. Pehle un products ka unit badlein.`, "warning");
       return;
     }
 
-    if (confirm(`Are you sure you want to delete custom unit "${unit.name} (${unit.symbol})"?`)) {
+    if (await confirmAction({
+      title: `Unit "${unit.name} (${unit.symbol})" delete karein?`,
+      message: 'Koi product yeh unit istemal nahi kar raha.',
+      consequences: ['Yeh unit list se hat jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+    })) {
       await deleteUnit(unit.id);
     }
   };
@@ -234,7 +239,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
               </p>
             </div>
           </div>
-          <button 
+          <button aria-label="Band karein" 
             type="button"
             onClick={onClose} 
             className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -259,7 +264,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                 className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200/90 dark:border-slate-700 rounded-xl pl-9 pr-3.5 py-2 text-xs sm:text-sm text-slate-900 dark:text-slate-100 outline-none focus:border-slate-900 dark:focus:border-lime-500 focus:ring-1 focus:ring-slate-900 dark:focus:ring-lime-500 transition-all placeholder:text-slate-400"
               />
               {searchQuery && (
-                <button 
+                <button aria-label="Hatayen" 
                   onClick={() => setSearchQuery('')}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                 >
@@ -590,7 +595,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                             </span>
                           ) : (
                             <div className="flex items-center gap-0.5">
-                              <button
+                              <button aria-label="Edit unit definition"
                                 type="button"
                                 onClick={() => handleStartEdit(unit)}
                                 title="Edit unit definition"
@@ -598,7 +603,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                               >
                                 <Edit3 size={13} />
                               </button>
-                              <button
+                              <button aria-label={usageCount > 0 ? "Unit in use" : "Delete custom unit"}
                                 type="button"
                                 onClick={() => handleDelete(unit)}
                                 title={usageCount > 0 ? "Unit in use" : "Delete custom unit"}

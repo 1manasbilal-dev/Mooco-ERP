@@ -391,7 +391,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
             <span className="text-xs font-bold text-slate-800 dark:text-slate-100 max-w-[90px] truncate">
               {activeShiftSession.shift_name || 'Shift'}
             </span>
-            <span className="hidden sm:inline text-[10px] font-mono text-slate-500 dark:text-slate-400">
+            <span className="hidden sm:inline text-xs font-mono text-slate-500 dark:text-slate-400">
               {formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))}
             </span>
           </button>
@@ -439,7 +439,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
 
         {/* Quick Tools: Printer Settings & Shortcuts */}
         <div className="hidden sm:flex items-center gap-0.5 border-l border-slate-200 dark:border-slate-700 pl-1">
-          <button 
+          <button aria-label="POS & Printer Settings" 
             type="button"
             onClick={() => navigate('/settings')}
             className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
@@ -447,7 +447,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
           >
             <Printer size={13} />
           </button>
-          <button 
+          <button aria-label="Keyboard Shortcuts Guide" 
             type="button"
             onClick={() => setShortcutsModalOpen(true)}
             className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"

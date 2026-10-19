@@ -10,6 +10,7 @@ import { changeCustomerOrderStatus, listCustomerOrders, localOrderDate, orderAmo
 import { RichSelect, RichSelectOption } from '../components/RichSelect';
 import { availableSellUnits, oneUnitLabel, sellUnitContains, sellUnitPrice } from '../lib/sellUnits';
 import { formatQty, formatCurrency } from '../lib/formatters';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 const input = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600';
 const select = 'w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pr-10 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all hover:border-slate-300 focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 cursor-pointer';
@@ -308,7 +309,12 @@ const CustomerOrders: React.FC = () => {
     const cancelNote = postedAdvance > 0
       ? `Advance ${money(postedAdvance)} customer ke khaate mein credit rahega. Wapas karna ho to customer khaate se refund karein.`
       : 'Is order ka koi stock ya payment post nahi hua.';
-    if (status === 'Cancelled' && !window.confirm(`Order ${order.order_number} cancel karein?\n\n${cancelNote}`)) return;
+    if (status === 'Cancelled' && !(await confirmAction({
+      tone: 'warning',
+      title: `Order ${order.order_number} cancel karein?`,
+      consequences: [cancelNote],
+      confirmLabel: 'Haan, cancel karein',
+    }))) return;
     busyRef.current = true; setBusy(true);
     try { const saved = await changeCustomerOrderStatus(order, status); setOrders(previous => previous.map(row => row.id === saved.id ? saved : row)); showToast(`Order ${status.toLowerCase()}`, 'success'); }
     catch (err: any) { showToast(err.message, 'error'); void refresh(); }

@@ -187,12 +187,12 @@ export function CashPaymentDays(props: {
                     {row.direction === 'in' ? '-' : ''}{formatMoney(row.amount)}
                   </span>
                   {props.onVoucher && (
-                    <button type="button" onClick={() => props.onVoucher?.(row)} className="p-1.5 text-slate-400 hover:text-slate-800 cursor-pointer" title="Print voucher">
+                    <button aria-label="Print voucher" type="button" onClick={() => props.onVoucher?.(row)} className="p-1.5 text-slate-400 hover:text-slate-800 cursor-pointer" title="Print voucher">
                       <Printer size={14} />
                     </button>
                   )}
                   {row.canDelete && props.onDelete && (
-                    <button type="button" onClick={() => props.onDelete?.(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer" title="Delete payment">
+                    <button aria-label="Delete payment" type="button" onClick={() => props.onDelete?.(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer" title="Delete payment">
                       <Trash2 size={14} />
                     </button>
                   )}

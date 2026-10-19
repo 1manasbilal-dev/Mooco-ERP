@@ -2,6 +2,7 @@ import React from 'react';
 import { ShoppingCart, Trash2, ChevronLeft, Minus, Plus, Maximize2, ChevronDown } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { formatCurrency } from '../../lib/formatters';
+import { confirmAction } from '../ui/ConfirmDialog';
 
 const MotionDiv = motion.div as any;
 
@@ -55,6 +56,18 @@ export const PosCart: React.FC<PosCartProps> = ({
   onOpenReceipt,
   onClearCart
 }) => {
+  const clearCartWithConfirm = async () => {
+    const ok = await confirmAction({
+      tone: 'warning',
+      title: 'Cart khali karein?',
+      consequences: [`Cart ke ${cart.length} item(s) hat jayenge.`, 'Abhi tak bill save nahi hua, is liye stock ya khaate par asar nahi hoga.'],
+      confirmLabel: 'Haan, khali karein',
+    });
+    if (!ok) return;
+    if (onClearCart) onClearCart();
+    else setCart([]);
+  };
+
   return (
     <>
       {/* Header bar */}
@@ -81,12 +94,7 @@ export const PosCart: React.FC<PosCartProps> = ({
           {cart.length > 0 ? (
             <button
               type="button"
-              onClick={() => {
-                if (window.confirm("Clear all items from cart?")) {
-                  if (onClearCart) onClearCart();
-                  else setCart([]);
-                }
-              }}
+              onClick={clearCartWithConfirm}
               className="text-[11px] font-bold text-red-600 hover:text-red-700 px-2.5 py-1 bg-red-50 dark:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
             >
               Clear
@@ -107,12 +115,7 @@ export const PosCart: React.FC<PosCartProps> = ({
           </span>
           {cart.length > 0 && (
             <button 
-              onClick={() => {
-                if (window.confirm("Clear all items from cart?")) {
-                  if (onClearCart) onClearCart();
-                  else setCart([]);
-                }
-              }}
+              onClick={clearCartWithConfirm}
               className="text-[11px] text-slate-400 hover:text-red-600 flex items-center gap-1 transition-colors cursor-pointer"
             >
               <Trash2 size={12} /> Clear
@@ -165,7 +168,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                         onDragEnd={(_e: any, info: any) => {
                           if (Math.abs(info.offset.x) > 75 || Math.abs(info.velocity.x) > 400) {
                             setCart(prev => prev.filter(c => c.cartItemId !== item.cartItemId));
-                            showToast(`${item.name} removed from cart`, 'info');
+                            showToast(`${item.name} cart se hata diya`, 'info');
                           }
                         }}
                         className="pos-mobile-cart-row relative bg-white dark:bg-slate-900 px-3 py-2.5 grid grid-cols-12 items-center gap-1.5 touch-pan-y"
@@ -180,7 +183,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                               {item.name}
                             </p>
                             <div className="flex items-center gap-1 flex-wrap mt-0.5">
-                              <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium truncate">
+                              <span className="text-xs text-slate-400 dark:text-slate-500 font-medium truncate">
                                 {item.variantName ? `${item.variantName} · ` : ''}Rs {formatCurrency(item.price)}
                               </span>
                               {(() => {
@@ -206,7 +209,7 @@ export const PosCart: React.FC<PosCartProps> = ({
 
                         <div className="pos-cart-quantity col-span-4 flex items-center justify-center gap-1">
                           <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200/60 dark:border-slate-700">
-                            <button 
+                            <button aria-label="Decrease" 
                               type="button"
                               onClick={() => updateQty(item.cartItemId, -1)} 
                               className="w-6 h-6 rounded-md hover:bg-white dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 active:scale-90 flex items-center justify-center transition-all cursor-pointer"
@@ -222,7 +225,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                               onChange={e => setDirectQty(item.cartItemId, e.target.value)}
                               className="w-8 text-center text-xs font-bold font-mono text-slate-900 dark:text-slate-100 bg-transparent outline-none"
                             />
-                            <button 
+                            <button aria-label="Increase" 
                               type="button"
                               onClick={() => updateQty(item.cartItemId, 1)} 
                               className="w-6 h-6 rounded-md hover:bg-white dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 active:scale-90 flex items-center justify-center transition-all cursor-pointer"
@@ -300,7 +303,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                             {item.variantName ? `${item.variantName} (${item.stockDeduction} ${item.baseUnit || 'pcs'})` : `${item.unit}`}
                           </span>
                           <span className="text-[10px] text-slate-300 dark:text-slate-600">•</span>
-                          <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
                             Rs {formatCurrency(item.price)}
                           </span>
                           {(() => {
@@ -348,7 +351,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                       <td className="py-2.5 px-2 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5 justify-center">
                           <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5">
-                            <button 
+                            <button aria-label="Decrease quantity" 
                               type="button" 
                               onClick={() => updateQty(item.cartItemId, -1)} 
                               className="w-6 h-6 rounded-md hover:bg-white dark:hover:bg-slate-700 hover:shadow-xs text-slate-600 dark:text-slate-300 active:scale-95 flex items-center justify-center transition-all cursor-pointer"
@@ -364,7 +367,7 @@ export const PosCart: React.FC<PosCartProps> = ({
                               onChange={e => setDirectQty(item.cartItemId, e.target.value)} 
                               className="w-11 text-center text-xs font-semibold font-mono text-slate-900 dark:text-slate-100 bg-transparent outline-none"
                             />
-                            <button 
+                            <button aria-label="Increase quantity" 
                               type="button" 
                               onClick={() => updateQty(item.cartItemId, 1)} 
                               className="w-6 h-6 rounded-md hover:bg-white dark:hover:bg-slate-700 hover:shadow-xs text-slate-600 dark:text-slate-300 active:scale-95 flex items-center justify-center transition-all cursor-pointer"
@@ -409,7 +412,7 @@ export const PosCart: React.FC<PosCartProps> = ({
 
                       {/* 5. Delete Action */}
                       <td className="py-2.5 px-1 text-center">
-                        <button 
+                        <button aria-label="Remove item" 
                           type="button"
                           onClick={() => setCart(cart.filter(c => c.cartItemId !== item.cartItemId))} 
                           className="text-slate-300 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors inline-flex items-center justify-center cursor-pointer"

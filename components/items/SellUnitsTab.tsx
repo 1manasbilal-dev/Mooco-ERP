@@ -89,7 +89,7 @@ export const SellUnitsTab: React.FC<Props> = ({
                 <span className="text-sm font-bold text-slate-900 dark:text-white">1 {baseUnit}</span>
                 <span className={`${chip} bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300`}>Loose</span>
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 {looseRate > 0 ? formatCurrency(looseRate) : 'No price'}
                 {liveLoose !== null ? ` · ${formatQty(liveLoose, 3)} ${baseUnit} in stock` : ''}
               </p>

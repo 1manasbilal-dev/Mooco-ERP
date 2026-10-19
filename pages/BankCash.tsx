@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatCurrency } from '../lib/formatters';
+import { confirmAction } from '../components/ui/ConfirmDialog';
 
 // --- Framer Motion Fix ---
 const MotionDiv = motion.div as any;
@@ -630,7 +631,7 @@ const BankCash: React.FC = () => {
          related_account_id: transactionData.relatedAccountId
       });
 
-      showToast(`${transactionType} recorded successfully`, "success");
+      showToast(`${transactionType} record ho gaya`, "success");
       setIsTransactionOpen(false);
       
       // Reset Form
@@ -642,7 +643,7 @@ const BankCash: React.FC = () => {
         relatedAccountId: '' 
       });
     } catch (err: any) {
-      showToast("Error recording transaction: " + (err?.message || "Failed"), "error");
+      showToast("Transaction record nahi hui: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -651,19 +652,26 @@ const BankCash: React.FC = () => {
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!transferData.fromId || !transferData.toId || !transferData.amount || isSubmittingTransfer) return;
-    if (transferData.fromId === transferData.toId) { showToast("Source and Destination cannot be same", "error"); return; }
+    if (transferData.fromId === transferData.toId) { showToast("Jis account se aur jis mein bhej rahe hain, dono alag hone chahiyen", "error"); return; }
     
     const transferAmount = parseFloat(transferData.amount);
     if (isNaN(transferAmount) || transferAmount <= 0) {
-      showToast("Please enter a valid transfer amount greater than 0", "warning");
+      showToast("Transfer amount 0 se zyada likhein", "warning");
       return;
     }
 
     const sourceAccount = accounts.find(a => a.id === transferData.fromId);
     if (sourceAccount && sourceAccount.balance < transferAmount) {
-      const confirmOverdraft = window.confirm(
-        `Warning: Source account "${sourceAccount.name}" has balance ${formatCurrency(sourceAccount.balance)}, which is less than transfer amount ${formatCurrency(transferAmount)}.\n\nProceed with transfer (account will go negative)?`
-      );
+      const confirmOverdraft = await confirmAction({
+        tone: 'warning',
+        title: 'Account mein itna balance nahi',
+        message: `"${sourceAccount.name}" mein ${formatCurrency(sourceAccount.balance)} hain, aur transfer ${formatCurrency(transferAmount)} ka hai.`,
+        consequences: [
+          `Transfer ke baad "${sourceAccount.name}" ka balance ${formatCurrency(sourceAccount.balance - transferAmount)} (minus) ho jayega.`,
+          'Baad mein yeh farq bank statement se milana hoga.',
+        ],
+        confirmLabel: 'Phir bhi transfer karein',
+      });
       if (!confirmOverdraft) return;
     }
 
@@ -671,11 +679,11 @@ const BankCash: React.FC = () => {
     try {
       const ok = await transferFunds(transferData.fromId, transferData.toId, transferAmount, transferData.date, transferData.description);
       if (!ok) return;
-      showToast("Funds transferred successfully", "success");
+      showToast("Raqam transfer ho gayi", "success");
       setIsTransferOpen(false);
       setTransferData({ fromId: '', toId: '', amount: '', description: '', date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }) });
     } catch (err: any) {
-      showToast("Error transferring funds: " + (err?.message || "Failed"), "error");
+      showToast("Transfer nahi hua: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmittingTransfer(false);
     }
@@ -689,11 +697,11 @@ const BankCash: React.FC = () => {
     try {
       const ok = await addAccount(accountData as any);
       if (!ok) return;
-      showToast("New Account Created", "success");
+      showToast("Naya account ban gaya", "success");
       setIsAddAccountOpen(false);
       setAccountData({ name: '', type: 'Bank', balance: 0, isActive: true, bank_name: '', account_number: '' });
     } catch (err: any) {
-      showToast("Error creating account: " + (err?.message || "Failed"), "error");
+      showToast("Account nahi ban saka: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmittingAccount(false);
     }
@@ -720,14 +728,14 @@ const BankCash: React.FC = () => {
     try {
       const success = await updateAccount(editingAccount.id, editAccountFormData);
       if (success) {
-        showToast(`Account "${editAccountFormData.name}" updated successfully!`, "success");
+        showToast(`Account "${editAccountFormData.name}" update ho gaya`, "success");
         setIsEditAccountOpen(false);
         setEditingAccount(null);
       } else {
-        showToast("Failed to update account", "error");
+        showToast("Account update nahi hua", "error");
       }
     } catch (err: any) {
-      showToast("Error updating account: " + (err?.message || "Failed"), "error");
+      showToast("Account update nahi hua: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
       setIsSubmittingAccount(false);
     }
@@ -737,15 +745,26 @@ const BankCash: React.FC = () => {
     const assessment = getDeleteAssessment('account', acc.id);
     
     if (assessment.balance !== 0) {
-      showToast(`Cannot delete "${acc.name}": Account currently has a balance of ${formatCurrency(acc.balance)}. You must transfer all funds to another account first!`, "error");
+      showToast(`"${acc.name}" delete nahi ho sakta: is mein abhi ${formatCurrency(acc.balance)} balance hai. Pehle sari raqam doosre account mein transfer karein.`, "error");
       return;
     }
 
     if (assessment.hasHistory) {
-      if (confirm(`Account "${acc.name}" has ${assessment.details?.txCount || 0} recorded transaction(s). To preserve your bank statements and Balance Sheet equilibrium, this account will be marked Inactive. Proceed?`)) {
+      const deactivate = await confirmAction({
+        tone: 'warning',
+        title: `"${acc.name}" Inactive karein?`,
+        message: `Is account mein ${assessment.details?.txCount || 0} transaction(s) record hain, is liye yeh delete nahi hoga balkay Inactive ho jayega.`,
+        consequences: [
+          'Purani transactions aur bank statement waise hi rahenge.',
+          'Naye payment aur transfer mein yeh account nazar nahi aayega.',
+          'Baad mein isay dobara Active kiya ja sakta hai.',
+        ],
+        confirmLabel: 'Haan, Inactive karein',
+      });
+      if (deactivate) {
         const success = await safeDeleteAccount(acc.id, 'deactivate');
         if (success) {
-          showToast(`Account "${acc.name}" marked Inactive`, "info");
+          showToast(`Account "${acc.name}" Inactive ho gaya`, "info");
           if (selectedAccountId === acc.id) {
             setSelectedAccountId('all');
           }
@@ -754,7 +773,12 @@ const BankCash: React.FC = () => {
       return;
     }
 
-    if (confirm(`Are you sure you want to permanently delete account "${acc.name}"?`)) {
+    const hardDelete = await confirmAction({
+      title: `"${acc.name}" delete karein?`,
+      message: 'Is account mein koi transaction nahi, is liye yeh hamesha ke liye hat jayega.',
+      consequences: ['Yeh kaam wapas nahi ho sakta.'],
+    });
+    if (hardDelete) {
       const success = await safeDeleteAccount(acc.id, 'hard_delete');
       if (success) {
         if (selectedAccountId === acc.id) {
@@ -819,7 +843,7 @@ const BankCash: React.FC = () => {
                  onChange={e => setWalletSearch(e.target.value)}
                />
                {walletSearch && (
-                  <button onClick={() => setWalletSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
+                  <button aria-label="Hatayen" onClick={() => setWalletSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
                      <X size={12} />
                   </button>
                )}
@@ -972,7 +996,7 @@ const BankCash: React.FC = () => {
             <div className="flex items-center justify-between gap-2">
                <div className="flex items-center gap-2 min-w-0 flex-1">
                   {/* Mobile Back Button */}
-                  <button 
+                  <button aria-label="Back to Wallets" 
                     onClick={() => selectAccount('all')}
                     className="md:hidden p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 text-slate-700 dark:text-slate-200 rounded-xl transition-all shrink-0 cursor-pointer"
                     title="Back to Wallets"
@@ -1013,7 +1037,7 @@ const BankCash: React.FC = () => {
                         <button
                           onClick={async () => {
                             await reactivateEntity('account', selectedAccount.id);
-                            showToast(`Account "${selectedAccount.name}" reactivated!`, "success");
+                            showToast(`Account "${selectedAccount.name}" dobara Active ho gaya`, "success");
                           }}
                           className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer"
                           title="Reactivate Account"
@@ -1022,14 +1046,14 @@ const BankCash: React.FC = () => {
                           <span className="hidden sm:inline">Reactivate</span>
                         </button>
                       )}
-                      <button 
+                      <button aria-label="Edit Account Details" 
                         onClick={() => handleOpenEditAccount(selectedAccount)}
                         className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl transition-all cursor-pointer"
                         title="Edit Account Details"
                       >
                          <Edit3 size={14} />
                       </button>
-                      <button 
+                      <button aria-label="Delete or Archive Account" 
                         onClick={() => handleDeleteAccount(selectedAccount)}
                         className="p-2 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/40 rounded-xl transition-all cursor-pointer"
                         title="Delete or Archive Account"
@@ -1077,7 +1101,7 @@ const BankCash: React.FC = () => {
             {selectedAccountId === 'all' && (cashInTransit?.amount || 0) > 0 && (
                <div className="flex items-start gap-2 rounded-xl bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900 px-3 py-2">
                   <Clock3 size={13} className="text-violet-500 shrink-0 mt-0.5" />
-                  <p className="text-[11px] font-bold text-violet-700 dark:text-violet-300 leading-relaxed">
+                  <p className="text-xs font-bold text-violet-700 dark:text-violet-300 leading-relaxed">
                      Cash in Transit: {formatCurrency((cashInTransit?.amount || 0))} ({cashInTransit?.count || 0} remittance{(cashInTransit?.count || 0) > 1 ? 's' : ''} pending receive) — shift close par drawer se nikal chuki, kisi account men nahi.
                      Head receive karte hi is page ke accounts men aayegi. Total cash = accounts + in-transit.
                   </p>
@@ -1126,7 +1150,7 @@ const BankCash: React.FC = () => {
                     onChange={e => setLedgerSearch(e.target.value)} 
                   />
                   {ledgerSearch && (
-                     <button onClick={() => setLedgerSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
+                     <button aria-label="Hatayen" onClick={() => setLedgerSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer">
                         <X size={12} />
                      </button>
                   )}
@@ -1362,7 +1386,7 @@ const BankCash: React.FC = () => {
                        {transactionType === 'Deposit' ? <ArrowDownLeft size={18} className="text-emerald-600"/> : <ArrowUpRight size={18} className="text-rose-600"/>}
                        {transactionType === 'Deposit' ? 'Record Deposit (Inflow)' : 'Record Withdrawal (Outflow)'}
                     </h3>
-                    <button onClick={() => setIsTransactionOpen(false)} className="bg-white/80 p-1.5 rounded-full hover:bg-white text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
+                    <button aria-label="Band karein" onClick={() => setIsTransactionOpen(false)} className="bg-white/80 p-1.5 rounded-full hover:bg-white text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
                  </div>
                  
                  <form onSubmit={handleTransactionSubmit} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
@@ -1478,7 +1502,7 @@ const BankCash: React.FC = () => {
               >
                  <div className="px-5 py-4 border-b border-indigo-100 bg-indigo-50/80 flex justify-between items-center shrink-0">
                     <h3 className="font-bold text-sm sm:text-base text-indigo-950 flex items-center gap-2"><ArrowRightLeft size={18} className="text-indigo-600"/> Transfer Between Accounts</h3>
-                    <button onClick={() => setIsTransferOpen(false)} className="bg-white/80 p-1.5 rounded-full hover:bg-white text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
+                    <button aria-label="Band karein" onClick={() => setIsTransferOpen(false)} className="bg-white/80 p-1.5 rounded-full hover:bg-white text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
                  </div>
                  
                  <form onSubmit={handleTransferSubmit} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
@@ -1551,7 +1575,7 @@ const BankCash: React.FC = () => {
               >
                  <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                     <h3 className="font-bold text-sm sm:text-base text-slate-800">Add New Wallet / Bank</h3>
-                    <button onClick={() => setIsAddAccountOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
+                    <button aria-label="Band karein" onClick={() => setIsAddAccountOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
                  </div>
                  <form onSubmit={handleAddAccountSubmit} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
                     <div>
@@ -1637,7 +1661,7 @@ const BankCash: React.FC = () => {
                     <h3 className="font-bold text-sm sm:text-base text-indigo-950 flex items-center gap-2">
                        <Edit3 size={16} className="text-indigo-600" /> Edit Account
                     </h3>
-                    <button onClick={() => setIsEditAccountOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
+                    <button aria-label="Band karein" onClick={() => setIsEditAccountOpen(false)} className="bg-white p-1.5 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"><X size={15}/></button>
                  </div>
                  <form onSubmit={handleEditAccountSubmit} className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
                     <div>
