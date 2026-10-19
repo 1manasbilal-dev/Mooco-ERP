@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, ImageDown, Printer, Receipt, Trash2 } from 'lucide-react';
 import { CashDay, CashLine, DatePreset, formatLedgerDate, formatMoney } from '../../lib/supplierStatement';
+import { formatCurrency } from '../../lib/formatters';
 
 const PRESETS: { id: DatePreset; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -18,7 +19,7 @@ export function BalanceAmount({ value, className = '' }: { value: number; classN
   const payable = value > 0.5;
   return (
     <span className={`${className} ${settled ? 'text-slate-700' : payable ? 'text-amber-600' : 'text-emerald-600'}`}>
-      Rs {Math.abs(value).toLocaleString('en-PK')}
+      {formatCurrency(Math.abs(value))}
       {!settled && <span className="ml-1 text-[9px] font-black uppercase">{payable ? ' Pay' : ' Adv'}</span>}
     </span>
   );

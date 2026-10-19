@@ -23,7 +23,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { money } from './DenominationDialog';
-import { formatTransactionTime } from '../lib/formatters';
+import { formatTransactionTime, formatCurrency } from '../lib/formatters';
 
 export type ShiftActivityTab = 'bills' | 'sales' | 'collections' | 'expenses';
 
@@ -387,7 +387,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <Milk size={12} /> Milk Purchases
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-amber-900 dark:text-amber-200 block mt-0.5">
-                    Rs {expenseBreakdown.milk.toLocaleString()}
+                    {formatCurrency(expenseBreakdown.milk)}
                   </span>
                 </div>
 
@@ -396,7 +396,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <Briefcase size={12} /> Vendor & Staff
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-indigo-900 dark:text-indigo-200 block mt-0.5">
-                    Rs {expenseBreakdown.vendor.toLocaleString()}
+                    {formatCurrency(expenseBreakdown.vendor)}
                   </span>
                 </div>
 
@@ -405,7 +405,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <Tag size={12} /> Petty Expenses
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-rose-900 dark:text-rose-200 block mt-0.5">
-                    Rs {expenseBreakdown.petty.toLocaleString()}
+                    {formatCurrency(expenseBreakdown.petty)}
                   </span>
                 </div>
 
@@ -414,7 +414,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <Package size={12} /> Materials
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-emerald-900 dark:text-emerald-200 block mt-0.5">
-                    Rs {expenseBreakdown.material.toLocaleString()}
+                    {formatCurrency(expenseBreakdown.material)}
                   </span>
                 </div>
               </div>
@@ -544,7 +544,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <User size={12} /> Customer Ledger
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-blue-900 dark:text-blue-200 block mt-0.5">
-                    Rs {collectionBreakdown.ledger.toLocaleString()}
+                    {formatCurrency(collectionBreakdown.ledger)}
                   </span>
                 </div>
 
@@ -553,7 +553,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <Truck size={12} /> Delivery Collections
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-cyan-900 dark:text-cyan-200 block mt-0.5">
-                    Rs {collectionBreakdown.delivery.toLocaleString()}
+                    {formatCurrency(collectionBreakdown.delivery)}
                   </span>
                 </div>
 
@@ -562,7 +562,7 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
                     <ArrowDownLeft size={12} /> Vendor Refunds
                   </span>
                   <span className="text-sm sm:text-base font-black font-mono text-violet-900 dark:text-violet-200 block mt-0.5">
-                    Rs {collectionBreakdown.refunds.toLocaleString()}
+                    {formatCurrency(collectionBreakdown.refunds)}
                   </span>
                 </div>
               </div>

@@ -10,6 +10,7 @@ import { CategoryStructure, SubcategoryStructure, SERVICE_TYPES } from './Expens
 import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../../types';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { useDairy } from '../../context/DairyContext';
+import { formatCurrency } from '../../lib/formatters';
 
 const inputClass = "w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-lime-500 transition-colors shadow-2xs";
 const labelClass = "text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1 block";
@@ -689,7 +690,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               <div className="flex justify-between items-center">
                 <label className="text-xs font-bold text-amber-900 dark:text-amber-300">Paid Now (Rs) *</label>
                 <span className="text-xs font-bold text-rose-700 dark:text-rose-400">
-                  Remaining Dues: Rs {Math.max(0, (formData.amount || 0) - (formData.paidAmount || 0)).toLocaleString()}
+                  Remaining Dues: {formatCurrency(Math.max(0, (formData.amount || 0) - (formData.paidAmount || 0)))}
                 </span>
               </div>
               <SmartNumberInput 
@@ -706,7 +707,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
           {formData.paymentStatus === 'Unpaid' && (
             <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2 text-xs text-rose-800 dark:text-rose-300 animate-in fade-in">
               <AlertCircle size={16} className="text-rose-600 dark:text-rose-400 shrink-0" />
-              <span>This bill of <strong>Rs {(formData.amount || 0).toLocaleString()}</strong> will be added to the vendor's pending dues ledger without deducting from cash/bank right now.</span>
+              <span>This bill of <strong>{formatCurrency((formData.amount || 0))}</strong> will be added to the vendor's pending dues ledger without deducting from cash/bank right now.</span>
             </div>
           )}
 
@@ -969,10 +970,10 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                     <CreditCard size={14} className="text-slate-400" /> Account Balance:
                   </span>
                   <span className="font-semibold text-slate-800 dark:text-slate-200 font-mono">
-                    Rs {selectedPaymentAccount.balance.toLocaleString()}
+                    {formatCurrency(selectedPaymentAccount.balance)}
                     {formData.paidAmount && formData.paidAmount > 0 ? (
                       <span className={`ml-2 text-[11px] font-bold ${selectedPaymentAccount.balance - formData.paidAmount < 0 ? 'text-red-600' : 'text-slate-500 dark:text-slate-400'}`}>
-                        ➔ Left: Rs {(selectedPaymentAccount.balance - formData.paidAmount).toLocaleString()}
+                        ➔ Left: {formatCurrency((selectedPaymentAccount.balance - formData.paidAmount))}
                       </span>
                     ) : null}
                   </span>
@@ -1151,7 +1152,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       <span className="font-mono text-xs font-black text-slate-900 dark:text-white">
-                        Rs {Number(preset.amount || 0).toLocaleString()}
+                        {formatCurrency(Number(preset.amount || 0))}
                       </span>
                       <ChevronRight size={14} className="text-slate-300" />
                     </div>
@@ -1661,16 +1662,16 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
                 <CreditCard size={13} className="text-slate-400" /> Current Account Balance:
               </span>
               <span className="font-semibold text-slate-800 dark:text-slate-200 font-mono">
-                Rs {selectedDirectPaymentAccount.balance.toLocaleString()}
+                {formatCurrency(selectedDirectPaymentAccount.balance)}
                 {paymentFormData.amount && parseFloat(paymentFormData.amount as string) > 0 ? (
                   <span className={`ml-2 text-[11px] font-bold ${
                     paymentFormData.type === 'refund' ? 'text-lime-700 dark:text-lime-400' : (selectedDirectPaymentAccount.balance - parseFloat(paymentFormData.amount as string) < 0 ? 'text-rose-600' : 'text-emerald-700 dark:text-emerald-400')
                   }`}>
-                    ➔ {paymentFormData.type === 'refund' ? 'New:' : 'Left:'} Rs {(
+                    ➔ {paymentFormData.type === 'refund' ? 'New:' : 'Left:'} {formatCurrency((
                       paymentFormData.type === 'refund'
                         ? selectedDirectPaymentAccount.balance + parseFloat(paymentFormData.amount as string)
                         : selectedDirectPaymentAccount.balance - parseFloat(paymentFormData.amount as string)
-                    ).toLocaleString()}
+                    ))}
                   </span>
                 ) : null}
               </span>

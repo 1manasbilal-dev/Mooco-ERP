@@ -1,6 +1,7 @@
 import React from 'react';
 import { Banknote, Wallet, ChevronDown, Check, Tag, Loader2, BookOpen } from 'lucide-react';
 import { SmartNumberInput } from '../SmartNumberInput';
+import { formatCurrency } from '../../lib/formatters';
 
 interface PosPaymentPanelProps {
   cart: any[];
@@ -53,6 +54,11 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   handleCheckout,
   lockDiscount = false
 }) => {
+  // A walk-in has no khata to carry the unpaid part, so a short cash payment cannot be completed.
+  const walkInShort = !selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal
+    ? Math.round((grandTotal - cashGiven) * 100) / 100
+    : 0;
+
   return (
     <div className="pos-payment-panel p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 space-y-2.5 shrink-0 shadow-lg z-10">
       
@@ -120,7 +126,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
               <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200 dark:border-slate-700">
                 <span className="font-semibold text-slate-500 dark:text-slate-400">Change:</span>
                 <span className={`font-mono font-bold ${cashGiven >= grandTotal ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                  {cashGiven >= grandTotal ? `Rs ${Math.abs(cashGiven - grandTotal).toLocaleString()}` : `Short Rs ${Math.abs(cashGiven - grandTotal).toLocaleString()}`}
+                  {cashGiven >= grandTotal ? `${formatCurrency(Math.abs(cashGiven - grandTotal))}` : `Short ${formatCurrency(Math.abs(cashGiven - grandTotal))}`}
                 </span>
               </div>
             )}
@@ -152,12 +158,12 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
               {customerDueAmount > 0 ? (
                 <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  Khata / Due: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">Rs {customerDueAmount.toLocaleString()}</strong>
+                  Khata / Due: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">{formatCurrency(customerDueAmount)}</strong>
                 </span>
               ) : customerChangeReturn > 0 ? (
                 <span className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  Change: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">Rs {customerChangeReturn.toLocaleString()}</strong>
+                  Change: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">{formatCurrency(customerChangeReturn)}</strong>
                 </span>
               ) : (
                 <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
@@ -254,12 +260,12 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
               {customerDueAmount > 0 ? (
                 <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                  Added to Customer Ledger: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">Rs {customerDueAmount.toLocaleString()}</strong>
+                  Added to Customer Ledger: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">{formatCurrency(customerDueAmount)}</strong>
                 </span>
               ) : customerChangeReturn > 0 ? (
                 <span className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  Cash Change to Return: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">Rs {customerChangeReturn.toLocaleString()}</strong>
+                  Cash Change to Return: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">{formatCurrency(customerChangeReturn)}</strong>
                 </span>
               ) : (
                 <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
@@ -311,7 +317,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                 
                 {cashGiven > 0 && (
                   <div className={`px-2 py-0.5 rounded-md text-[11px] font-bold font-mono shrink-0 border ${cashGiven >= grandTotal ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800'}`}>
-                    {cashGiven >= grandTotal ? `Change: Rs ${Math.abs(cashGiven - grandTotal).toLocaleString()}` : `Short: Rs ${Math.abs(cashGiven - grandTotal).toLocaleString()}`}
+                    {cashGiven >= grandTotal ? `Change: ${formatCurrency(Math.abs(cashGiven - grandTotal))}` : `Short: ${formatCurrency(Math.abs(cashGiven - grandTotal))}`}
                   </div>
                 )}
               </div>
@@ -357,7 +363,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
       {totalItemDiscount > 0 && (
         <div className="flex items-center justify-between text-xs px-2 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800 rounded-lg font-semibold">
           <span className="flex items-center gap-1"><Tag size={11} /> Item Discounts:</span>
-          <span className="font-mono font-bold">-Rs {totalItemDiscount.toLocaleString()}</span>
+          <span className="font-mono font-bold">-{formatCurrency(totalItemDiscount)}</span>
         </div>
       )}
 
@@ -367,12 +373,12 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
           <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide block">Grand Total</span>
           {(discountAmount > 0 || totalItemDiscount > 0) && (
             <span className="text-[10px] text-slate-400 line-through font-mono">
-              Rs {(subtotal + totalItemDiscount).toLocaleString()}
+              {formatCurrency((subtotal + totalItemDiscount))}
             </span>
           )}
         </div>
         <div className="text-right">
-          <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-mono tracking-tight">Rs {grandTotal.toLocaleString()}</span>
+          <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-mono tracking-tight">{formatCurrency(grandTotal)}</span>
         </div>
       </div>
       
@@ -383,14 +389,20 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
         </p>
       )}
 
+      {walkInShort > 0 && (
+        <p role="status" className="text-[11px] font-semibold text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-2 py-1">
+          {formatCurrency(walkInShort)} kam hain. Poori raqam lein, ya customer select karein taake baqi khaate mein jaye.
+        </p>
+      )}
+
       {/* Confirm & Pay Action Button */}
       <button
         type="button" aria-label="Complete sale"
         onClick={handleCheckout}
-        disabled={cart.length === 0 || isSubmitting || !activeShiftSession || activeShiftSession.status !== 'Active'}
+        disabled={cart.length === 0 || isSubmitting || walkInShort > 0 || !activeShiftSession || activeShiftSession.status !== 'Active'}
         className={`
           w-full py-3.5 rounded-xl font-black text-xs sm:text-sm text-white flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98]
-          ${cart.length > 0 && !isSubmitting && activeShiftSession && activeShiftSession.status === 'Active'
+          ${cart.length > 0 && !isSubmitting && walkInShort === 0 && activeShiftSession && activeShiftSession.status === 'Active'
             ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-600/25 cursor-pointer'
             : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none'}
         `}

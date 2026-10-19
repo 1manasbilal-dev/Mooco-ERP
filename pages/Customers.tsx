@@ -12,6 +12,12 @@ import {
   Eye
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import { salePaidAmount } from '../lib/moneyFlow';
+import { roundCurrency } from '../lib/db';
+import { getTodayLocalDate, formatCurrency } from '../lib/formatters';
+import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
+import { useProgressiveList } from '../hooks/useProgressiveList';
+import { LoadMoreRow } from '../components/ui/LoadMoreRow';
 
 interface AdditionalPhone {
   phone: string;
@@ -145,7 +151,7 @@ const Customers: React.FC = () => {
 
   const [paymentData, setPaymentData] = useState({
     amount: '',
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
     mode: 'Cash',
     accountId: '',
     note: ''
@@ -258,7 +264,7 @@ const Customers: React.FC = () => {
 
     // POS Sales
     sales
-      .filter(s => s.customer_id === activeCustomer.id || (s.details && s.details.customer_id === activeCustomer.id))
+      .filter(s => (s.customer_id === activeCustomer.id || (s.details && s.details.customer_id === activeCustomer.id)) && s.status !== 'Cancelled')
       .forEach(s => {
         posSaleIds.add(s.id);
         if (s.bill_number) posBillNumbers.add(s.bill_number);
@@ -272,7 +278,9 @@ const Customers: React.FC = () => {
           timestamp: s.date,
           description: `POS Bill #${s.bill_number} (${itemNames || 'Dairy Items'})`,
           debit: s.total || 0,
-          credit: s.payment_mode !== 'Credit' ? s.total : 0,
+          // What was actually collected on the bill; the unpaid part stays on khata (the matching
+          // ctx_ charge row is skipped below, so it must not be counted as paid here).
+          credit: salePaidAmount(s),
           type: isReturned ? 'Return' : 'Sale',
           mode: s.payment_mode,
           status: s.status,
@@ -291,8 +299,10 @@ const Customers: React.FC = () => {
       .forEach(tx => {
         // Skip duplicate debit charge if already represented by POS sale above
         const isDuplicateSaleCharge = 
-          (tx.id.startsWith('ctx_') && posSaleIds.has(tx.id.replace('ctx_', ''))) ||
-          (Boolean(tx.note) && Array.from(posBillNumbers).some(bn => tx.note?.includes(bn)));
+          (tx.type === 'Charge' || tx.type === 'Debit') && (
+            (tx.id.startsWith('ctx_') && posSaleIds.has(tx.id.replace('ctx_', ''))) ||
+            (Boolean(tx.note) && Array.from(posBillNumbers).some(bn => tx.note?.includes(bn)))
+          );
         if (isDuplicateSaleCharge) return;
 
         // Check if this transaction points to any sale
@@ -329,7 +339,8 @@ const Customers: React.FC = () => {
           note: tx.note,
           status: isReturn ? 'Returned' : undefined,
           isReturned: isReturn,
-          canDelete: !isReturn,
+          // Returns are undone from Sales History; an order advance is refunded, not deleted.
+          canDelete: !isReturn && (tx as any).details?.source !== 'customer_order_advance' && !String(tx.id).startsWith('ctx_adv_'),
           sale: matchedSale,
           rawTx: tx
         });
@@ -397,10 +408,19 @@ const Customers: React.FC = () => {
       totalDebit,
       totalCredit,
       netBalance: activeCustomer.balance,
+      // Stored khata balance minus what the loaded entries add up to; non-zero means the history is
+      // incomplete or an entry is wrong, so the screen says so instead of showing two different numbers.
+      ledgerGap: roundCurrency(Number(activeCustomer.balance || 0) - running),
       returnedCount: returnedEntries.length,
       returnedAmount
     };
   }, [activeCustomer, sales, customerTransactions, ledgerTypeFilter, ledgerSearchTerm]);
+
+  // Render only the layout for the current screen, and long lists a page at a time.
+  const isLgScreen = useMediaQuery(BREAKPOINTS.lg);
+  const isMdScreen = useMediaQuery(BREAKPOINTS.md);
+  const ledgerWindow = useProgressiveList<(typeof ledgerDetails.entries)[number]>(ledgerDetails.entries, 60, `${activeCustomer?.id}|${ledgerTypeFilter}|${ledgerSearchTerm}`);
+  const customerWindow = useProgressiveList<Customer>(filteredCustomers, 80, `${searchTerm}|${filterBalance}|${filterActiveStatus}`);
 
   // --- Handlers ---
 
@@ -606,15 +626,15 @@ const Customers: React.FC = () => {
         const newBal = activePaymentCustomer.balance + (paymentType === 'Payment' ? -amountNum : amountNum);
         const msg = `*MOOCO DAIRY - ${paymentType === 'Payment' ? 'PAYMENT RECEIPT' : 'KHATA CHARGE'}*\n\n` +
           `Assalam-o-Alaikum *${activePaymentCustomer.name}*,\n` +
-          `${paymentType === 'Payment' ? 'Amount Received: ' : 'Amount Charged: '} *Rs ${amountNum.toLocaleString()}*\n` +
+          `${paymentType === 'Payment' ? 'Amount Received: ' : 'Amount Charged: '} *${formatCurrency(amountNum)}*\n` +
           `📅 Date: ${paymentData.date}\n` +
-          `💰 Current Balance: *Rs ${newBal.toLocaleString()}*\n\n` +
+          `💰 Current Balance: *${formatCurrency(newBal)}*\n\n` +
           `Shukriya!`;
         window.open(`https://wa.me/${phoneWithCode}?text=${encodeURIComponent(msg)}`, '_blank');
       }
 
       setSelectedPaymentCustomerId(null);
-      setPaymentData({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', accountId: '', note: '' });
+      setPaymentData({ amount: '', date: getTodayLocalDate(), mode: 'Cash', accountId: '', note: '' });
     } catch (err: any) {
       showToast('Error recording transaction: ' + (err?.message || 'Failed'), 'error');
     } finally {
@@ -626,10 +646,26 @@ const Customers: React.FC = () => {
   };
 
   const handleDeleteTransaction = async (id: string) => {
-     if(confirm("Are you sure? This will revert the customer balance.")) {
-        await deleteCustomerTransaction(id);
-        showToast("Transaction deleted", "success");
-     }
+     const tx: any = customerTransactions.find(t => t.id === id);
+     const customer = tx ? customers.find(c => c.id === tx.customer_id) : undefined;
+     const amount = Number(tx?.amount || 0);
+     const isPayment = tx?.type === 'Payment';
+     const accountId = tx?.details?.account_id || tx?.account_id;
+     const account = accountId ? accounts.find(a => a.id === accountId) : undefined;
+     const balanceNow = Number(customer?.balance || 0);
+     const balanceAfter = balanceNow + (isPayment ? amount : -amount);
+     const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(customer ne dena hai)' : value < 0 ? '(advance)' : ''}`.trim();
+     const lines = [
+       `${isPayment ? 'Payment' : 'Charge'} ${formatCurrency(amount)} delete karein?`,
+       '',
+       `• ${customer?.name || 'Customer'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
+       isPayment && account ? `• "${account.name}" se ${formatCurrency(amount)} nikal jayenge` : isPayment ? '• Kisi account se paisa nahi niklega (is entry ka account nahi tha)' : '',
+       '',
+       'Ye wapas nahi hoga.'
+     ].filter(line => line !== null);
+     if (!window.confirm(lines.join('\n'))) return;
+     const ok = await deleteCustomerTransaction(id);
+     if (ok) showToast("Entry delete ho gayi", "success");
   };
 
   const handleSendWhatsAppReminder = (customer: Customer) => {
@@ -642,7 +678,7 @@ const Customers: React.FC = () => {
     const phoneWithCode = cleanPhone.startsWith('0') ? `92${cleanPhone.slice(1)}` : cleanPhone;
     const msg = `*MOOCO DAIRY - KHATA STATEMENT REMINDER*\n\n` +
       `Assalam-o-Alaikum *${customer.name}* sahib,\n` +
-      `Aapka Mooco Dairy mein current khata balance *Rs ${customer.balance.toLocaleString()}* hai.\n\n` +
+      `Aapka Mooco Dairy mein current khata balance *${formatCurrency(customer.balance)}* hai.\n\n` +
       `Baraye meherbani jald az jald adaigi farmaiye. Shukriya!\n*Mooco Dairy*`;
     window.open(`https://wa.me/${phoneWithCode}?text=${encodeURIComponent(msg)}`, '_blank');
   };
@@ -717,10 +753,10 @@ const Customers: React.FC = () => {
             ${it.qty} ${it.unit || ''}
           </td>
           <td style="padding: 4px 0; border-bottom: 1px dashed #cbd5e1; text-align: right; font-size: 11px;">
-            Rs ${Number(it.price || 0).toLocaleString()}
+            ${formatCurrency(Number(it.price || 0))}
           </td>
           <td style="padding: 4px 0; border-bottom: 1px dashed #cbd5e1; text-align: right; font-size: 11px; font-weight: bold;">
-            Rs ${Number(lineTotal || 0).toLocaleString()}
+            ${formatCurrency(Number(lineTotal || 0))}
           </td>
         </tr>
       `;
@@ -792,13 +828,13 @@ const Customers: React.FC = () => {
           </table>
           <div class="divider"></div>
           <div style="font-size: 11px; line-height: 1.5;">
-            <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span> <span>Rs ${Number(sale.subtotal || sale.total).toLocaleString()}</span></div>
-            ${sale.discount > 0 ? `<div style="display: flex; justify-content: space-between; color: #059669;"><span>Discount:</span> <span>- Rs ${Number(sale.discount).toLocaleString()}</span></div>` : ''}
-            ${sale.refund_amount && sale.refund_amount > 0 ? `<div style="display: flex; justify-content: space-between; color: #dc2626;"><span>Refunded:</span> <span>- Rs ${Number(sale.refund_amount).toLocaleString()}</span></div>` : ''}
+            <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span> <span>${formatCurrency(Number(sale.subtotal || sale.total))}</span></div>
+            ${sale.discount > 0 ? `<div style="display: flex; justify-content: space-between; color: #059669;"><span>Discount:</span> <span>- ${formatCurrency(Number(sale.discount))}</span></div>` : ''}
+            ${sale.refund_amount && sale.refund_amount > 0 ? `<div style="display: flex; justify-content: space-between; color: #dc2626;"><span>Refunded:</span> <span>- ${formatCurrency(Number(sale.refund_amount))}</span></div>` : ''}
             <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 900; margin-top: 4px; border-top: 1px solid #0f172a; padding-top: 4px;">
-              <span>TOTAL:</span> <span>Rs ${Number(sale.total || 0).toLocaleString()}</span>
+              <span>TOTAL:</span> <span>${formatCurrency(Number(sale.total || 0))}</span>
             </div>
-            ${sale.payment_mode === 'Credit' ? `<div style="display: flex; justify-content: space-between; color: #d97706; font-weight: bold;"><span>Charged to Khata:</span> <span>Rs ${Number(sale.total || 0).toLocaleString()}</span></div>` : ''}
+            ${sale.payment_mode === 'Credit' ? `<div style="display: flex; justify-content: space-between; color: #d97706; font-weight: bold;"><span>Charged to Khata:</span> <span>${formatCurrency(Number(sale.total || 0))}</span></div>` : ''}
             ${sale.return_reason ? `<div style="margin-top: 4px; padding: 4px; background: #fee2e2; color: #991b1b; font-size: 10px;"><strong>Reason:</strong> ${sale.return_reason}</div>` : ''}
           </div>
           <div class="divider"></div>
@@ -825,7 +861,7 @@ const Customers: React.FC = () => {
     }
     const cleanPhone = phone.replace(/[^0-9]/g, '');
     const targetPhone = cleanPhone.startsWith('0') ? `92${cleanPhone.slice(1)}` : cleanPhone;
-    const itemLines = (sale.items || []).map((it: any) => `• ${it.name} (${it.qty} x Rs ${it.price}) = Rs ${(it.total || it.qty * it.price).toLocaleString()}`).join('\n');
+    const itemLines = (sale.items || []).map((it: any) => `• ${it.name} (${it.qty} x Rs ${it.price}) = ${formatCurrency((it.total || it.qty * it.price))}`).join('\n');
     const msg = `*${settings?.general?.companyName || 'MOOCO DAIRY'} - BILL RECEIPT*\n` +
       `--------------------------------\n` +
       `*Bill #:* ${sale.bill_number || sale.id}\n` +
@@ -835,10 +871,10 @@ const Customers: React.FC = () => {
       `--------------------------------\n` +
       `*Items:*\n${itemLines}\n` +
       `--------------------------------\n` +
-      `*Total Bill:* Rs ${Number(sale.total || 0).toLocaleString()}\n` +
-      (sale.discount > 0 ? `*Discount:* Rs ${sale.discount.toLocaleString()}\n` : '') +
+      `*Total Bill:* ${formatCurrency(Number(sale.total || 0))}\n` +
+      (sale.discount > 0 ? `*Discount:* ${formatCurrency(sale.discount)}\n` : '') +
       (sale.payment_mode === 'Credit' ? `*Charged to Khata Balance*\n` : `*Paid on Counter*\n`) +
-      `*Current Khata Balance:* Rs ${Math.abs(activeCustomer?.balance || 0).toLocaleString()} ${activeCustomer && activeCustomer.balance > 0 ? 'Dr (Due)' : 'Cr'}\n` +
+      `*Current Khata Balance:* ${formatCurrency(Math.abs(activeCustomer?.balance || 0))} ${activeCustomer && activeCustomer.balance > 0 ? 'Dr (Due)' : 'Cr'}\n` +
       `--------------------------------\n` +
       `Thank you for your visit!`;
 
@@ -882,10 +918,10 @@ const Customers: React.FC = () => {
           <div class="divider"></div>
           <div style="font-size: 13px; font-weight: bold; display: flex; justify-content: space-between; padding: 6px 0;">
             <span>AMOUNT:</span>
-            <span>Rs ${Number(amount || 0).toLocaleString()}</span>
+            <span>${formatCurrency(Number(amount || 0))}</span>
           </div>
           ${entry.note ? `<div style="font-size: 10px; color: #475569; padding: 4px 0;">Note: ${entry.note}</div>` : ''}
-          ${entry.runningBalance !== undefined ? `<div style="font-size: 11px; font-weight: bold; margin-top: 4px;">Balance after entry: Rs ${Math.abs(entry.runningBalance).toLocaleString()} ${entry.runningBalance > 0 ? 'Dr' : 'Cr'}</div>` : ''}
+          ${entry.runningBalance !== undefined ? `<div style="font-size: 11px; font-weight: bold; margin-top: 4px;">Balance after entry: ${formatCurrency(Math.abs(entry.runningBalance))} ${entry.runningBalance > 0 ? 'Dr' : 'Cr'}</div>` : ''}
           <div class="divider"></div>
           <div class="text-center" style="font-size: 10px; color: #64748b; margin-top: 10px;">
             <p>Thank you for your transaction!</p>
@@ -921,7 +957,7 @@ const Customers: React.FC = () => {
               {/* ------------------------------------------------------------- */}
               {/* MOBILE-ONLY COMPACT HERO & LEDGER VIEW (< lg screens)        */}
               {/* ------------------------------------------------------------- */}
-              <div className="block lg:hidden space-y-3">
+              {!isLgScreen && <div className="space-y-3">
                 {/* Clean Mobile Top Navigation Bar */}
                 <div className="flex items-center justify-between gap-2 bg-white dark:bg-slate-850 px-3 py-2.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xs">
                   <button
@@ -970,7 +1006,7 @@ const Customers: React.FC = () => {
                       <span className="text-[10px] font-bold text-slate-400 dark:text-slate-400 uppercase tracking-widest block">Net Khata Balance</span>
                       <div className="flex items-baseline gap-1.5 mt-0.5">
                         <span className={`text-2xl sm:text-3xl font-black font-mono tracking-tight ${isSettled ? 'text-slate-700 dark:text-slate-300' : isDue ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                          Rs {Math.abs(activeCustomer.balance).toLocaleString()}
+                          {formatCurrency(Math.abs(activeCustomer.balance))}
                         </span>
                         <span className={`text-[10px] font-bold uppercase ${isDue ? 'text-rose-600 dark:text-rose-400' : isSettled ? 'text-slate-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
                           {isDue ? 'Dr' : isSettled ? 'Settled' : 'Cr'}
@@ -1019,7 +1055,7 @@ const Customers: React.FC = () => {
                           const defaultAcc = getDefaultAccountForMode('Cash');
                           setPaymentData({ 
                             amount: activeCustomer.balance > 0 ? activeCustomer.balance.toString() : '', 
-                            date: new Date().toISOString().split('T')[0], 
+                            date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
                             mode: 'Cash', 
                             accountId: defaultAcc, 
                             note: '' 
@@ -1131,7 +1167,7 @@ const Customers: React.FC = () => {
                       <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">Use Record Payment or POS Sale to add records</p>
                     </div>
                   ) : (
-                    ledgerDetails.entries.map((entry, idx) => {
+                    ledgerWindow.visibleItems.map((entry, idx) => {
                       const isRet = entry.isReturned || entry.type === 'Return';
                       const isPartRet = entry.isPartiallyReturned;
 
@@ -1215,32 +1251,34 @@ const Customers: React.FC = () => {
                             <div>
                               <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Debit</span>
                               <span className={`font-mono font-bold ${isRet ? 'text-slate-400 dark:text-slate-400 line-through opacity-75' : 'text-rose-600 dark:text-rose-400'}`}>
-                                {entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : '—'}
+                                {entry.debit > 0 ? `${formatCurrency(entry.debit)}` : '—'}
                               </span>
                             </div>
                             <div>
                               <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Credit</span>
                               <span className={`font-mono font-bold ${isRet ? 'text-slate-400 dark:text-slate-400 line-through opacity-75' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                {entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : '—'}
+                                {entry.credit > 0 ? `${formatCurrency(entry.credit)}` : '—'}
                               </span>
                             </div>
                             <div>
-                              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Balance</span>
-                              <span className={`font-mono font-black ${entry.runningBalance && entry.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'}`}>
-                                {entry.runningBalance !== undefined ? `Rs ${Math.abs(entry.runningBalance).toLocaleString()}` : '—'}
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Balance</span>
+                              <span className={`font-mono font-black ${entry.runningBalance && entry.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : entry.runningBalance && entry.runningBalance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-200'}`}>
+                                {entry.runningBalance !== undefined ? `${formatCurrency(Math.abs(entry.runningBalance))} ${entry.runningBalance > 0 ? 'Dr' : entry.runningBalance < 0 ? 'Cr' : ''}`.trim() : '—'}
                               </span>
                             </div>
                           </div>
                         </div>
                       );
                     })
-                  )}</div>
-              </div>
+                  )}
+                  <LoadMoreRow sentinelRef={ledgerWindow.sentinelRef} hiddenCount={ledgerWindow.hiddenCount} onShowMore={ledgerWindow.showMore} onShowAll={ledgerWindow.showAll} />
+                </div>
+              </div>}
 
               {/* ------------------------------------------------------------- */}
               {/* DESKTOP-ONLY 2-COLUMN VIEW (>= lg screens)                   */}
               {/* ------------------------------------------------------------- */}
-              <div className="hidden lg:flex items-start gap-5">
+              {isLgScreen && <div className="flex items-start gap-5">
                 
                 {/* LEFT COLUMN: CUSTOMER 360° PROFILE SIDEBAR */}
                 <div className="w-80 shrink-0 space-y-3">
@@ -1306,7 +1344,7 @@ const Customers: React.FC = () => {
                         <span className={`text-2xl font-black font-mono tracking-tight ${
                           isSettled ? 'text-slate-700 dark:text-slate-100' : isDue ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'
                         }`}>
-                          Rs {Math.abs(activeCustomer.balance).toLocaleString()}
+                          {formatCurrency(Math.abs(activeCustomer.balance))}
                         </span>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase border ${
                           isSettled 
@@ -1398,19 +1436,26 @@ const Customers: React.FC = () => {
 
                 {/* RIGHT COLUMN: FULL SCREEN LEDGER WORKSPACE */}
                 <div className="flex-1 w-full space-y-3">
-                  
+
+                  {Math.abs(ledgerDetails.ledgerGap || 0) >= 1 && (
+                    <div role="status" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-300">
+                      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                      <span>Khaate ka balance ({formatCurrency(Number(ledgerDetails.netBalance || 0))}) neeche ki entries ke jor se {formatCurrency(Math.abs(ledgerDetails.ledgerGap || 0))} {(ledgerDetails.ledgerGap || 0) > 0 ? 'zyada' : 'kam'} hai. Purani entries load nahi huin ya koi entry ghalat hai. Report par bharosa karne se pehle check karein.</span>
+                    </div>
+                  )}
+
                   {/* 4 KPI Summary Cards */}
                   <div className="grid grid-cols-4 gap-3">
                     <div className="bg-white dark:bg-slate-850 p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Invoiced</span>
                       <p className="text-lg font-black text-slate-900 dark:text-white font-mono mt-0.5">
-                        Rs {ledgerDetails.totalDebit.toLocaleString()}
+                        {formatCurrency(ledgerDetails.totalDebit)}
                       </p>
                       <div className="flex items-center justify-between text-[10px] mt-0.5">
                         <span className="font-semibold text-slate-400">Total Debit</span>
                         {(ledgerDetails.returnedAmount || 0) > 0 && (
                           <span className="font-bold text-rose-600 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.2 rounded border border-rose-200 dark:border-rose-800/80">
-                            Rs {ledgerDetails.returnedAmount?.toLocaleString()} Ret.
+                            {formatCurrency(ledgerDetails.returnedAmount)} Ret.
                           </span>
                         )}
                       </div>
@@ -1419,7 +1464,7 @@ const Customers: React.FC = () => {
                     <div className="bg-white dark:bg-slate-850 p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Received</span>
                       <p className="text-lg font-black text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
-                        Rs {ledgerDetails.totalCredit.toLocaleString()}
+                        {formatCurrency(ledgerDetails.totalCredit)}
                       </p>
                       <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 font-mono">Total Credit</span>
                     </div>
@@ -1429,7 +1474,7 @@ const Customers: React.FC = () => {
                       <p className={`text-lg font-black font-mono mt-0.5 ${
                         isDue ? 'text-rose-600 dark:text-rose-400' : isSettled ? 'text-slate-700 dark:text-slate-200' : 'text-emerald-700 dark:text-emerald-400'
                       }`}>
-                        Rs {Math.abs(activeCustomer.balance).toLocaleString()}
+                        {formatCurrency(Math.abs(activeCustomer.balance))}
                       </p>
                       <span className={`text-[10px] font-bold ${isDue ? 'text-rose-600 dark:text-rose-400' : isSettled ? 'text-slate-400 dark:text-slate-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
                         {isDue ? 'Due' : isSettled ? 'Settled' : 'Advance'}
@@ -1505,7 +1550,7 @@ const Customers: React.FC = () => {
                           const defaultAcc = getDefaultAccountForMode('Cash');
                           setPaymentData({ 
                             amount: activeCustomer.balance > 0 ? activeCustomer.balance.toString() : '', 
-                            date: new Date().toISOString().split('T')[0], 
+                            date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
                             mode: 'Cash', 
                             accountId: defaultAcc, 
                             note: '' 
@@ -1544,7 +1589,7 @@ const Customers: React.FC = () => {
                               </td>
                             </tr>
                           ) : (
-                            ledgerDetails.entries.map((entry, idx) => {
+                            ledgerWindow.visibleItems.map((entry, idx) => {
                               const isRet = entry.isReturned || entry.type === 'Return';
                               const isPartRet = entry.isPartiallyReturned;
 
@@ -1597,7 +1642,7 @@ const Customers: React.FC = () => {
                                       )}
                                       {entry.refund_amount !== undefined && entry.refund_amount > 0 && (
                                         <div className="text-[10px] text-rose-600 dark:text-rose-400 font-mono mt-0.5 font-semibold">
-                                          Refund: Rs {entry.refund_amount.toLocaleString()}
+                                          Refund: {formatCurrency(entry.refund_amount)}
                                         </div>
                                       )}
                                       {entry.note && <div className="text-[10px] text-slate-400 dark:text-slate-500 italic mt-0.5">Note: {entry.note}</div>}
@@ -1631,10 +1676,10 @@ const Customers: React.FC = () => {
                                   <td className="px-4 py-3 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
                                     {isRet ? (
                                       <span className="text-slate-400 dark:text-slate-400 line-through opacity-75" title="Returned Bill">
-                                        Rs {entry.debit.toLocaleString()}
+                                        {formatCurrency(entry.debit)}
                                       </span>
                                     ) : entry.debit > 0 ? (
-                                      `Rs ${entry.debit.toLocaleString()}`
+                                      `${formatCurrency(entry.debit)}`
                                     ) : (
                                       '—'
                                     )}
@@ -1642,10 +1687,10 @@ const Customers: React.FC = () => {
                                   <td className="px-4 py-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
                                     {isRet ? (
                                       <span className="text-slate-400 dark:text-slate-400 line-through opacity-75" title="Refunded Cash/Credit">
-                                        {entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : '—'}
+                                        {entry.credit > 0 ? `${formatCurrency(entry.credit)}` : '—'}
                                       </span>
                                     ) : entry.credit > 0 ? (
-                                      `Rs ${entry.credit.toLocaleString()}`
+                                      `${formatCurrency(entry.credit)}`
                                     ) : (
                                       '—'
                                     )}
@@ -1657,7 +1702,7 @@ const Customers: React.FC = () => {
                                   }`}>
                                     {entry.runningBalance !== undefined ? (
                                       <span className={entry.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : entry.runningBalance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600 dark:text-slate-400'}>
-                                        Rs {Math.abs(entry.runningBalance).toLocaleString()} {entry.runningBalance > 0 ? 'Dr' : entry.runningBalance < 0 ? 'Cr' : ''}
+                                        {formatCurrency(Math.abs(entry.runningBalance))} {entry.runningBalance > 0 ? 'Dr' : entry.runningBalance < 0 ? 'Cr' : ''}
                                       </span>
                                     ) : '—'}
                                   </td>
@@ -1723,12 +1768,13 @@ const Customers: React.FC = () => {
                               );
                             })
                           )}
+                          <LoadMoreRow colSpan={7} sentinelRef={ledgerWindow.sentinelRef} hiddenCount={ledgerWindow.hiddenCount} onShowMore={ledgerWindow.showMore} onShowAll={ledgerWindow.showAll} />
                         </tbody>
                       </table>
                     </div>
                   </div>
                 </div>
-              </div>
+              </div>}
 
             </div>
           );
@@ -1883,7 +1929,7 @@ const Customers: React.FC = () => {
              </div>
 
              {/* MOBILE RESPONSIVE CUSTOMER DIRECTORY CARDS */}
-             <div className="block md:hidden space-y-2.5">
+             {!isMdScreen && <div className="space-y-2.5">
                 {filteredCustomers.length === 0 ? (
                   <div className="bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center shadow-sm">
                     <Users size={36} className="text-slate-300 dark:text-slate-600 mx-auto mb-2" />
@@ -1891,7 +1937,7 @@ const Customers: React.FC = () => {
                     <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Try adjusting your search or balance filter</p>
                   </div>
                 ) : (
-                  filteredCustomers.map(c => {
+                  customerWindow.visibleItems.map(c => {
                     const hasWhatsApp = Boolean(c.whatsapp || c.is_phone_whatsapp);
                     const isSettled = Math.abs(c.balance) < 0.01;
                     const isDue = c.balance > 0;
@@ -1933,17 +1979,18 @@ const Customers: React.FC = () => {
                             isDue ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/50' :
                             'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50'
                           }`}>
-                            {isSettled ? 'Settled' : isDue ? `Due Rs ${c.balance.toLocaleString()}` : `Adv Rs ${Math.abs(c.balance).toLocaleString()}`}
+                            {isSettled ? 'Settled' : isDue ? `Due ${formatCurrency(c.balance)}` : `Adv ${formatCurrency(Math.abs(c.balance))}`}
                           </span>
                         </div>
                       </div>
                     );
                   })
                 )}
-             </div>
+                <LoadMoreRow sentinelRef={customerWindow.sentinelRef} hiddenCount={customerWindow.hiddenCount} onShowMore={customerWindow.showMore} onShowAll={customerWindow.showAll} />
+             </div>}
 
              {/* DESKTOP CUSTOMER DIRECTORY TABLE */}
-             <div className="hidden md:block bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
+             {isMdScreen && <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
                 <div className="overflow-x-auto min-h-[400px]">
                    <table className="w-full text-left">
                       <thead className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
@@ -1964,7 +2011,7 @@ const Customers: React.FC = () => {
                          </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                         {filteredCustomers.map(c => {
+                         {customerWindow.visibleItems.map(c => {
                             const hasWhatsApp = Boolean(c.whatsapp || c.is_phone_whatsapp);
                             const additionalPhones = c.additional_phones || (c.secondary_phone ? [{ phone: c.secondary_phone, is_whatsapp: Boolean(c.is_secondary_whatsapp), label: 'Sec' }] : []);
 
@@ -2024,9 +2071,9 @@ const Customers: React.FC = () => {
                                   {Math.abs(c.balance) < 0.01 ? (
                                     <span className="text-slate-400 dark:text-slate-500 font-medium text-xs">Settled (Rs 0)</span>
                                   ) : c.balance > 0 ? (
-                                    <span className="text-rose-600 dark:text-rose-300 font-bold bg-rose-50 dark:bg-rose-950/60 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-800/80 font-mono text-xs">Due Rs {c.balance.toLocaleString()}</span>
+                                    <span className="text-rose-600 dark:text-rose-300 font-bold bg-rose-50 dark:bg-rose-950/60 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-800/80 font-mono text-xs">Due {formatCurrency(c.balance)}</span>
                                   ) : (
-                                    <span className="text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/80 font-mono text-xs">Adv Rs {Math.abs(c.balance).toLocaleString()}</span>
+                                    <span className="text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800/80 font-mono text-xs">Adv {formatCurrency(Math.abs(c.balance))}</span>
                                   )}
                                 </td>
                                <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
@@ -2061,10 +2108,11 @@ const Customers: React.FC = () => {
                              </tr>
                           );
                        })}
+                       <LoadMoreRow colSpan={6} sentinelRef={customerWindow.sentinelRef} hiddenCount={customerWindow.hiddenCount} onShowMore={customerWindow.showMore} onShowAll={customerWindow.showAll} />
                        </tbody>
                    </table>
                 </div>
-             </div>
+             </div>}
           </div>
         </div>
       )}
@@ -2377,7 +2425,7 @@ const Customers: React.FC = () => {
                       const isActiveTill = activeShiftSession && (acc.id === activeShiftSession.drawer_id || acc.id === activeShiftSession.account_id);
                       return (
                         <option key={acc.id} value={acc.id}>
-                          {acc.name} ({acc.type}) - Bal: Rs {Number(acc.balance || 0).toLocaleString()}
+                          {acc.name} ({acc.type}) - Bal: {formatCurrency(Number(acc.balance || 0))}
                           {isActiveTill ? ' [Active Till]' : ''}
                           {isDefaultCash ? ' ★ Default Cash' : ''}
                           {isDefaultDigital ? ' ★ Default Digital' : ''}
@@ -2391,7 +2439,7 @@ const Customers: React.FC = () => {
                     return (
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex items-center justify-between">
                         <span>Selected: <strong className="text-slate-700 dark:text-slate-200">{selAcc.name}</strong> ({selAcc.type})</span>
-                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">Current Bal: Rs {Number(selAcc.balance || 0).toLocaleString()}</span>
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">Current Bal: {formatCurrency(Number(selAcc.balance || 0))}</span>
                       </p>
                     );
                   })() : (
@@ -2515,7 +2563,7 @@ const Customers: React.FC = () => {
                         {bal > 0 ? 'Receivable Khata (Customer Owes)' : 'Advance Credit (Mooco Owes)'}
                       </span>
                       <span className="text-2xl font-black font-mono text-rose-700 dark:text-rose-300 mt-1 block">
-                        Rs {Math.abs(bal).toLocaleString()}
+                        {formatCurrency(Math.abs(bal))}
                       </span>
                       <p className="text-[11px] text-rose-600/90 dark:text-rose-400/90 mt-1">
                         Deleting directly will break the Balance Sheet!
@@ -2781,10 +2829,10 @@ const Customers: React.FC = () => {
                                 {it.qty} <span className="text-[10px] font-normal text-slate-400">{(it as any).variantName ? 'Pack' : ((it as any).unit || 'Unit')}</span>
                               </td>
                               <td className="px-2.5 py-2.5 text-right font-mono text-slate-600 dark:text-slate-400">
-                                Rs {it.price?.toLocaleString()}
+                                {formatCurrency(it.price)}
                               </td>
                               <td className="px-3.5 py-2.5 text-right font-mono font-black text-slate-900 dark:text-white">
-                                Rs {(it.total || (it.qty * it.price)).toLocaleString()}
+                                {formatCurrency((it.total || (it.qty * it.price)))}
                               </td>
                             </tr>
                           ))
@@ -2802,23 +2850,23 @@ const Customers: React.FC = () => {
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-600 dark:text-slate-400">
                     <span>Subtotal:</span>
-                    <span className="font-mono font-bold">Rs {(selectedInvoiceSale.subtotal || selectedInvoiceSale.total).toLocaleString()}</span>
+                    <span className="font-mono font-bold">{formatCurrency((selectedInvoiceSale.subtotal || selectedInvoiceSale.total))}</span>
                   </div>
                   {selectedInvoiceSale.discount > 0 && (
                     <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-semibold">
                       <span>Discount:</span>
-                      <span className="font-mono">- Rs {selectedInvoiceSale.discount.toLocaleString()}</span>
+                      <span className="font-mono">- {formatCurrency(selectedInvoiceSale.discount)}</span>
                     </div>
                   )}
                   {selectedInvoiceSale.refund_amount !== undefined && selectedInvoiceSale.refund_amount > 0 && (
                     <div className="flex justify-between text-rose-600 dark:text-rose-400 font-semibold">
                       <span>Refunded Amount:</span>
-                      <span className="font-mono">- Rs {selectedInvoiceSale.refund_amount.toLocaleString()}</span>
+                      <span className="font-mono">- {formatCurrency(selectedInvoiceSale.refund_amount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center font-black text-slate-900 dark:text-white pt-2 border-t border-slate-200 dark:border-slate-700">
                     <span className="text-sm">Grand Total:</span>
-                    <span className="text-lg font-mono text-lime-700 dark:text-lime-400">Rs {(selectedInvoiceSale.total || 0).toLocaleString()}</span>
+                    <span className="text-lg font-mono text-lime-700 dark:text-lime-400">{formatCurrency((selectedInvoiceSale.total || 0))}</span>
                   </div>
 
                   {selectedInvoiceSale.return_reason && (
@@ -2914,7 +2962,7 @@ const Customers: React.FC = () => {
                 <p className={`text-2xl font-black font-mono tracking-tight ${
                   selectedTxEntry.credit > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
                 }`}>
-                  Rs {(selectedTxEntry.credit || selectedTxEntry.debit || 0).toLocaleString()}
+                  {formatCurrency((selectedTxEntry.credit || selectedTxEntry.debit || 0))}
                 </p>
                 <span className={`inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase ${
                   selectedTxEntry.credit > 0 
@@ -2949,7 +2997,7 @@ const Customers: React.FC = () => {
                   <div className="flex justify-between border-t border-slate-200 dark:border-slate-700/60 pt-2">
                     <span className="text-slate-400 font-medium">Running Balance:</span>
                     <span className="font-bold font-mono text-slate-900 dark:text-white">
-                      Rs {Math.abs(selectedTxEntry.runningBalance).toLocaleString()} {selectedTxEntry.runningBalance > 0 ? 'Dr' : 'Cr'}
+                      {formatCurrency(Math.abs(selectedTxEntry.runningBalance))} {selectedTxEntry.runningBalance > 0 ? 'Dr' : 'Cr'}
                     </span>
                   </div>
                 )}

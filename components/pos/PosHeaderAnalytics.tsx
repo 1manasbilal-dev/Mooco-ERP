@@ -27,7 +27,7 @@ interface PosHeaderAnalyticsProps {
   onOpenReceipt?: (sale: any) => void;
 }
 
-import { isDateOnlyOrMidnight } from '../../lib/formatters';
+import { isDateOnlyOrMidnight, formatCurrency } from '../../lib/formatters';
 
 const formatRelativeTime = (dateStr?: string | Date): string => {
   if (!dateStr) return '';
@@ -149,7 +149,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
             <div className="flex items-baseline gap-1.5">
               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Today:</span>
               <span className="text-xs font-black font-mono text-slate-900 dark:text-slate-100">
-                Rs {todaySummary.totalRevenue.toLocaleString()}
+                {formatCurrency(todaySummary.totalRevenue)}
               </span>
               <span className="text-[10px] font-mono px-1 py-0.2 bg-slate-200/70 dark:bg-slate-700/60 rounded text-slate-600 dark:text-slate-300 font-bold">
                 {todaySummary.totalCount} bills
@@ -170,20 +170,20 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
                   <span className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-bold text-[11px]">
                     <Wallet size={12} /> Cash:
                   </span>
-                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">Rs {todaySummary.cashTotal.toLocaleString()}</strong>
+                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.cashTotal)}</strong>
                 </div>
                 <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-sky-50/70 dark:bg-sky-950/30 border border-sky-100 dark:border-sky-900/40">
                   <span className="flex items-center gap-1.5 text-sky-800 dark:text-sky-300 font-bold text-[11px]">
                     <CreditCard size={12} /> Online / Bank:
                   </span>
-                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">Rs {todaySummary.onlineTotal.toLocaleString()}</strong>
+                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.onlineTotal)}</strong>
                 </div>
                 {todaySummary.creditTotal > 0 && (
                   <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-purple-50/70 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900/40">
                     <span className="flex items-center gap-1.5 text-purple-800 dark:text-purple-300 font-bold text-[11px]">
                       <User size={12} /> Credit (Udhar):
                     </span>
-                    <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">Rs {todaySummary.creditTotal.toLocaleString()}</strong>
+                    <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.creditTotal)}</strong>
                   </div>
                 )}
                 {Boolean(todaySummary.returnedTotal && todaySummary.returnedTotal > 0) && (
@@ -191,7 +191,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
                     <span className="flex items-center gap-1.5 font-bold text-[11px]">
                       <RotateCcw size={12} /> Returns ({todaySummary.returnedCount}):
                     </span>
-                    <strong className="font-mono text-xs">- Rs {todaySummary.returnedTotal.toLocaleString()}</strong>
+                    <strong className="font-mono text-xs">- {formatCurrency(todaySummary.returnedTotal)}</strong>
                   </div>
                 )}
               </div>
@@ -228,7 +228,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
                   {formatSaleProductsName(latestSale.items, latestSale.bill_number || 'Sale')}
                 </span>
                 <span className="font-mono font-black text-xs text-emerald-600 dark:text-emerald-400">
-                  Rs {Number(latestSale.total || 0).toLocaleString()}
+                  {formatCurrency(Number(latestSale.total || 0))}
                 </span>
                 <span className="text-[9px] px-1 py-0.2 rounded font-bold bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 uppercase">
                   {latestSale.payment_mode || 'Cash'}
@@ -350,7 +350,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
                         <div className="flex items-center gap-2.5 shrink-0">
                           <div className="text-right">
                             <div className="font-mono font-black text-xs sm:text-sm text-slate-900 dark:text-slate-50">
-                              Rs {totalAmt.toLocaleString()}
+                              {formatCurrency(totalAmt)}
                             </div>
                             {relativeTime && (
                               <div className="flex items-center justify-end gap-1 text-[10px] text-slate-400 mt-0.5">
@@ -392,7 +392,7 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
               {activeShiftSession.shift_name || 'Shift'}
             </span>
             <span className="hidden sm:inline text-[10px] font-mono text-slate-500 dark:text-slate-400">
-              Rs {Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0).toLocaleString()}
+              {formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))}
             </span>
           </button>
         ) : (

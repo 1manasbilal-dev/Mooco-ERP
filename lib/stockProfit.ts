@@ -93,17 +93,48 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     }
     return addBucket(`item:${item.id}:loose`, item.name, 'Counter / warehouse', item.unit || 'units', n(item.stock), n(item.cost_price));
   };
+  const isBaseDeductedLine = (item: ProfitRecord | undefined, line: ProfitRecord) => {
+    const vId = line.variantId || line.variant_id;
+    if (!vId || vId === 'loose' || vId === 'base' || line.isLoose) return true;
+    // The bill's own snapshot wins over today's catalog; an explicit false means a packed line.
+    const flag = line.deductFromBase ?? line.deduct_from_base;
+    if (flag === true) return true;
+    if (flag === false) return false;
+    const variant = item ? records(item.variants).find(v => v.id === vId) : undefined;
+    return Boolean(variant?.deduct_from_base);
+  };
+  const lineBaseFactor = (item: ProfitRecord | undefined, line: ProfitRecord) => {
+    if (n(line.stockDeduction) > 0) return n(line.stockDeduction);
+    const vId = line.variantId || line.variant_id;
+    const variant = item && vId ? records(item.variants).find(v => v.id === vId) : undefined;
+    return n(variant?.quantity_in_base_unit) > 0 ? n(variant?.quantity_in_base_unit) : 1;
+  };
+  const lineStockQty = (line: ProfitRecord) => {
+    const item = findItem(line.itemId || line.item_id, line.name || line.item_name);
+    const vId = line.variantId || line.variant_id;
+    if (isBaseDeductedLine(item, line) && vId && vId !== 'loose' && vId !== 'base' && !line.isLoose) {
+      return qty(n(line.qty) * lineBaseFactor(item, line));
+    }
+    return n(line.qty);
+  };
   const lineBucket = (line: ProfitRecord) => {
     const item = findItem(line.itemId || line.item_id, line.name || line.item_name);
     if (!item) {
       issue('missing_item', 'A transaction refers to a product missing from the item register.', line.name || line.item_name || line.itemId);
       return addBucket(`missing:${line.itemId || line.name}`, line.name || 'Missing product', 'Unmatched stock', line.unit || 'units');
     }
+    if (isBaseDeductedLine(item, line)) {
+      return itemBucket(item);
+    }
     return itemBucket(item, line.variantId || line.variant_id);
   };
   items.forEach(item => {
     itemBucket(item);
-    Object.keys(item.variant_stocks || {}).forEach(id => itemBucket(item, id));
+    Object.keys(item.variant_stocks || {}).forEach(id => {
+      const variant = records(item.variants).find(v => v.id === id);
+      if (variant?.deduct_from_base && n(item.variant_stocks?.[id]) === 0) return;
+      itemBucket(item, id);
+    });
   });
   const allocByPurchase = new Map(allocations.map(a => [a.purchase_id, a]));
   const rawBucket = (purchase: ProfitRecord) => {
@@ -123,19 +154,27 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
   const purchaseDocuments: ProfitRecord[] = [...purchases.map(p => ({ ...p, isMilk: true })), ...materials.map(p => ({ ...p, isMilk: false }))];
   purchaseDocuments.forEach(p => {
     if (lower(p.status) === 'cancelled') return;
-    const id = p.isMilk ? rawBucket(p) : lineBucket({ itemId: p.item_id, name: p.item_name });
-    const rate = n(p.rate || p.rate_per_liter) || (n(p.quantity) > 0 ? n(p.total_amount) / n(p.quantity) : 0);
+    // A ready-made pack bought as packs was stocked into that pack's own pile, counted in packs.
+    const packId = !p.isMilk && p.variant_id ? String(p.variant_id) : '';
+    const packItem = packId ? findItem(p.item_id, p.item_name) : undefined;
+    const intoPack = Boolean(packItem && records(packItem.variants).some(v => v.id === packId));
+    const id = p.isMilk ? rawBucket(p) : intoPack ? itemBucket(packItem!, packId) : lineBucket({ itemId: p.item_id, name: p.item_name });
+    const conv = intoPack ? 1 : (!p.isMilk && n(p.conversion_factor) > 0 ? n(p.conversion_factor) : 1);
+    const purchaseUnitRate = n(p.rate || p.rate_per_liter) || (n(p.quantity) > 0 ? n(p.total_amount) / n(p.quantity) : 0);
+    const rate = conv > 0 ? purchaseUnitRate / conv : purchaseUnitRate;
     let returns = returnedByPurchase.get(p.id) || [];
     if (!returns.length && (lower(p.status) === 'returned' || n(p.returned_quantity) > 0)) {
-      const returnedQty = n(p.returned_quantity) || n(p.quantity);
+      const returnedQtyInBase = (n(p.returned_quantity) || n(p.quantity)) * conv;
       const returnDate = p.returned_at || p.last_returned_at;
-      if (returnDate) returns = [{ id: `return:${p.id}`, date: returnDate, amount: returnedQty * rate }];
+      if (returnDate) returns = [{ id: `return:${p.id}`, date: returnDate, amount: returnedQtyInBase * rate }];
       else issue('missing_return_date', 'A returned purchase has no return date.', p.item_name || p.milk_type);
-      if (p.partial_returned && returnedQty > 0) issue('return_history', 'Multiple supplier returns have only a last return date; period allocation needs review.', p.item_name || p.milk_type);
+      if (p.partial_returned && returnedQtyInBase > 0) issue('return_history', 'Multiple supplier returns have only a last return date; period allocation needs review.', p.item_name || p.milk_type);
     }
     const returnedAmount = returns.reduce((sum, tx) => sum + n(tx.amount), 0);
     const wasFullReturn = lower(p.status) === 'returned';
-    const originalQty = wasFullReturn ? Math.max(n(p.original_intake_quantity || p.original_quantity || p.quantity), rate > 0 ? returnedAmount / rate : 0) : n(p.quantity) + (rate > 0 ? returnedAmount / rate : 0);
+    const rawQtyInBase = n(p.quantity) * conv;
+    const rawOrigQtyInBase = n(p.original_intake_quantity || p.original_quantity || p.quantity) * conv;
+    const originalQty = wasFullReturn ? Math.max(rawOrigQtyInBase, rate > 0 ? returnedAmount / rate : 0) : rawQtyInBase + (rate > 0 ? returnedAmount / rate : 0);
     const originalAmount = wasFullReturn ? originalQty * rate : n(p.total_amount) + returnedAmount;
     const bucket = buckets.get(id)!;
     if (rate > 0) bucket.initialRate = rate;
@@ -259,6 +298,28 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     }
     const recipeSnapshot = batch.cost_snapshot || batch.details?.cost_snapshot;
     if ((!recipeSnapshot && (records(item.recipe).length || destinations.some(d => d.id !== itemBucket(item)))) || recipeSnapshot?.materials_posted === false) issue('production_materials', 'Ingredient / packaging consumption was not posted for this batch. Check stock and costs before relying on net profit.', batch.batch_number);
+    if (recipeSnapshot?.materials_posted === true) {
+      const matInputs = [...records(recipeSnapshot.recipe_inputs), ...records(recipeSnapshot.packaging_inputs)];
+      matInputs.forEach((mat, matIdx) => {
+        const matQty = n(mat.quantity);
+        if (matQty <= 0) return;
+        const matItem = findItem(mat.item_id, mat.item_name);
+        if (!matItem) return;
+        const matLog = logs.find(l => l.id === `log_prod_mat_${batch.id}_${mat.item_id}` || (!usedLogs.has(l.id) && l.item_id === matItem.id && lower(l.reason) === 'production usage' && Math.abs(n(l.difference) + matQty) < EPS && profitDay(l.date) === profitDay(completion)));
+        if (matLog) usedLogs.add(matLog.id);
+        const matBucket = itemBucket(matItem);
+        addEvent({
+          id: `batch-mat:${batch.id}:${matIdx}`,
+          date: completion,
+          order: 28,
+          kind: 'Transfer',
+          description: `Production material: ${matItem.name}`,
+          changes: [{ id: matBucket, quantity: -matQty }, { id: wip, quantity: 0 }],
+          source: matBucket,
+          destinations: [{ id: wip, quantity: 0, weight: 1 }]
+        });
+      });
+    }
     const extra = n(recipeSnapshot?.external_conversion_cost);
     if (extra > 0) addEvent({ id: `conversion:${batch.id}`, date: completion, order: 29, kind: 'Conversion cost', description: 'Production conversion cost', changes: [{ id: wip, quantity: 0, value: extra }], amount: extra });
     if (destinations.length) addEvent({ id: `batch-out:${batch.id}`, date: completion, order: 30, kind: 'Transfer', description: 'Finished production', changes: [{ id: wip, quantity: -n(batch.quantity_input) }, ...destinations.map(d => ({ id: d.id, quantity: d.quantity }))], source: wip, destinations });
@@ -274,7 +335,7 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
 
   sales.forEach(sale => {
     if (['cancelled', 'draft'].includes(lower(sale.status))) return;
-    addEvent({ id: `sale:${sale.id}`, date: sale.date, order: 40, description: `Invoice ${sale.bill_number || sale.id}`, kind: 'POS sale', amount: n(sale.total), changes: records(sale.items).map(line => ({ id: lineBucket(line), quantity: -n(line.qty) })) });
+    addEvent({ id: `sale:${sale.id}`, date: sale.date, order: 40, description: `Invoice ${sale.bill_number || sale.id}`, kind: 'POS sale', amount: n(sale.total), changes: records(sale.items).map(line => ({ id: lineBucket(line), quantity: -lineStockQty(line) })) });
     let returns = records(sale.returned_items || sale.details?.returned_items);
     if (!returns.length && (n(sale.refund_amount) > 0 || lower(sale.status) === 'returned')) {
       const returnDate = sale.returned_at;
@@ -291,7 +352,7 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
       const isReplacement = line.action === 'replace';
       const restock = line.restock !== 'scrap_spoilage';
       const amount = !isReplacement && lineRefundTotal > 0 ? -refundTotal * (n(line.qty) * n(line.price) * discountFactor / lineRefundTotal) : 0;
-      addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(line), quantity: n(line.qty), returnOf: `sale:${sale.id}` }] : [] });
+      addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(line), quantity: lineStockQty(line), returnOf: `sale:${sale.id}` }] : [] });
     });
   });
   supplies.forEach(s => {
@@ -312,18 +373,34 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     const item = findItem(log.item_id, log.item_name) || items.find(i => String(log.item_name || '').startsWith(i.name + ' ('));
     if (!item) { if (Math.abs(n(log.difference)) > EPS) issue('unknown_log', 'A stock adjustment has no matching product.', log.item_name); return; }
     const variant = records(item.variants).find(v => log.item_name === `${item.name} (${v.name})`);
-    const id = itemBucket(item, log.variant_id || variant?.id);
-    const delta = n(log.difference);
+    const logVariantId = log.details?.variant_id || log.variant_id;
+    const changes: { id: string; quantity: number }[] = [];
+    if (logVariantId && logVariantId !== 'loose') {
+      // Variant logs carry the pack-count change and any loose change separately.
+      const variantDelta = n(log.details?.variant_delta ?? log.variant_delta ?? log.variant_qty);
+      const looseDelta = n(log.details?.loose_delta ?? log.loose_delta);
+      if (variantDelta) changes.push({ id: itemBucket(item, logVariantId), quantity: variantDelta });
+      if (looseDelta) changes.push({ id: itemBucket(item), quantity: looseDelta });
+    } else if (variant) {
+      changes.push({ id: itemBucket(item, variant.id), quantity: n(log.difference) });
+    } else if (log.details?.loose_delta === undefined && /variant/i.test(String(log.notes || ''))) {
+      // Old variant audits stored a pack-count difference without naming the pack; never post it to loose stock.
+      if (Math.abs(n(log.difference)) > EPS) issue('variant_log', 'A pack stock adjustment does not name its pack size; it was left out of loose stock.', item.name);
+      return;
+    } else {
+      changes.push({ id: itemBucket(item), quantity: n(log.difference) });
+    }
+    const delta = changes.reduce((sum, change) => sum + change.quantity, 0);
     if (reason === 'allocation') {
       issue('unlinked_allocation_log', 'An allocation stock movement is not linked to its source history.', item.name);
       // Preserve unmatched movement, but prevent it being labelled verified profit.
     }
-    if (!delta) return;
+    if (!changes.length) return;
     const loss = /spoil|wastage|consumption|theft|loss|production usage/.test(reason) || ['sale', 'pos sale'].includes(reason) || (reason === 'stock count correction' && delta < 0);
-    addEvent({ id: `log:${log.id}`, date: log.date, order: 50, description: `${log.reason}: ${item.name}`, kind: loss ? 'Stock loss' : 'Adjustment', changes: [{ id, quantity: delta }] });
+    addEvent({ id: `log:${log.id}`, date: log.date, order: 50, description: `${log.reason}: ${item.name}`, kind: loss ? 'Stock loss' : 'Adjustment', changes });
   });
   source.retailClosings.map(flattenProfitRecord).forEach(closing => {
-    if (n(closing.total_unrecorded_revenue) > 0 && !closing.auto_posted_sale_id && !sales.some(s => s.details?.retail_closing_id === closing.id)) issue('unposted_sales', 'A retail closing contains sales that were not posted to invoices.', closing.date);
+    if (n(closing.total_unrecorded_revenue) > 0 && !closing.auto_posted_sale_id && !closing.auto_posted_sale && !sales.some(s => (s.retail_closing_id || s.details?.retail_closing_id) === closing.id)) issue('unposted_sales', 'A retail closing contains sales that were not posted to invoices.', closing.date);
   });
   if (source.pendingCount) issue('pending_sync', `${source.pendingCount} local record(s) are waiting for sync. This is a provisional report.`);
   const today = profitDay(new Date().toISOString());
@@ -435,4 +512,85 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
   const netProfit = money(grossProfit - expenses);
   if (consumedCost < -0.02) issue('negative_cost', 'Consumed stock cost is negative. Review opening balances, returns and adjustments.');
   return { openingStock, closingStock, grossPurchases: money(grossPurchases), purchaseReturns: money(purchaseReturns), netPurchases, conversionCost: money(conversionCost), stockAdjustments: money(stockAdjustments), consumedCost, grossSales, salesReturns: money(salesReturns), netSales, posSales: money(posSales), supplySales: money(supplySales), expenses, grossProfit, netProfit, margin: netSales > 0 ? netProfit / netSales * 100 : 0, stockLoss: money(stockLoss), rows, issues: [...issues.values()], expenseCategories: [...categories].map(([name, amount]) => ({ name, amount: money(amount) })), movements, validRange };
+}
+
+export interface PackStockValue {
+  id: string; name: string; count: number; contains: number;
+  costEach: number; retailEach: number; costValue: number; retailValue: number;
+}
+export interface ItemStockValue {
+  looseQty: number; packs: PackStockValue[]; packedBaseQty: number; totalBaseQty: number;
+  costRate: number; looseCostValue: number; looseRetailValue: number;
+  costValue: number; retailValue: number; costMissing: boolean;
+}
+/**
+ * One valuation rule for every screen: loose stock plus active pre-packed counts, at cost.
+ * Multi-unit sizes (dozen, tray) are drawn from loose stock, so their stored counts are ignored.
+ * Negative quantities stay visible but are valued at zero.
+ */
+export function itemStockValue(
+  item: ProfitRecord,
+  looseQty: number = n(item.stock),
+  variantStocks: Record<string, unknown> = item.variant_stocks || {}
+): ItemStockValue {
+  const costRate = n(item.cost_price);
+  const sellRate = n(item.selling_price);
+  const loose = n(looseQty);
+  const packs: PackStockValue[] = records(item.variants)
+    .filter(v => v && v.id && v.isActive !== false && v.deduct_from_base !== true)
+    .map(v => {
+      const count = n(variantStocks?.[v.id]);
+      const contains = n(v.quantity_in_base_unit) > 0 ? n(v.quantity_in_base_unit) : 1;
+      const costEach = costRate * contains;
+      const retailEach = n(v.selling_price) > 0 ? n(v.selling_price) : sellRate * contains;
+      const valued = Math.max(0, count);
+      return { id: v.id, name: v.name || 'Pack', count, contains, costEach, retailEach, costValue: valued * costEach, retailValue: valued * retailEach };
+    });
+  const packedBaseQty = qty(packs.reduce((sum, p) => sum + p.count * p.contains, 0));
+  const looseCostValue = Math.max(0, loose) * costRate;
+  const looseRetailValue = Math.max(0, loose) * sellRate;
+  const costValue = money(looseCostValue + packs.reduce((sum, p) => sum + p.costValue, 0));
+  const retailValue = money(looseRetailValue + packs.reduce((sum, p) => sum + p.retailValue, 0));
+  const hasStock = loose > EPS || packs.some(p => p.count > EPS);
+  return {
+    looseQty: loose, packs, packedBaseQty, totalBaseQty: qty(loose + packedBaseQty),
+    costRate, looseCostValue: money(looseCostValue), looseRetailValue: money(looseRetailValue),
+    costValue, retailValue, costMissing: costRate <= 0 && hasStock
+  };
+}
+
+/** Returned lines live in details on stored bills; the context may also lift them to the top level. */
+export function saleReturnedItems(sale: ProfitRecord): ProfitRecord[] {
+  return records(sale?.returned_items).length ? records(sale.returned_items) : records(sale?.details?.returned_items);
+}
+const lineVariantKey = (line: ProfitRecord) => {
+  const id = line?.variantId || line?.variant_id;
+  return !id || id === 'loose' || id === 'base' || line?.isLoose ? '' : String(id);
+};
+/** Quantity (in the line's own sold unit) refunded against one bill line. Replacements are not sales reversals. */
+export function returnedQtyForLine(sale: ProfitRecord, line: ProfitRecord, lineIndex?: number): number {
+  const itemId = line?.itemId || line?.item_id;
+  const sameItem = (row: ProfitRecord) => itemId ? (row.itemId || row.item_id) === itemId : row.name === line?.name;
+  const variant = lineVariantKey(line);
+  const lines = records(sale?.items);
+  // Old return entries saved no variant; they can only be matched when the bill has one line of that item.
+  const onlyLine = lines.filter(sameItem).length <= 1;
+  const returns = saleReturnedItems(sale)
+    .filter(r => r.action !== 'replace' && sameItem(r))
+    .filter(r => lineVariantKey(r) === variant || (onlyLine && r.variantId === undefined && r.variant_id === undefined));
+  const index = lineIndex ?? lines.indexOf(line);
+  if (index < 0) return returns.reduce((sum, r) => sum + n(r.qty), 0);
+  // Returns that name their bill line belong to it; the rest fill same-item lines in bill order,
+  // so two lines of the same product never both lose the same returned quantity.
+  const indexed = (i: number) => returns.filter(r => r.lineIndex !== undefined && Number(r.lineIndex) === i).reduce((sum, r) => sum + n(r.qty), 0);
+  let pool = returns.filter(r => r.lineIndex === undefined).reduce((sum, r) => sum + n(r.qty), 0);
+  for (let i = 0; i < lines.length; i++) {
+    const other = lines[i];
+    if (!sameItem(other) || lineVariantKey(other) !== variant) continue;
+    const own = indexed(i);
+    const take = Math.min(Math.max(0, n(other.qty) - own), pool);
+    if (i === index) return own + take;
+    pool -= take;
+  }
+  return indexed(index);
 }

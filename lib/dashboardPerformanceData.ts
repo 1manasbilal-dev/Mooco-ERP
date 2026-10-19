@@ -19,7 +19,8 @@ export function buildPerformanceSeries({ sales, purchases, expenses, metric, sel
     current: 0, previous: 0, currentTotal: 0, previousTotal: 0,
   }));
   const entries = metric === 'milk' ? purchases.filter(p => !['Returned', 'Cancelled'].includes(p.status || ''))
-    : metric === 'expenses' ? expenses : sales.filter(s => s.status !== 'Returned');
+    : metric === 'expenses' ? expenses.filter(e => !['Cancelled', 'Returned'].includes((e as any).status || ''))
+    : sales.filter(s => s.status !== 'Returned' && (s.status as any) !== 'Cancelled');
   entries.forEach(entry => {
     const date = businessDate(entry.date);
     const current = date >= period.start && date <= period.end;
@@ -28,10 +29,28 @@ export function buildPerformanceSeries({ sales, purchases, expenses, metric, sel
     const index = intraday ? reportingHalfHour(entry.date)
       : Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${current ? period.start : period.previousStart}T00:00:00Z`)) / 86400000);
     if (!rows[index]) return;
-    const value = metric === 'milk' ? Number((entry as PurchaseEntry).quantity) || 0
-      : metric === 'expenses' ? Number((entry as ExpenseEntry).amount) || 0
-      : metric === 'products' ? (entry as POSBill).items.filter(i => i.name === selectedProduct).reduce((sum, i) => sum + (Number(i.total) || Number(i.qty) * Number(i.price) || 0), 0)
-      : Number((entry as POSBill).total) || 0;
+    let value = 0;
+    if (metric === 'milk') {
+      value = Number((entry as PurchaseEntry).quantity) || 0;
+    } else if (metric === 'expenses') {
+      value = Number((entry as ExpenseEntry).amount) || 0;
+    } else if (metric === 'products') {
+      const bill = entry as POSBill;
+      const subtotal = bill.items.reduce((s, it) => s + (Number(it.total) || Number(it.qty) * Number(it.price) || 0), 0);
+      const discountRatio = subtotal > 0 ? (Number(bill.total) || 0) / subtotal : 1;
+      const returnedItems = (bill as any).returned_items || (bill as any).details?.returned_items || [];
+      value = bill.items.filter(i => i.name === selectedProduct).reduce((sum, i) => {
+        const retQty = returnedItems
+          .filter((r: any) => r.action !== 'replace' && (r.itemId === i.itemId || r.name === i.name) && (r.variantId || '') === (i.variantId || ''))
+          .reduce((rs: number, r: any) => rs + (Number(r.qty) || 0), 0);
+        const netQty = Math.max(0, (Number(i.qty) || 0) - retQty);
+        const grossLine = (Number(i.qty) || 0) > 0 ? ((Number(i.total) || Number(i.qty) * Number(i.price) || 0) * (netQty / Number(i.qty))) : 0;
+        return sum + grossLine * discountRatio;
+      }, 0);
+    } else {
+      const bill = entry as POSBill;
+      value = Math.max(0, (Number(bill.total) || 0) - (Number(bill.refund_amount) || 0));
+    }
     rows[index][current ? 'current' : 'previous'] += value;
   });
   let currentTotal = 0;

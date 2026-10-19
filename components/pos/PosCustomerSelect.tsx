@@ -1,6 +1,7 @@
 import React from 'react';
 import { User, UserPlus, X, ChevronDown, Check, PauseCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { formatCurrency } from '../../lib/formatters';
 
 const MotionDiv = motion.div as any;
 
@@ -156,11 +157,11 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
                             </span>
                             {bal > 0 ? (
                               <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 font-mono">
-                                Due Rs {bal.toLocaleString()}
+                                Due {formatCurrency(bal)}
                               </span>
                             ) : bal < 0 ? (
                               <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono">
-                                Adv Rs {Math.abs(bal).toLocaleString()}
+                                Adv {formatCurrency(Math.abs(bal))}
                               </span>
                             ) : null}
                           </div>

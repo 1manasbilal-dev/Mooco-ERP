@@ -3,9 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
 import { loadPdfRuntime } from '../lib/pdfRuntime';
-import { formatCompactValue } from '../lib/formatters';
+import { formatCompactValue, formatCurrency } from '../lib/formatters';
 import StockProfitReportView from '../components/StockProfitReport';
-import { buildStockProfitReport, profitDay, StockProfitSource } from '../lib/stockProfit';
+import { buildStockProfitReport, itemStockValue, profitDay, returnedQtyForLine, StockProfitSource } from '../lib/stockProfit';
+import { saleLineStock } from '../lib/sellUnits';
 import { loadStockProfitSource } from '../lib/stockProfitData';
 import { motion } from 'framer-motion';
 import { 
@@ -23,12 +24,21 @@ import {
   Phone, MapPin
 } from 'lucide-react';
 import { exportToCSV } from '../lib/exportUtils';
+import { roundCurrency, roundQuantity } from '../lib/db';
 import {
   bankTxCategory, expenseCashPaid, isInternalCashTransfer, isPurchaseReturnTx,
-  isSalesRefundTx, isSpotSupplierPayment, materialCashPaid, purchaseCashPaid, saleCashCollected, saleOnlineCollected
+  isSalesRefundTx, isSpotSupplierPayment, materialCashPaid, purchaseCashPaid, saleCashCollected, saleOnlineCollected, saleNetCollection
 } from '../lib/moneyFlow';
 
 const MotionDiv = motion.div as any;
+
+/** Litres in one base unit: 1 for litre units, 0.001 for ml, 0 for anything that is not a volume. */
+const litresPerBaseUnit = (unit?: string): number => {
+  const u = String(unit || '').trim().toLowerCase();
+  if (['l', 'ltr', 'ltrs', 'liter', 'liters', 'litre', 'litres'].includes(u)) return 1;
+  if (['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'].includes(u)) return 0.001;
+  return 0;
+};
 
 // --- Chart Palette ---
 const CHART_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#ef4444', '#84cc16'];
@@ -100,10 +110,11 @@ type PresetRange = 'today' | 'yesterday' | '7days' | '30days' | 'month' | 'last_
 const Reports: React.FC = () => {
   const { 
     sales = [], dailySupplyEntries = [], purchases = [], materialPurchases = [], 
-    expenses = [], inventory = [], productionBatches = [],
+    expenses = [], inventory = [], productionBatches = [], allocations = [],
     customers = [], suppliers = [], accounts = [], manualAccounts = [], items = [], bankTransactions = [],
     inventoryLogs = [], customerTransactions = [], supplierTransactions = [],
-    shiftSessions = [],
+    expenseVendors = [], expenseVendorTransactions = [],
+    shiftSessions = [], cashInTransit,
     currentUser, settings
   } = useDairy();
 
@@ -234,7 +245,14 @@ const Reports: React.FC = () => {
   };
 
   // --- Helpers ---
-  const normalizeDate = (d?: string) => d ? d.split('T')[0] : '';
+  const normalizeDate = (d?: string) => {
+    if (!d) return '';
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(d));
+    } catch {
+      return d.split('T')[0] || '';
+    }
+  };
   const isInRange = (dateStr?: string) => {
     if (!dateStr) return false;
     const d = normalizeDate(dateStr);
@@ -242,7 +260,7 @@ const Reports: React.FC = () => {
   };
 
   const formatCurrency = (amount: number) => {
-    return `Rs ${Math.round(amount || 0).toLocaleString('en-PK')}`;
+    return formatCurrency(Math.round(amount || 0));
   };
 
   const formatDate = (dateStr?: string) => {
@@ -257,13 +275,15 @@ const Reports: React.FC = () => {
 
   // --- REPORT 1: Profit & Loss ---
   const pnlData = useMemo(() => {
-    const validSales = sales.filter(s => isInRange(s.date) && s.status !== 'Returned');
-    const posRevenue = validSales.reduce((sum, s) => sum + (s.total || 0), 0);
-    const posCash = validSales.reduce((sum, s) => sum + saleCashCollected(s), 0);
-    const posDigital = validSales.reduce((sum, s) => sum + saleOnlineCollected(s), 0);
-    const posCredit = validSales.reduce((sum, s) => sum + Math.max(0, (s.total || 0) - saleCashCollected(s) - saleOnlineCollected(s)), 0);
+    const validSales = sales.filter(s => isInRange(s.date) && s.status !== 'Returned' && s.status !== 'Cancelled');
+    // Net of returns, so cash + online + credit always adds up to revenue.
+    const keptBySale = validSales.map(s => saleNetCollection(s));
+    const posRevenue = keptBySale.reduce((sum, k) => sum + k.net, 0);
+    const posCash = keptBySale.reduce((sum, k) => sum + k.cash, 0);
+    const posDigital = keptBySale.reduce((sum, k) => sum + k.online, 0);
+    const posCredit = keptBySale.reduce((sum, k) => sum + k.credit, 0);
 
-    const validSupplies = dailySupplyEntries.filter(s => isInRange(s.date));
+    const validSupplies = dailySupplyEntries.filter(s => isInRange(s.date) && s.details?.status !== 'Cancelled' && s.details?.status !== 'Pending');
     const supplyRevenue = validSupplies.reduce((sum, s) => sum + (s.total_amount || 0), 0);
     const supplyLiters = validSupplies.reduce((sum, s) => sum + (s.quantity || 0), 0);
 
@@ -280,7 +300,7 @@ const Reports: React.FC = () => {
     const grossProfit = totalRevenue - totalCOGS;
     const grossMargin = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
 
-    const validExpenses = expenses.filter(e => isInRange(e.date));
+    const validExpenses = expenses.filter(e => isInRange(e.date) && (e as any).status !== 'Cancelled' && (e as any).status !== 'Returned');
     const operatingCost = validExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
     // Group expenses by category
@@ -298,7 +318,8 @@ const Reports: React.FC = () => {
     validSales.forEach(s => {
       const d = normalizeDate(s.date);
       if (!trendMap[d]) trendMap[d] = { date: d, revenue: 0, cogs: 0, expenses: 0, profit: 0 };
-      trendMap[d].revenue += s.total || 0;
+      const refund = s.status === 'Partially Returned' ? (Number(s.refund_amount) || 0) : 0;
+      trendMap[d].revenue += Math.max(0, (Number(s.total) || 0) - refund);
     });
     validSupplies.forEach(s => {
       const d = normalizeDate(s.date);
@@ -306,6 +327,11 @@ const Reports: React.FC = () => {
       trendMap[d].revenue += s.total_amount || 0;
     });
     validPurchases.forEach(p => {
+      const d = normalizeDate(p.date);
+      if (!trendMap[d]) trendMap[d] = { date: d, revenue: 0, cogs: 0, expenses: 0, profit: 0 };
+      trendMap[d].cogs += p.total_amount || 0;
+    });
+    validMaterial.forEach(p => {
       const d = normalizeDate(p.date);
       if (!trendMap[d]) trendMap[d] = { date: d, revenue: 0, cogs: 0, expenses: 0, profit: 0 };
       trendMap[d].cogs += p.total_amount || 0;
@@ -341,57 +367,100 @@ const Reports: React.FC = () => {
   const balanceSheetData = useMemo(() => {
     // Current Assets
     const cashBank = accounts.reduce((sum, a) => sum + (a.balance || 0), 0);
-    const stockVal = inventory.reduce((sum, i) => sum + ((i.quantity || 0) * (i.price || 0)), 0);
+    const transitCash = cashInTransit?.amount || 0;
+
+    // Inventory at accurate Cost Price (Loose + Packaged Variants + Unallocated Raw Milk + WIP Production)
+    const stockVal = items.reduce((sum, item) => {
+      const inv = inventory.find(i => i.item_id === item.id || i.name.toLowerCase() === item.name.toLowerCase());
+      const looseStock = inv ? (Number(inv.quantity) || 0) : (Number(item.stock) || 0);
+      const variantStocks = inv?.variant_stocks || item.variant_stocks || {};
+      // Same rule as Stock Valuation: loose + active packed counts at cost, negatives valued at zero.
+      return sum + itemStockValue(item, looseStock, variantStocks).costValue;
+    }, 0);
+
+    const unallocatedMilkVal = allocations
+      .filter(a => a.status !== 'Fully Allocated')
+      .reduce((sum, a) => {
+        const remQty = a.remaining_quantity !== null && a.remaining_quantity !== undefined ? Number(a.remaining_quantity) : Number(a.original_quantity || 0);
+        return sum + (Math.max(0, remQty) * (Number(a.average_rate) || 0));
+      }, 0);
+
+    const wipVal = productionBatches
+      .filter(b => b.status === 'Processing' || b.status === 'Staged')
+      .reduce((sum, b) => {
+        const milkCost = (Number(b.quantity_input) || 0) * (Number(b.input_cost_per_unit || b.details?.input_cost_per_unit) || 0);
+        return sum + milkCost;
+      }, 0);
+
+    const totalInventoryValuation = roundCurrency(stockVal + unallocatedMilkVal + wipVal);
+
+    // Customer Debtors (Receivables)
     const debtors = customers.reduce((sum, c) => sum + ((c.balance || 0) > 0 ? c.balance : 0), 0);
+
+    // Supplier Advances (Prepaid to Suppliers)
+    const supplierAdvances = suppliers.reduce((sum, s) => sum + ((s.pending_balance || 0) < 0 ? Math.abs(s.pending_balance) : 0), 0);
+
     const fixedAssets = manualAccounts.filter(a => a.type === 'Asset').reduce((sum, a) => sum + (a.balance || 0), 0);
-    const totalAssets = cashBank + stockVal + debtors + fixedAssets;
+    const totalAssets = roundCurrency(cashBank + transitCash + totalInventoryValuation + debtors + supplierAdvances + fixedAssets);
 
     // Current Liabilities
-    const creditors = suppliers.reduce((sum, s) => sum + (s.pending_balance || 0), 0);
+    const creditors = suppliers.reduce((sum, s) => sum + ((s.pending_balance || 0) > 0 ? s.pending_balance : 0), 0);
     const custAdvances = customers.reduce((sum, c) => sum + ((c.balance || 0) < 0 ? Math.abs(c.balance) : 0), 0);
+    const expensePayables = expenseVendors.reduce((sum, v) => sum + ((v.pending_balance || 0) > 0 ? v.pending_balance : 0), 0);
     const loans = manualAccounts.filter(a => a.type === 'Liability').reduce((sum, a) => sum + (a.balance || 0), 0);
-    const totalLiabilities = creditors + custAdvances + loans;
+    const totalLiabilities = roundCurrency(creditors + custAdvances + expensePayables + loans);
 
     // Equity
     const equityManual = manualAccounts.filter(a => a.type === 'Equity').reduce((sum, a) => sum + (a.balance || 0), 0);
-    const retainedEarnings = pnlData.netProfit;
-    const totalEquity = equityManual + retainedEarnings;
+    const retainedEarnings = roundCurrency(totalAssets - totalLiabilities - equityManual);
+    const totalEquity = roundCurrency(equityManual + retainedEarnings);
 
-    const totalLiabAndEquity = totalLiabilities + totalEquity;
-    const difference = totalAssets - totalLiabAndEquity;
+    const totalLiabAndEquity = roundCurrency(totalLiabilities + totalEquity);
+    const difference = roundCurrency(totalAssets - totalLiabAndEquity);
     const isBalanced = Math.abs(difference) < 1;
 
     return {
-      assets: { cashBank, stockVal, debtors, fixedAssets, totalAssets },
-      liabilities: { creditors, custAdvances, loans, totalLiabilities },
+      assets: { cashBank: roundCurrency(cashBank + transitCash), stockVal: totalInventoryValuation, debtors, fixedAssets: roundCurrency(fixedAssets + supplierAdvances), totalAssets },
+      liabilities: { creditors: roundCurrency(creditors + expensePayables), custAdvances, loans, totalLiabilities },
       equity: { equityManual, retainedEarnings, totalEquity },
       totalLiabAndEquity,
       difference,
       isBalanced
     };
-  }, [accounts, inventory, customers, suppliers, manualAccounts, pnlData.netProfit]);
+  }, [accounts, cashInTransit, items, inventory, allocations, productionBatches, customers, suppliers, expenseVendors, manualAccounts]);
 
   // --- REPORT 3: Cash Flow Statement ---
   const cashFlowData = useMemo(() => {
-    // Cash that entered on the sale date, including bills later returned.
-    // The refund is an outflow on the day the money left, so the two do not cancel twice.
+    // Cash and digital that entered on the sale date, including bills later returned.
     const posCashSales = sales
-      .filter(s => isInRange(s.date))
+      .filter(s => isInRange(s.date) && s.status !== 'Cancelled')
       .reduce((sum, s) => sum + saleCashCollected(s), 0);
+
+    const posOnlineSales = sales
+      .filter(s => isInRange(s.date) && s.status !== 'Cancelled')
+      .reduce((sum, s) => sum + saleOnlineCollected(s), 0);
 
     const custPayments = customerTransactions
       .filter(t => isInRange(t.date) && t.type === 'Payment')
       .reduce((sum, t) => sum + (t.amount || 0), 0);
 
+    const dailySupplyReceipts = dailySupplyEntries
+      .filter(s => isInRange(s.date) && s.details?.status !== 'Cancelled' && (Number(s.details?.payment_received) || 0) > 0)
+      .reduce((sum, s) => sum + Number(s.details.payment_received), 0);
+
     const purchaseReturnIn = bankTransactions
       .filter(t => isInRange(t.date) && isPurchaseReturnTx(t) && !isInternalCashTransfer(t))
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+    const vendorRefunds = expenseVendorTransactions
+      .filter(t => isInRange(t.date) && t.type === 'Refund')
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
     const bankDeposits = bankTransactions
       .filter(t => isInRange(t.date) && t.type === 'Deposit' && !isInternalCashTransfer(t))
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
-    const totalInflows = posCashSales + custPayments + purchaseReturnIn + bankDeposits;
+    const totalInflows = posCashSales + posOnlineSales + custPayments + dailySupplyReceipts + purchaseReturnIn + vendorRefunds + bankDeposits;
 
     // 2. Operating Outflows — only money that left an account
     const milkPaid = purchases
@@ -414,6 +483,10 @@ const Reports: React.FC = () => {
       .filter(e => isInRange(e.date))
       .reduce((sum, e) => sum + expenseCashPaid(e), 0);
 
+    const vendorPayments = expenseVendorTransactions
+      .filter(t => isInRange(t.date) && t.type === 'Payment')
+      .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
     const salesRefunds = bankTransactions
       .filter(t => isInRange(t.date) && isSalesRefundTx(t))
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
@@ -422,7 +495,7 @@ const Reports: React.FC = () => {
       .filter(t => isInRange(t.date) && t.type === 'Withdrawal' && !isInternalCashTransfer(t))
       .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
-    const totalOutflows = milkPaid + supplierPayments + materialPaid + expensesPaid + salesRefunds + bankWithdrawals;
+    const totalOutflows = milkPaid + supplierPayments + materialPaid + expensesPaid + vendorPayments + salesRefunds + bankWithdrawals;
     const netCashFlow = totalInflows - totalOutflows;
     const totalLiquidAccounts = accounts.reduce((sum, a) => sum + (a.balance || 0), 0);
 
@@ -433,22 +506,22 @@ const Reports: React.FC = () => {
     ];
 
     return {
-      posCashSales, custPayments, purchaseReturnIn, bankDeposits, totalInflows,
-      milkPaid, supplierPayments, materialPaid, expensesPaid, salesRefunds, bankWithdrawals, totalOutflows,
+      posCashSales, posOnlineSales, custPayments, dailySupplyReceipts, purchaseReturnIn, bankDeposits, totalInflows,
+      milkPaid, supplierPayments, materialPaid, expensesPaid, vendorPayments, salesRefunds, bankWithdrawals, totalOutflows,
       netCashFlow, totalLiquidAccounts, comparisonData
     };
-  }, [sales, purchases, materialPurchases, expenses, customerTransactions, supplierTransactions, bankTransactions, accounts, dateRange]);
+  }, [sales, purchases, materialPurchases, expenses, customerTransactions, supplierTransactions, expenseVendorTransactions, dailySupplyEntries, bankTransactions, accounts, dateRange]);
 
   // --- REPORT 4: Comprehensive Day Book (Daily Business Summary) ---
   const dayBookData = useMemo(() => {
     // 1. Filter basic entities by date range
-    const validSales = sales.filter(s => isInRange(s.date) && s.status !== 'Returned');
+    const validSales = sales.filter(s => isInRange(s.date) && s.status !== 'Returned' && s.status !== 'Cancelled');
     const validPurchases = purchases.filter(p => isInRange(p.date) && p.status !== 'Returned' && p.status !== 'Cancelled');
-    const validMaterialPurchases = materialPurchases.filter(p => isInRange(p.date) && p.status !== 'Returned');
-    const validExpenses = expenses.filter(e => isInRange(e.date));
+    const validMaterialPurchases = materialPurchases.filter(p => isInRange(p.date) && p.status !== 'Returned' && p.status !== 'Cancelled');
+    const validExpenses = expenses.filter(e => isInRange(e.date) && (e as any).status !== 'Cancelled' && (e as any).status !== 'Returned');
     const validCustTxns = customerTransactions.filter(t => isInRange(t.date));
     const validSuppTxns = supplierTransactions.filter(t => isInRange(t.date));
-    const validSupply = dailySupplyEntries.filter(s => isInRange(s.date));
+    const validSupply = dailySupplyEntries.filter(s => isInRange(s.date) && s.details?.status !== 'Cancelled' && s.details?.status !== 'Pending');
     const validBatches = productionBatches.filter(b => isInRange(b.start_date || b.created_at) && b.status !== 'Cancelled');
 
     // 2. Milk Intake & Procurement
@@ -508,17 +581,30 @@ const Reports: React.FC = () => {
         const itName = it.name || 'Unknown Item';
         const itQty = Number(it.qty !== undefined ? it.qty : (it.quantity || 0));
         const itUnit = it.unit || 'unit';
-        const itRev = Number(it.customTotal !== undefined ? it.customTotal : (itQty * (Number(it.price || it.selling_price || 0))));
+        const grossRev = Number(it.total ?? it.customTotal ?? (itQty * (Number(it.price || it.selling_price || 0)))) || 0;
+        // Refunded quantity of this exact line (same item and same pack size) is not a sale.
+        const netQty = Math.max(0, itQty - returnedQtyForLine(s, it));
+        const itRev = itQty > 0 ? grossRev * (netQty / itQty) : 0;
+        const catalogItem = items.find(ci => ci.id === it.itemId) || items.find(ci => ci.name.toLowerCase() === itName.toLowerCase());
+        const stockLine = saleLineStock({ ...it, qty: netQty }, catalogItem);
 
-        if (!productSalesMap[itName]) {
-          productSalesMap[itName] = { name: itName, qty: 0, unit: itUnit, revenue: 0, ordersCount: 0 };
+        // Group by product and sell unit so 1 kg and Pao lines are never added together.
+        const key = `${it.itemId || itName}::${stockLine.variantId || (it.variantId && it.variantId !== 'loose' && !it.isLoose ? it.variantId : 'loose')}`;
+        const label = it.variantName && !it.isLoose && !itName.includes(it.variantName) ? `${itName} (${it.variantName})` : itName;
+        if (!productSalesMap[key]) {
+          productSalesMap[key] = { name: label, qty: 0, unit: itUnit, revenue: 0, ordersCount: 0 };
         }
-        productSalesMap[itName].qty += itQty;
-        productSalesMap[itName].revenue += itRev;
-        productSalesMap[itName].ordersCount += 1;
+        productSalesMap[key].qty += netQty;
+        productSalesMap[key].revenue += itRev;
+        productSalesMap[key].ordersCount += 1;
 
-        if (itUnit === 'L' || itName.toLowerCase().includes('milk')) {
-          counterMilkLitres += itQty;
+        // Counter milk litres follow the product's base unit; packs contribute qty x contains.
+        const baseUnit = it.baseUnit || catalogItem?.unit || (!it.variantId || it.isLoose ? itUnit : '');
+        const litreFactor = litresPerBaseUnit(baseUnit);
+        const milkText = `${itName} ${(catalogItem?.category || []).join(' ')}`.toLowerCase();
+        const isMilk = /\b(milk|doodh)\b/.test(milkText) && !/\b(powder|shake|flavou?red|condensed)\b/.test(milkText);
+        if (litreFactor > 0 && isMilk) {
+          counterMilkLitres += stockLine.baseQty * litreFactor;
           counterMilkRevenue += itRev;
         }
       });
@@ -648,7 +734,7 @@ const Reports: React.FC = () => {
         }
       }
     } else {
-      shiftOpeningFloat = 5000;
+      shiftOpeningFloat = 0;
     }
 
     const expectedClosingCash = shiftOpeningFloat + totalCashInflow - totalCashOutflow;
@@ -698,14 +784,17 @@ const Reports: React.FC = () => {
 
     // Daily Supply
     validSupply.forEach(s => {
+      const rec = Number(s.details?.payment_received) || 0;
+      const total = Number(s.total_amount) || 0;
+      const isCredit = rec < total;
       rawEvents.push({
         date: s.date,
-        desc: `Milk Supply: ${s.customer_name || 'Customer'} (${s.quantity || 0} L)`,
-        category: 'Daily Supply',
-        group: 'Income',
+        desc: `Milk Supply: ${s.customer_name || 'Customer'} (${s.quantity || 0} L)${isCredit ? ` [Cash: Rs ${rec}, Due: Rs ${total - rec}]` : ''}`,
+        category: isCredit ? 'Credit Milk Supply' : 'Daily Supply',
+        group: rec > 0 ? 'Income' : 'Credit',
         ref: s.id,
         type: 'Income',
-        inflow: s.total_amount || 0,
+        inflow: rec,
         outflow: 0,
         party: s.customer_name
       });
@@ -909,7 +998,7 @@ const Reports: React.FC = () => {
         totalExpenses,
         expensesByCategory: Object.values(expensesByCategory),
         otherSupplierPayments,
-        materialCashPaid,
+        materialCashPaid: materialCashPaidTotal,
         totalCashOutflow
       },
       credit: {
@@ -1043,6 +1132,8 @@ const Reports: React.FC = () => {
       revenue: number;
       orderCount: number;
       costPrice: number;
+      /** Cost of the quantity sold, added line by line. */
+      cost: number;
     }> = {};
 
     // Initialize from catalog
@@ -1056,37 +1147,62 @@ const Reports: React.FC = () => {
         quantity: 0,
         revenue: 0,
         orderCount: 0,
-        costPrice: i.cost_price || (i.selling_price ? i.selling_price * 0.75 : 0)
+        costPrice: Number(i.cost_price) || 0,
+        cost: 0
       };
     });
 
-    // Populate from POS sales
-    sales.filter(s => isInRange(s.date) && s.status !== 'Returned').forEach(bill => {
+    // Populate from POS sales. Quantities are summed in each product's base unit.
+    sales.filter(s => isInRange(s.date) && s.status !== 'Returned' && s.status !== 'Cancelled').forEach(bill => {
+      const subtotal = Number(bill.subtotal || bill.total || 0);
+      const discount = Number(bill.discount || 0);
+      const discountRatio = subtotal > 0 ? (discount / subtotal) : 0;
+
       (bill.items || []).forEach(item => {
-        const key = item.itemId || item.name;
+        const catalogItem = items.find(ci => ci.id === item.itemId) || items.find(ci => ci.name.toLowerCase() === item.name.toLowerCase());
+        const key = catalogItem?.id || item.itemId || item.name;
+        const baseCost = Number(catalogItem?.cost_price) || 0;
+
         if (!itemMap[key]) {
           itemMap[key] = {
             id: key,
             name: item.name,
-            category: 'Store Product',
-            unit: item.unit || 'Unit',
+            category: catalogItem ? (Array.isArray(catalogItem.category) ? catalogItem.category[0] : (catalogItem.category || 'Store Product')) : 'Store Product',
+            unit: catalogItem?.unit || (item as any).baseUnit || (!item.variantId ? item.unit : '') || 'Unit',
             quantity: 0,
             revenue: 0,
             orderCount: 0,
-            costPrice: (item.price || 0) * 0.75
+            costPrice: baseCost,
+            cost: 0
           };
         }
-        itemMap[key].quantity += item.qty || 0;
-        itemMap[key].revenue += item.total || ((item.qty || 0) * (item.price || 0));
-        itemMap[key].orderCount += 1;
+
+        // Returns count only against the same item and the same sell unit.
+        const retQty = returnedQtyForLine(bill, item);
+        const originalQty = Number(item.qty) || 0;
+        const netQty = Math.max(0, originalQty - retQty);
+        const lineGross = Number(item.total) || (originalQty * (Number(item.price) || 0));
+        const netLineRevenue = originalQty > 0 ? ((netQty / originalQty) * lineGross * (1 - discountRatio)) : 0;
+        const stockLine = saleLineStock({ ...item, qty: netQty }, catalogItem);
+        // Saved cost_price is per sold unit (pack cost on pack lines); old bills fall back to catalog base cost.
+        const lineUnitCost = Number((item as any).cost_price) || 0;
+        const lineCost = lineUnitCost > 0 ? lineUnitCost * netQty : baseCost * stockLine.baseQty;
+
+        itemMap[key].quantity += stockLine.baseQty;
+        itemMap[key].revenue += netLineRevenue;
+        itemMap[key].cost += lineCost;
+        if (netQty > 0) itemMap[key].orderCount += 1;
       });
     });
 
     // Populate from Daily Supply (Fresh Milk)
-    const totalMilkSupplyRev = dailySupplyEntries.filter(s => isInRange(s.date)).reduce((sum, s) => sum + (s.total_amount || 0), 0);
-    const totalMilkSupplyQty = dailySupplyEntries.filter(s => isInRange(s.date)).reduce((sum, s) => sum + (s.quantity || 0), 0);
+    const validSupplyEntries = dailySupplyEntries.filter(s => isInRange(s.date) && s.details?.status !== 'Cancelled' && s.details?.status !== 'Pending');
+    const totalMilkSupplyRev = validSupplyEntries.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0);
+    const totalMilkSupplyQty = validSupplyEntries.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
     if (totalMilkSupplyQty > 0) {
       const supplyKey = 'daily_supply_milk';
+      const milkItem = items.find(i => i.name.toLowerCase().includes('milk'));
+      const milkCost = Number(milkItem?.cost_price) || (totalMilkSupplyRev / totalMilkSupplyQty);
       itemMap[supplyKey] = {
         id: supplyKey,
         name: 'Fresh Milk (Daily Supply Delivery)',
@@ -1094,8 +1210,9 @@ const Reports: React.FC = () => {
         unit: 'Liters',
         quantity: totalMilkSupplyQty,
         revenue: totalMilkSupplyRev,
-        orderCount: dailySupplyEntries.filter(s => isInRange(s.date)).length,
-        costPrice: totalMilkSupplyRev > 0 ? (totalMilkSupplyRev / totalMilkSupplyQty) * 0.75 : 0
+        orderCount: validSupplyEntries.length,
+        costPrice: milkCost,
+        cost: milkCost * totalMilkSupplyQty
       };
     }
 
@@ -1103,8 +1220,9 @@ const Reports: React.FC = () => {
     const totalGrossRevenue = aggregated.reduce((s, i) => s + i.revenue, 0);
 
     let list = aggregated.map(i => {
+      // Rate and cost are per base unit, matching the base-unit quantity.
       const avgRate = i.quantity > 0 ? (i.revenue / i.quantity) : 0;
-      const estCost = i.costPrice * i.quantity;
+      const estCost = i.cost;
       const estProfit = i.revenue - estCost;
       const margin = i.revenue > 0 ? (estProfit / i.revenue) * 100 : 0;
       const share = totalGrossRevenue > 0 ? (i.revenue / totalGrossRevenue) * 100 : 0;
@@ -1135,25 +1253,33 @@ const Reports: React.FC = () => {
       quantity: Math.round(i.quantity)
     }));
 
-    const totalUnitsSold = list.reduce((s, i) => s + i.quantity, 0);
+    // Different base units (kg, L, pcs) are never added together; totals are kept per unit.
+    const unitsSoldMap: Record<string, number> = {};
+    list.forEach(i => { unitsSoldMap[i.unit] = (unitsSoldMap[i.unit] || 0) + i.quantity; });
+    const unitsSold = Object.entries(unitsSoldMap).map(([unit, quantity]) => ({ unit, quantity }));
+    const totalUnitsSold = unitsSold.length === 1 ? unitsSold[0].quantity : 0;
 
-    return { list, totalRevenue: totalGrossRevenue, totalUnitsSold, categoryPie, topItemsChart };
+    return { list, totalRevenue: totalGrossRevenue, totalUnitsSold, unitsSold, categoryPie, topItemsChart };
   }, [sales, dailySupplyEntries, items, dateRange, selectedItemId, searchQuery]);
 
   // --- REPORT 7: Stock Valuation Summary ---
   const stockValuationData = useMemo(() => {
     const list = items.map(item => {
       const inv = inventory.find(i => i.item_id === item.id || i.name === item.name);
-      const looseStock = inv ? (inv.quantity || 0) : (item.stock || 0);
+      const looseStock = inv ? (Number(inv.quantity) || 0) : (Number(item.stock) || 0);
       const variantStocks = inv?.variant_stocks || item.variant_stocks || {};
-      const totalVariantsUnits = Object.values(variantStocks).reduce<number>((sum, v) => sum + (Number(v) || 0), 0);
-      const totalBaseQty = looseStock + totalVariantsUnits;
+      // Only active pre-packed sizes hold their own count; multi-unit sizes draw from loose stock.
+      const valuation = itemStockValue(item, looseStock, variantStocks);
+      const totalVariantsUnits = valuation.packs.reduce((sum, p) => sum + p.count, 0);
+      const packBreakdown = valuation.packs.filter(p => p.count !== 0).map(p => `${roundQuantity(p.count)} × ${p.name}`).join(', ');
+      const totalBaseQty = roundQuantity(valuation.totalBaseQty);
 
-      const costPrice = item.cost_price || ((item.selling_price || 0) * 0.75);
-      const sellingPrice = item.selling_price || 0;
-      const valuationCost = totalBaseQty * costPrice;
-      const retailWorth = totalBaseQty * sellingPrice;
-      const potentialProfit = retailWorth - valuationCost;
+      const costPrice = Number(item.cost_price) || 0;
+      const sellingPrice = Number(item.selling_price) || 0;
+      const costMissing = valuation.costMissing;
+      const valuationCost = roundCurrency(valuation.costValue);
+      const retailWorth = roundCurrency(valuation.retailValue);
+      const potentialProfit = roundCurrency(retailWorth - valuationCost);
 
       const cat = Array.isArray(item.category) ? item.category.join(', ') : (item.category || 'General');
 
@@ -1164,7 +1290,9 @@ const Reports: React.FC = () => {
         unit: item.unit || 'Unit',
         looseStock,
         totalVariantsUnits,
+        packBreakdown,
         totalBaseQty,
+        costMissing,
         costPrice,
         sellingPrice,
         valuationCost,
@@ -1205,87 +1333,95 @@ const Reports: React.FC = () => {
       qtyOut: number;
     }[] = [];
 
-    // Purchases (Material)
-    materialPurchases.filter(p => (p.item_id === selectedItemId || p.item_name === itemName) && isInRange(p.date) && p.status !== 'Returned').forEach(p => {
-      events.push({
-        date: p.date,
-        desc: `Material Purchase (Supplier: ${p.supplier_id || 'Direct'})`,
-        type: 'IN',
-        ref: p.id,
-        qtyIn: p.quantity || 0,
-        qtyOut: 0
+    // This is the loose (main) stock ledger in the item's base unit.
+    // Pre-packed sizes keep their own count; their movements are listed as pack rows that do not touch loose stock.
+    const sinceStart = (d?: string) => !!d && normalizeDate(d) >= dateRange.start;
+    const afterEnd = (d?: string) => !!d && normalizeDate(d) > dateRange.end;
+    const pushLoose = (date: string, desc: string, ref: string, delta: number) => {
+      if (!delta) return;
+      events.push({ date, desc, type: delta >= 0 ? 'IN' : 'OUT', ref, qtyIn: delta > 0 ? delta : 0, qtyOut: delta < 0 ? -delta : 0 });
+    };
+    const pushPack = (date: string, desc: string, ref: string, packDelta: number, packName: string) => {
+      if (!packDelta) return;
+      events.push({ date, desc: `${desc} [Pack stock ${packDelta > 0 ? '+' : ''}${roundQuantity(packDelta)} × ${packName}, not loose]`, type: packDelta >= 0 ? 'IN' : 'OUT', ref, qtyIn: 0, qtyOut: 0 });
+    };
+    const variantName = (id?: string) => (selectedItem?.variants || []).find(v => v.id === id)?.name || 'pack';
+
+    // Purchases (Material); quantity is already net of supplier returns, so 'Supply Return' logs are skipped below.
+    materialPurchases.filter(p => (p.item_id === selectedItemId || p.item_name === itemName) && sinceStart(p.date) && p.status !== 'Returned' && p.status !== 'Cancelled').forEach(p => {
+      const conv = Number((p as any).details?.conversion_factor || p.conversion_factor) || 1;
+      const baseQty = roundQuantity((Number(p.quantity) || 0) * conv);
+      const packId = (p as any).details?.variant_id || (p as any).variant_id;
+      const desc = `Material Purchase (Supplier: ${p.supplier_id || 'Direct'})${conv > 1 ? ` (${p.quantity} ${p.unit} = ${baseQty} base units)` : ''}`;
+      if (packId || (p as any).details?.stocked_as === 'packs') pushPack(p.date, desc, p.id, Number(p.quantity) || 0, variantName(packId));
+      else pushLoose(p.date, desc, p.id, baseQty);
+    });
+
+    // Raw milk purchases are NOT counter stock until allocated; allocations arrive below through their stock logs.
+
+    // POS Sales: the full sale leaves stock on the bill date; restocked returns come back through 'Sales Return' logs.
+    sales.filter(s => sinceStart(s.date) && s.status !== 'Cancelled' && s.status !== 'Draft').forEach(s => {
+      const matchingLines = (s.items || []).filter(i => i.itemId === selectedItemId || (!i.itemId && i.name === itemName));
+      matchingLines.forEach(line => {
+        const stockLine = saleLineStock(line, selectedItem);
+        const desc = `POS Sale #${s.bill_number || s.id.slice(0, 6)}${line.variantId ? ` (${line.name})` : ''}`;
+        if (stockLine.fromBase) pushLoose(s.date, desc, s.bill_number || s.id, -stockLine.baseQty);
+        else pushPack(s.date, desc, s.bill_number || s.id, -stockLine.stockQty, line.variantName || variantName(stockLine.variantId));
       });
     });
 
-    // Purchases (Milk)
-    if (itemName.toLowerCase().includes('milk') || selectedItem?.category?.toString().toLowerCase().includes('milk')) {
-      purchases.filter(p => isInRange(p.date) && p.status !== 'Returned' && p.status !== 'Cancelled').forEach(p => {
-        const sup = suppliers.find(s => s.id === p.supplier_id);
-        events.push({
-          date: p.date,
-          desc: `Milk Procurement: ${sup?.name || 'Farmer'} (${p.shift || 'Shift'})`,
-          type: 'IN',
-          ref: p.id,
-          qtyIn: p.quantity || 0,
-          qtyOut: 0
-        });
-      });
-    }
+    // Production: only completed batches, on their completion date, and only the loose part of the output.
+    productionBatches.filter(b => {
+      const done = String(b.status || '').toLowerCase() === 'completed';
+      const sameItem = (b as any).item_id ? (b as any).item_id === selectedItemId : b.product_name === itemName;
+      return done && sameItem && sinceStart(b.completed_date || b.start_date);
+    }).forEach(b => {
+      const output = (b as any).output_breakdown || b.details?.output_breakdown;
+      const prodLog = inventoryLogs.find(l => l.id === `log_prod_${b.id}`);
+      const looseOut = output && output.loose_qty !== undefined && output.loose_qty !== null
+        ? Number(output.loose_qty) || 0
+        : prodLog ? Number(prodLog.difference) || 0 : Number(b.quantity_output_actual) || 0;
+      const date = b.completed_date || b.start_date;
+      pushLoose(date, `Production Finished Yield (Batch #${b.batch_number})`, b.batch_number, looseOut);
+      ((output?.variants || []) as any[]).forEach(v => pushPack(date, `Production Packed (Batch #${b.batch_number})`, b.batch_number, Number(v.count) || 0, v.variant_name || variantName(v.variantId || v.variant_id)));
+    });
 
-    // POS Sales
-    sales.filter(s => isInRange(s.date) && s.status !== 'Returned').forEach(s => {
-      const line = (s.items || []).find(i => i.itemId === selectedItemId || i.name === itemName);
-      if (line) {
-        events.push({
-          date: s.date,
-          desc: `POS Sale #${s.bill_number || s.id.slice(0, 6)}`,
-          type: 'OUT',
-          ref: s.bill_number || s.id,
-          qtyIn: 0,
-          qtyOut: line.qty || 0
-        });
+    // Inventory logs: adjustments, allocations, returns and usage. Documents above own purchase, production and sale movement.
+    const documentReasons = ['purchase', 'production', 'sale', 'pos sale', 'supply return'];
+    inventoryLogs.filter(l => l.item_id === selectedItemId && sinceStart(l.date) && !documentReasons.includes(String(l.reason || '').trim().toLowerCase())).forEach(l => {
+      const desc = `Manual Adjustment / Log: ${l.reason || 'Audit'}`;
+      const details = (l as any).details || {};
+      if (details.variant_id) {
+        pushPack(l.date, desc, 'Audit Log', Number(details.variant_delta) || 0, variantName(details.variant_id));
+        pushLoose(l.date, desc, 'Audit Log', Number(details.loose_delta) || 0);
+        return;
       }
-    });
-
-    // Production outputs / batches
-    productionBatches.filter(b => isInRange(b.start_date) && b.product_name === itemName).forEach(b => {
-      events.push({
-        date: b.start_date,
-        desc: `Production Finished Yield (Batch #${b.batch_number})`,
-        type: 'IN',
-        ref: b.batch_number,
-        qtyIn: b.quantity_output_actual || b.quantity_output_estimated || 0,
-        qtyOut: 0
-      });
-    });
-
-    // Inventory audit logs
-    inventoryLogs.filter(l => l.item_id === selectedItemId && isInRange(l.date)).forEach(l => {
-      const diff = l.difference || 0;
-      events.push({
-        date: l.date,
-        desc: `Manual Adjustment / Log: ${l.reason || 'Audit'}`,
-        type: diff >= 0 ? 'IN' : 'OUT',
-        ref: 'Audit Log',
-        qtyIn: diff >= 0 ? diff : 0,
-        qtyOut: diff < 0 ? Math.abs(diff) : 0
-      });
+      // Older pack audits stored a pack-count difference without naming the pack; keep it out of loose stock.
+      if (details.loose_delta === undefined && /variant/i.test(String(l.notes || ''))) {
+        if (Number(l.difference)) events.push({ date: l.date, desc: `${desc} [Pack stock ${Number(l.difference) > 0 ? '+' : ''}${roundQuantity(Number(l.difference))}, not loose]`, type: Number(l.difference) >= 0 ? 'IN' : 'OUT', ref: 'Audit Log', qtyIn: 0, qtyOut: 0 });
+        return;
+      }
+      pushLoose(l.date, desc, 'Audit Log', Number(l.difference) || 0);
     });
 
     // Chronological sort
     events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Current stock as closing, calculate opening
+    // Current stock is today's balance. Opening = current minus every movement since the range start,
+    // including movements after the range end. Negatives are shown, not hidden.
     const inv = inventory.find(i => i.item_id === selectedItemId || i.name === itemName);
-    const currentStock = inv ? (inv.quantity || 0) : (selectedItem?.stock || 0);
+    const currentStock = Number(inv ? inv.quantity : selectedItem?.stock) || 0;
 
-    const totalIn = events.reduce((s, e) => s + e.qtyIn, 0);
-    const totalOut = events.reduce((s, e) => s + e.qtyOut, 0);
-    const openingStock = Math.max(0, currentStock - (totalIn - totalOut));
+    const netSinceStart = events.reduce((s, e) => s + e.qtyIn - e.qtyOut, 0);
+    const openingStock = roundQuantity(currentStock - netSinceStart);
+    const inRangeEvents = events.filter(e => !afterEnd(e.date));
+
+    const totalIn = inRangeEvents.reduce((s, e) => s + e.qtyIn, 0);
+    const totalOut = inRangeEvents.reduce((s, e) => s + e.qtyOut, 0);
 
     let running = openingStock;
-    const withRunning = events.map(e => {
-      running += (e.qtyIn - e.qtyOut);
+    const withRunning = inRangeEvents.map(e => {
+      running = roundQuantity(running + e.qtyIn - e.qtyOut);
       return { ...e, runningQty: running };
     });
 
@@ -1778,41 +1914,41 @@ const Reports: React.FC = () => {
     lines.push(`👤 *Prepared By:* ${currentUser?.name || 'Administrator'}`);
     lines.push(`----------------------------------------`);
     lines.push(`🥛 *1. MILK RECONCILIATION*`);
-    lines.push(`• Total Intake: *${dayBookData.milk.totalMilkInLitres.toFixed(1)} L* (Rs ${Math.round(dayBookData.milk.totalMilkInCost).toLocaleString()})`);
+    lines.push(`• Total Intake: *${dayBookData.milk.totalMilkInLitres.toFixed(1)} L* (${formatCurrency(Math.round(dayBookData.milk.totalMilkInCost))})`);
     lines.push(`  - Cow Milk: ${dayBookData.milk.cowLitresIn.toFixed(1)} L | Buffalo Milk: ${dayBookData.milk.buffaloLitresIn.toFixed(1)} L`);
-    lines.push(`• Counter Sales: *${dayBookData.milk.counterMilkLitres.toFixed(1)} L* (Rs ${Math.round(dayBookData.milk.counterMilkRevenue).toLocaleString()})`);
+    lines.push(`• Counter Sales: *${dayBookData.milk.counterMilkLitres.toFixed(1)} L* (${formatCurrency(Math.round(dayBookData.milk.counterMilkRevenue))})`);
     lines.push(`• Factory / Production: *${dayBookData.milk.productionMilkLitres.toFixed(1)} L*`);
     lines.push(`• Closing Chiller Stock: *${dayBookData.milk.liveTotalMilkStock.toFixed(1)} L*`);
     lines.push(``);
     lines.push(`💵 *2. MONEY IN (INFLOWS)*`);
-    lines.push(`• Cash Counter Sales: +Rs ${Math.round(dayBookData.inflows.posCashSales).toLocaleString()} (${dayBookData.inflows.posCashBillsCount} bills)`);
-    if (dayBookData.inflows.posOnlineSales > 0) lines.push(`• Digital / Bank Sales: +Rs ${Math.round(dayBookData.inflows.posOnlineSales).toLocaleString()}`);
-    if (dayBookData.inflows.customerCollections > 0) lines.push(`• Customer Debt Recoveries: +Rs ${Math.round(dayBookData.inflows.customerCollections).toLocaleString()}`);
-    lines.push(`👉 *Total Money In: +Rs ${Math.round(dayBookData.inflows.totalAllInflows).toLocaleString()}*`);
+    lines.push(`• Cash Counter Sales: +${formatCurrency(Math.round(dayBookData.inflows.posCashSales))} (${dayBookData.inflows.posCashBillsCount} bills)`);
+    if (dayBookData.inflows.posOnlineSales > 0) lines.push(`• Digital / Bank Sales: +${formatCurrency(Math.round(dayBookData.inflows.posOnlineSales))}`);
+    if (dayBookData.inflows.customerCollections > 0) lines.push(`• Customer Debt Recoveries: +${formatCurrency(Math.round(dayBookData.inflows.customerCollections))}`);
+    lines.push(`👉 *Total Money In: +${formatCurrency(Math.round(dayBookData.inflows.totalAllInflows))}*`);
     lines.push(``);
     lines.push(`💸 *3. MONEY OUT (EXPENSES & OUTFLOWS)*`);
-    lines.push(`• Spot Milk Cash: -Rs ${Math.round(dayBookData.outflows.spotMilkPaid).toLocaleString()}`);
-    lines.push(`• Operating Overheads: -Rs ${Math.round(dayBookData.outflows.totalExpenses).toLocaleString()}`);
-    if (dayBookData.outflows.otherSupplierPayments > 0) lines.push(`• Supplier Payments: -Rs ${Math.round(dayBookData.outflows.otherSupplierPayments).toLocaleString()}`);
-    if (dayBookData.outflows.materialCashPaid > 0) lines.push(`• Material Purchases: -Rs ${Math.round(dayBookData.outflows.materialCashPaid).toLocaleString()}`);
-    lines.push(`👉 *Total Money Out: -Rs ${Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}*`);
+    lines.push(`• Spot Milk Cash: -${formatCurrency(Math.round(dayBookData.outflows.spotMilkPaid))}`);
+    lines.push(`• Operating Overheads: -${formatCurrency(Math.round(dayBookData.outflows.totalExpenses))}`);
+    if (dayBookData.outflows.otherSupplierPayments > 0) lines.push(`• Supplier Payments: -${formatCurrency(Math.round(dayBookData.outflows.otherSupplierPayments))}`);
+    if (dayBookData.outflows.materialCashPaid > 0) lines.push(`• Material Purchases: -${formatCurrency(Math.round(dayBookData.outflows.materialCashPaid))}`);
+    lines.push(`👉 *Total Money Out: -${formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}*`);
     lines.push(``);
     lines.push(`📒 *4. CREDIT & WORKING CAPITAL*`);
-    lines.push(`• New Customer Credit: Rs ${Math.round(dayBookData.credit.posCreditSales).toLocaleString()} (${dayBookData.credit.posCreditBillsCount} bills)`);
-    lines.push(`• Debt Collected: Rs ${Math.round(dayBookData.credit.customerCollections).toLocaleString()}`);
-    lines.push(`• Supplier Milk Payables Accrued: Rs ${Math.round(dayBookData.credit.milkAccruedCredit).toLocaleString()}`);
+    lines.push(`• New Customer Credit: ${formatCurrency(Math.round(dayBookData.credit.posCreditSales))} (${dayBookData.credit.posCreditBillsCount} bills)`);
+    lines.push(`• Debt Collected: ${formatCurrency(Math.round(dayBookData.credit.customerCollections))}`);
+    lines.push(`• Supplier Milk Payables Accrued: ${formatCurrency(Math.round(dayBookData.credit.milkAccruedCredit))}`);
     lines.push(``);
     lines.push(`🗄️ *5. CASH DRAWER AUDIT*`);
-    lines.push(`• Opening Float: Rs ${Math.round(dayBookData.drawer.shiftOpeningFloat).toLocaleString()}`);
-    lines.push(`• Total Inflows: +Rs ${Math.round(dayBookData.inflows.totalCashInflow).toLocaleString()}`);
-    lines.push(`• Total Outflows: -Rs ${Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}`);
-    lines.push(`👉 *Expected Cash in Drawer: Rs ${Math.round(dayBookData.drawer.expectedClosingCash).toLocaleString()}*`);
+    lines.push(`• Opening Float: ${formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}`);
+    lines.push(`• Total Inflows: +${formatCurrency(Math.round(dayBookData.inflows.totalCashInflow))}`);
+    lines.push(`• Total Outflows: -${formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}`);
+    lines.push(`👉 *Expected Cash in Drawer: ${formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}*`);
     lines.push(``);
     lines.push(`📊 *6. ESTIMATED PROFIT*`);
-    lines.push(`• Gross Sales Revenue: Rs ${Math.round(dayBookData.profit.totalRevenue).toLocaleString()}`);
-    lines.push(`• Cost of Goods Sold: -Rs ${Math.round(dayBookData.profit.estimatedCOGS).toLocaleString()}`);
-    lines.push(`• Operating Expenses: -Rs ${Math.round(dayBookData.profit.totalExpenses).toLocaleString()}`);
-    lines.push(`🏆 *Estimated Net Profit: +Rs ${Math.round(dayBookData.profit.estimatedNetProfit).toLocaleString()}*`);
+    lines.push(`• Gross Sales Revenue: ${formatCurrency(Math.round(dayBookData.profit.totalRevenue))}`);
+    lines.push(`• Cost of Goods Sold: -${formatCurrency(Math.round(dayBookData.profit.estimatedCOGS))}`);
+    lines.push(`• Operating Expenses: -${formatCurrency(Math.round(dayBookData.profit.totalExpenses))}`);
+    lines.push(`🏆 *Estimated Net Profit: +${formatCurrency(Math.round(dayBookData.profit.estimatedNetProfit))}*`);
     lines.push(`----------------------------------------`);
     lines.push(`_Automated Official Daily Record • Mooco Dairy ERP_`);
 
@@ -1895,7 +2031,7 @@ const Reports: React.FC = () => {
       });
 
       const imgData = canvas.toDataURL('image/png');
-      const filenameDate = dateRange.start || new Date().toISOString().split('T')[0];
+      const filenameDate = dateRange.start || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
 
       if (dayBookPrintFormat === 'a4') {
         const pdf = new jsPDF({
@@ -2050,13 +2186,13 @@ const Reports: React.FC = () => {
     lines.push(`⏰ *Time:* ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
     lines.push(`👤 *Prepared By:* ${currentUser?.name || 'Administrator'}`);
     lines.push(`----------------------------------------`);
-    lines.push(`💰 *Total Outstanding Dues:* Rs ${Math.round(customerPrintData.totalReceivables).toLocaleString()} Dr`);
+    lines.push(`💰 *Total Outstanding Dues:* ${formatCurrency(Math.round(customerPrintData.totalReceivables))} Dr`);
     lines.push(`👥 *Owing Customers:* ${customerPrintData.debtorCount} of ${customerPrintData.totalCount}`);
     if (customerPrintData.totalAdvances > 0) {
-      lines.push(`🛡️ *Advance Deposits (Cr):* Rs ${Math.round(customerPrintData.totalAdvances).toLocaleString()} (${customerPrintData.advanceCount} cust)`);
+      lines.push(`🛡️ *Advance Deposits (Cr):* ${formatCurrency(Math.round(customerPrintData.totalAdvances))} (${customerPrintData.advanceCount} cust)`);
     }
     if (customerPrintData.totalPeriodCollections > 0) {
-      lines.push(`💵 *Period Recoveries:* Rs ${Math.round(customerPrintData.totalPeriodCollections).toLocaleString()}`);
+      lines.push(`💵 *Period Recoveries:* ${formatCurrency(Math.round(customerPrintData.totalPeriodCollections))}`);
     }
     lines.push(`----------------------------------------`);
     lines.push(`*TOP OUTSTANDING BALANCES:*`);
@@ -2064,7 +2200,7 @@ const Reports: React.FC = () => {
     topDebtors.forEach((c, idx) => {
       const routeText = c.route !== '-' ? ` [${c.route}]` : '';
       const phoneText = c.phone !== '-' ? ` 📱 ${c.phone}` : '';
-      lines.push(`${idx + 1}. *${c.name}*${routeText}: Rs ${Math.round(c.balance).toLocaleString()} Dr${phoneText}`);
+      lines.push(`${idx + 1}. *${c.name}*${routeText}: ${formatCurrency(Math.round(c.balance))} Dr${phoneText}`);
     });
     if (customerPrintData.debtorCount > 15) {
       lines.push(`... and ${customerPrintData.debtorCount - 15} more customers.`);
@@ -2151,7 +2287,7 @@ const Reports: React.FC = () => {
       });
 
       const imgData = canvas.toDataURL('image/png');
-      const filenameDate = new Date().toISOString().split('T')[0];
+      const filenameDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
 
       if (customerPrintFormat === 'a4') {
         const pdf = new jsPDF({
@@ -3166,7 +3302,7 @@ const Reports: React.FC = () => {
                             Reconciliation Formula:
                           </span>
                           <span>
-                            Received ({dayBookData.milk.totalMilkInLitres.toFixed(1)} L) &minus; Counter Sales ({dayBookData.milk.counterMilkLitres.toFixed(1)} L) &minus; Factory Usage ({dayBookData.milk.productionMilkLitres.toFixed(1)} L) = Closing Balance ({Math.max(0, dayBookData.milk.totalMilkInLitres - dayBookData.milk.counterMilkLitres - dayBookData.milk.productionMilkLitres).toFixed(1)} L)
+                            Received ({dayBookData.milk.totalMilkInLitres.toFixed(1)} L) &minus; Counter Sales ({dayBookData.milk.counterMilkLitres.toFixed(1)} L) &minus; Factory Usage ({dayBookData.milk.productionMilkLitres.toFixed(1)} L) = Net for Period ({(dayBookData.milk.totalMilkInLitres - dayBookData.milk.counterMilkLitres - dayBookData.milk.productionMilkLitres).toFixed(1)} L)
                           </span>
                         </div>
                         {dayBookData.milk.milkSuppliersList.length > 0 && (
@@ -3929,13 +4065,13 @@ const Reports: React.FC = () => {
                                 <span className="text-base font-black font-mono text-sky-700 block mt-0.5">
                                   {dayBookData.milk.totalMilkInLitres.toFixed(1)} L
                                 </span>
-                                <span className="text-[9px] text-slate-500 font-mono">Cost: Rs {Math.round(dayBookData.milk.totalMilkInCost).toLocaleString()}</span>
+                                <span className="text-[9px] text-slate-500 font-mono">Cost: {formatCurrency(Math.round(dayBookData.milk.totalMilkInCost))}</span>
                               </div>
 
                               <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
                                 <span className="text-[10px] font-bold text-slate-600 uppercase block">Gross Sales</span>
                                 <span className="text-base font-black font-mono text-slate-900 block mt-0.5">
-                                  Rs {Math.round(dayBookData.profit.totalRevenue).toLocaleString()}
+                                  {formatCurrency(Math.round(dayBookData.profit.totalRevenue))}
                                 </span>
                                 <span className="text-[9px] text-slate-500">{dayBookData.inflows.totalSalesCount} Invoices</span>
                               </div>
@@ -3943,7 +4079,7 @@ const Reports: React.FC = () => {
                               <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2.5">
                                 <span className="text-[10px] font-bold text-emerald-800 uppercase block">Total Cash Inflow</span>
                                 <span className="text-base font-black font-mono text-emerald-700 block mt-0.5">
-                                  +Rs {Math.round(dayBookData.inflows.totalCashInflow).toLocaleString()}
+                                  +{formatCurrency(Math.round(dayBookData.inflows.totalCashInflow))}
                                 </span>
                                 <span className="text-[9px] text-slate-500">Sales + Debt Recv</span>
                               </div>
@@ -3951,7 +4087,7 @@ const Reports: React.FC = () => {
                               <div className="bg-rose-50/70 border border-rose-200 rounded-lg p-2.5">
                                 <span className="text-[10px] font-bold text-rose-800 uppercase block">Total Cash Outflow</span>
                                 <span className="text-base font-black font-mono text-rose-700 block mt-0.5">
-                                  -Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}
+                                  -{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}
                                 </span>
                                 <span className="text-[9px] text-slate-500">Milk + Expenses</span>
                               </div>
@@ -3959,15 +4095,15 @@ const Reports: React.FC = () => {
                               <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5">
                                 <span className="text-[10px] font-bold text-indigo-800 uppercase block">Expected Drawer</span>
                                 <span className="text-base font-black font-mono text-indigo-700 block mt-0.5">
-                                  Rs {Math.round(dayBookData.drawer.expectedClosingCash).toLocaleString()}
+                                  {formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}
                                 </span>
-                                <span className="text-[9px] text-slate-500">Float: Rs {Math.round(dayBookData.drawer.shiftOpeningFloat).toLocaleString()}</span>
+                                <span className="text-[9px] text-slate-500">Float: {formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}</span>
                               </div>
 
                               <div className="bg-lime-50/70 border border-lime-200 rounded-lg p-2.5">
                                 <span className="text-[10px] font-bold text-lime-800 uppercase block">Est. Net Profit</span>
                                 <span className="text-base font-black font-mono text-lime-800 block mt-0.5">
-                                  +Rs {Math.round(dayBookData.profit.estimatedNetProfit).toLocaleString()}
+                                  +{formatCurrency(Math.round(dayBookData.profit.estimatedNetProfit))}
                                 </span>
                                 <span className="text-[9px] text-slate-500">
                                   Margin: {dayBookData.profit.totalRevenue > 0 ? ((dayBookData.profit.estimatedNetProfit / dayBookData.profit.totalRevenue) * 100).toFixed(1) : 0}%
@@ -3998,14 +4134,14 @@ const Reports: React.FC = () => {
                                     <td className="border border-slate-200 p-1.5 text-right font-mono">{dayBookData.milk.cowLitresIn.toFixed(1)} L</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono">{dayBookData.milk.buffaloLitresIn.toFixed(1)} L</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono font-bold text-slate-900">{dayBookData.milk.totalMilkInLitres.toFixed(1)} L</td>
-                                    <td className="border border-slate-200 p-1.5 text-right font-mono font-bold text-slate-900">Cost: Rs {Math.round(dayBookData.milk.totalMilkInCost).toLocaleString()}</td>
+                                    <td className="border border-slate-200 p-1.5 text-right font-mono font-bold text-slate-900">Cost: {formatCurrency(Math.round(dayBookData.milk.totalMilkInCost))}</td>
                                   </tr>
                                   <tr>
                                     <td className="border border-slate-200 p-1.5">Counter Retail Sales</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono text-slate-400">-</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono text-slate-400">-</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono">{dayBookData.milk.counterMilkLitres.toFixed(1)} L</td>
-                                    <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+Rs {Math.round(dayBookData.milk.counterMilkRevenue).toLocaleString()}</td>
+                                    <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+{formatCurrency(Math.round(dayBookData.milk.counterMilkRevenue))}</td>
                                   </tr>
                                   <tr>
                                     <td className="border border-slate-200 p-1.5">Factory &amp; Sweets Production</td>
@@ -4019,7 +4155,7 @@ const Reports: React.FC = () => {
                                     <td className="border border-slate-200 p-1.5 text-right font-mono text-slate-400">-</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono text-slate-400">-</td>
                                     <td className="border border-slate-200 p-1.5 text-right font-mono">{dayBookData.milk.supplyMilkLitres.toFixed(1)} L</td>
-                                    <td className="border border-slate-200 p-1.5 text-right font-mono font-bold">+Rs {Math.round(dayBookData.milk.supplyMilkRevenue).toLocaleString()}</td>
+                                    <td className="border border-slate-200 p-1.5 text-right font-mono font-bold">+{formatCurrency(Math.round(dayBookData.milk.supplyMilkRevenue))}</td>
                                   </tr>
                                   <tr className="bg-sky-50 font-bold">
                                     <td className="border border-slate-200 p-1.5">Closing Physical Tank Inventory</td>
@@ -4054,9 +4190,9 @@ const Reports: React.FC = () => {
                                           <td className="border border-slate-200 p-1 text-right font-mono">{s.cowL > 0 ? s.cowL.toFixed(1) : '-'}</td>
                                           <td className="border border-slate-200 p-1 text-right font-mono">{s.buffL > 0 ? s.buffL.toFixed(1) : '-'}</td>
                                           <td className="border border-slate-200 p-1 text-right font-mono font-bold">{s.totalL.toFixed(1)}</td>
-                                          <td className="border border-slate-200 p-1 text-right font-mono">Rs {Math.round(s.totalAmt).toLocaleString()}</td>
-                                          <td className="border border-slate-200 p-1 text-right font-mono text-emerald-600">Rs {Math.round(s.paidAmt).toLocaleString()}</td>
-                                          <td className={`border border-slate-200 p-1 text-right font-mono ${s.dueAmt > 0 ? 'text-rose-600 font-bold' : ''}`}>Rs {Math.round(s.dueAmt).toLocaleString()}</td>
+                                          <td className="border border-slate-200 p-1 text-right font-mono">{formatCurrency(Math.round(s.totalAmt))}</td>
+                                          <td className="border border-slate-200 p-1 text-right font-mono text-emerald-600">{formatCurrency(Math.round(s.paidAmt))}</td>
+                                          <td className={`border border-slate-200 p-1 text-right font-mono ${s.dueAmt > 0 ? 'text-rose-600 font-bold' : ''}`}>{formatCurrency(Math.round(s.dueAmt))}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -4071,7 +4207,7 @@ const Reports: React.FC = () => {
                               <div className="space-y-2">
                                 <div className="bg-slate-100 px-3 py-1.5 rounded border-l-4 border-emerald-600 font-bold text-xs uppercase flex justify-between items-center text-slate-800">
                                   <span>2. Cash &amp; Revenue Inflows</span>
-                                  <span className="font-mono text-emerald-600 font-black">+Rs {Math.round(dayBookData.inflows.totalAllInflows).toLocaleString()}</span>
+                                  <span className="font-mono text-emerald-600 font-black">+{formatCurrency(Math.round(dayBookData.inflows.totalAllInflows))}</span>
                                 </div>
                                 <table className="w-full border-collapse border border-slate-200 text-xs">
                                   <thead>
@@ -4085,22 +4221,22 @@ const Reports: React.FC = () => {
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Counter Cash Sales</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">{dayBookData.inflows.posCashBillsCount}</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+Rs {Math.round(dayBookData.inflows.posCashSales).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+{formatCurrency(Math.round(dayBookData.inflows.posCashSales))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Digital / Online Sales</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">{dayBookData.inflows.posOnlineBillsCount}</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono font-bold">+Rs {Math.round(dayBookData.inflows.posOnlineSales).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono font-bold">+{formatCurrency(Math.round(dayBookData.inflows.posOnlineSales))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Customer Debt Recovery</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">{dayBookData.inflows.customerCollectionsList.length}</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+Rs {Math.round(dayBookData.inflows.customerCollections).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+{formatCurrency(Math.round(dayBookData.inflows.customerCollections))}</td>
                                     </tr>
                                     <tr className="bg-emerald-50 font-bold">
                                       <td className="border border-slate-200 p-1.5">TOTAL CASH INFLOWS</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">-</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-700">+Rs {Math.round(dayBookData.inflows.totalCashInflow).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-700">+{formatCurrency(Math.round(dayBookData.inflows.totalCashInflow))}</td>
                                     </tr>
                                   </tbody>
                                 </table>
@@ -4110,7 +4246,7 @@ const Reports: React.FC = () => {
                               <div className="space-y-2">
                                 <div className="bg-slate-100 px-3 py-1.5 rounded border-l-4 border-rose-600 font-bold text-xs uppercase flex justify-between items-center text-slate-800">
                                   <span>3. Cash Outflows &amp; Expenses</span>
-                                  <span className="font-mono text-rose-600 font-black">-Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}</span>
+                                  <span className="font-mono text-rose-600 font-black">-{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}</span>
                                 </div>
                                 <table className="w-full border-collapse border border-slate-200 text-xs">
                                   <thead>
@@ -4124,31 +4260,31 @@ const Reports: React.FC = () => {
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Spot Milk Cash Paid</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">Spot Cash</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-Rs {Math.round(dayBookData.outflows.spotMilkPaid).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-{formatCurrency(Math.round(dayBookData.outflows.spotMilkPaid))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Daily Operating Overheads</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">{Object.values(dayBookData.outflows.expensesByCategory).reduce((s: number, c: any) => s + (c?.count || 0), 0)} Vouchers</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-Rs {Math.round(dayBookData.outflows.totalExpenses).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-{formatCurrency(Math.round(dayBookData.outflows.totalExpenses))}</td>
                                     </tr>
                                     {dayBookData.outflows.otherSupplierPayments > 0 && (
                                       <tr>
                                         <td className="border border-slate-200 p-1.5 font-medium">Supplier Settlements Paid</td>
                                         <td className="border border-slate-200 p-1.5 text-center font-mono">Bank/Cash</td>
-                                        <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-Rs {Math.round(dayBookData.outflows.otherSupplierPayments).toLocaleString()}</td>
+                                        <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-{formatCurrency(Math.round(dayBookData.outflows.otherSupplierPayments))}</td>
                                       </tr>
                                     )}
                                     {dayBookData.outflows.materialCashPaid > 0 && (
                                       <tr>
                                         <td className="border border-slate-200 p-1.5 font-medium">Packaging &amp; Material Paid</td>
                                         <td className="border border-slate-200 p-1.5 text-center font-mono">Cash</td>
-                                        <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-Rs {Math.round(dayBookData.outflows.materialCashPaid).toLocaleString()}</td>
+                                        <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-{formatCurrency(Math.round(dayBookData.outflows.materialCashPaid))}</td>
                                       </tr>
                                     )}
                                     <tr className="bg-rose-50 font-bold">
                                       <td className="border border-slate-200 p-1.5">TOTAL CASH DISBURSEMENTS</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">-</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-700">-Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-700">-{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}</td>
                                     </tr>
                                   </tbody>
                                 </table>
@@ -4174,7 +4310,7 @@ const Reports: React.FC = () => {
                                         <td className="border border-slate-200 p-1 font-semibold">{c.category}</td>
                                         <td className="border border-slate-200 p-1 text-center font-mono">{c.count}</td>
                                         <td className="border border-slate-200 p-1 text-slate-500">{c.items?.join(', ') || '-'}</td>
-                                        <td className="border border-slate-200 p-1 text-right font-mono text-rose-600 font-bold">Rs {Math.round(c.amount).toLocaleString()}</td>
+                                        <td className="border border-slate-200 p-1 text-right font-mono text-rose-600 font-bold">{formatCurrency(Math.round(c.amount))}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -4202,17 +4338,17 @@ const Reports: React.FC = () => {
                                     <tr>
                                       <td className="border border-slate-200 p-1.5">New Customer Credit Extended</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">{dayBookData.credit.posCreditBillsCount} bills</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">Rs {Math.round(dayBookData.credit.posCreditSales).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">{formatCurrency(Math.round(dayBookData.credit.posCreditSales))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5">Customer Debt Collected</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">Collection / Recovery</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">Rs {Math.round(dayBookData.credit.customerCollections).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">{formatCurrency(Math.round(dayBookData.credit.customerCollections))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5">Supplier Unpaid Milk Accrued</td>
                                       <td className="border border-slate-200 p-1.5 text-center font-mono">Payables added</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-sky-700 font-bold">Rs {Math.round(dayBookData.credit.milkAccruedCredit).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-sky-700 font-bold">{formatCurrency(Math.round(dayBookData.credit.milkAccruedCredit))}</td>
                                     </tr>
                                   </tbody>
                                 </table>
@@ -4222,25 +4358,25 @@ const Reports: React.FC = () => {
                               <div className="space-y-2">
                                 <div className="bg-slate-100 px-3 py-1.5 rounded border-l-4 border-indigo-600 font-bold text-xs uppercase flex justify-between items-center text-slate-800">
                                   <span>5. Cash Drawer &amp; Float Audit</span>
-                                  <span className="font-mono text-indigo-700 font-bold">Expected: Rs {Math.round(dayBookData.drawer.expectedClosingCash).toLocaleString()}</span>
+                                  <span className="font-mono text-indigo-700 font-bold">Expected: {formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}</span>
                                 </div>
                                 <table className="w-full border-collapse border border-slate-200 text-xs">
                                   <tbody>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">Morning Starting Float</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono">Rs {Math.round(dayBookData.drawer.shiftOpeningFloat).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono">{formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">(+) Day Cash Receipts</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+Rs {Math.round(dayBookData.inflows.totalCashInflow).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-emerald-600 font-bold">+{formatCurrency(Math.round(dayBookData.inflows.totalCashInflow))}</td>
                                     </tr>
                                     <tr>
                                       <td className="border border-slate-200 p-1.5 font-medium">(&minus;) Day Cash Outflows</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-rose-600 font-bold">-{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}</td>
                                     </tr>
                                     <tr className="bg-indigo-50 font-bold text-xs">
                                       <td className="border border-slate-200 p-1.5 text-indigo-900">EXPECTED CASH IN DRAWER</td>
-                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-indigo-700 text-sm">Rs {Math.round(dayBookData.drawer.expectedClosingCash).toLocaleString()}</td>
+                                      <td className="border border-slate-200 p-1.5 text-right font-mono text-indigo-700 text-sm">{formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}</td>
                                     </tr>
                                   </tbody>
                                 </table>
@@ -4252,7 +4388,7 @@ const Reports: React.FC = () => {
                               <div className="space-y-1">
                                 <div className="bg-slate-100 px-3 py-1.5 rounded border-l-4 border-amber-600 font-bold text-xs uppercase flex justify-between items-center text-slate-800">
                                   <span>6. Top Selling Products Breakdown</span>
-                                  <span className="font-mono">Revenue: Rs {Math.round(dayBookData.profit.totalRevenue).toLocaleString()}</span>
+                                  <span className="font-mono">Revenue: {formatCurrency(Math.round(dayBookData.profit.totalRevenue))}</span>
                                 </div>
                                 <table className="w-full border-collapse border border-slate-200 text-[11px]">
                                   <thead>
@@ -4270,7 +4406,7 @@ const Reports: React.FC = () => {
                                         <td className="border border-slate-200 p-1 font-semibold">{p.name}</td>
                                         <td className="border border-slate-200 p-1 text-right font-mono font-bold">{p.qty} {p.unit}</td>
                                         <td className="border border-slate-200 p-1 text-center font-mono">{p.ordersCount}</td>
-                                        <td className="border border-slate-200 p-1 text-right font-mono font-bold text-emerald-600">Rs {Math.round(p.revenue).toLocaleString()}</td>
+                                        <td className="border border-slate-200 p-1 text-right font-mono font-bold text-emerald-600">{formatCurrency(Math.round(p.revenue))}</td>
                                         <td className="border border-slate-200 p-1 text-right font-mono">
                                           {dayBookData.profit.totalRevenue > 0 ? ((p.revenue / dayBookData.profit.totalRevenue) * 100).toFixed(1) : 0}%
                                         </td>
@@ -4337,54 +4473,54 @@ const Reports: React.FC = () => {
                             {/* 2. Inflows */}
                             <div className="border-b border-dashed border-slate-400 pb-2 space-y-0.5">
                               <p className="font-black uppercase text-slate-950 mb-1">2. REVENUE INFLOWS</p>
-                              <div className="flex justify-between"><span>Cash Counter:</span><span>+Rs {Math.round(dayBookData.inflows.posCashSales).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span>Online / Bank:</span><span>+Rs {Math.round(dayBookData.inflows.posOnlineSales).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span>Debt Collected:</span><span>+Rs {Math.round(dayBookData.inflows.customerCollections).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span>Cash Counter:</span><span>+{formatCurrency(Math.round(dayBookData.inflows.posCashSales))}</span></div>
+                              <div className="flex justify-between"><span>Online / Bank:</span><span>+{formatCurrency(Math.round(dayBookData.inflows.posOnlineSales))}</span></div>
+                              <div className="flex justify-between"><span>Debt Collected:</span><span>+{formatCurrency(Math.round(dayBookData.inflows.customerCollections))}</span></div>
                               <div className="flex justify-between font-black text-emerald-700 border-t border-slate-300 pt-1 mt-1">
-                                <span>TOTAL INFLOWS:</span><span>+Rs {Math.round(dayBookData.inflows.totalAllInflows).toLocaleString()}</span>
+                                <span>TOTAL INFLOWS:</span><span>+{formatCurrency(Math.round(dayBookData.inflows.totalAllInflows))}</span>
                               </div>
                             </div>
 
                             {/* 3. Outflows */}
                             <div className="border-b border-dashed border-slate-400 pb-2 space-y-0.5">
                               <p className="font-black uppercase text-slate-950 mb-1">3. OPERATING OUTFLOWS</p>
-                              <div className="flex justify-between"><span>Spot Milk Paid:</span><span>-Rs {Math.round(dayBookData.outflows.spotMilkPaid).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span>Operating Expenses:</span><span>-Rs {Math.round(dayBookData.outflows.totalExpenses).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span>Spot Milk Paid:</span><span>-{formatCurrency(Math.round(dayBookData.outflows.spotMilkPaid))}</span></div>
+                              <div className="flex justify-between"><span>Operating Expenses:</span><span>-{formatCurrency(Math.round(dayBookData.outflows.totalExpenses))}</span></div>
                               {dayBookData.outflows.otherSupplierPayments > 0 && (
-                                <div className="flex justify-between"><span>Supplier Dues:</span><span>-Rs {Math.round(dayBookData.outflows.otherSupplierPayments).toLocaleString()}</span></div>
+                                <div className="flex justify-between"><span>Supplier Dues:</span><span>-{formatCurrency(Math.round(dayBookData.outflows.otherSupplierPayments))}</span></div>
                               )}
                               <div className="flex justify-between font-black text-rose-700 border-t border-slate-300 pt-1 mt-1">
-                                <span>TOTAL OUTFLOWS:</span><span>-Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}</span>
+                                <span>TOTAL OUTFLOWS:</span><span>-{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}</span>
                               </div>
                             </div>
 
                             {/* 4. Credit */}
                             <div className="border-b border-dashed border-slate-400 pb-2 space-y-0.5">
                               <p className="font-black uppercase text-slate-950 mb-1">4. CREDIT &amp; WORKING CAPITAL</p>
-                              <div className="flex justify-between"><span>Credit Extended:</span><span>Rs {Math.round(dayBookData.credit.posCreditSales).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span>Debt Recovered:</span><span>Rs {Math.round(dayBookData.credit.customerCollections).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span>Milk Accrued:</span><span>Rs {Math.round(dayBookData.credit.milkAccruedCredit).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span>Credit Extended:</span><span>{formatCurrency(Math.round(dayBookData.credit.posCreditSales))}</span></div>
+                              <div className="flex justify-between"><span>Debt Recovered:</span><span>{formatCurrency(Math.round(dayBookData.credit.customerCollections))}</span></div>
+                              <div className="flex justify-between"><span>Milk Accrued:</span><span>{formatCurrency(Math.round(dayBookData.credit.milkAccruedCredit))}</span></div>
                             </div>
 
                             {/* 5. Cash Drawer */}
                             <div className="border-b border-dashed border-slate-400 pb-2 space-y-0.5 bg-slate-50 p-2 rounded">
                               <p className="font-black uppercase text-slate-950 mb-1">5. CASH DRAWER AUDIT</p>
-                              <div className="flex justify-between"><span>Opening Float:</span><span>Rs {Math.round(dayBookData.drawer.shiftOpeningFloat).toLocaleString()}</span></div>
-                              <div className="flex justify-between text-emerald-700"><span>(+) Inflow:</span><span>+Rs {Math.round(dayBookData.inflows.totalCashInflow).toLocaleString()}</span></div>
-                              <div className="flex justify-between text-rose-700"><span>(&minus;) Outflow:</span><span>-Rs {Math.round(dayBookData.outflows.totalCashOutflow).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span>Opening Float:</span><span>{formatCurrency(Math.round(dayBookData.drawer.shiftOpeningFloat))}</span></div>
+                              <div className="flex justify-between text-emerald-700"><span>(+) Inflow:</span><span>+{formatCurrency(Math.round(dayBookData.inflows.totalCashInflow))}</span></div>
+                              <div className="flex justify-between text-rose-700"><span>(&minus;) Outflow:</span><span>-{formatCurrency(Math.round(dayBookData.outflows.totalCashOutflow))}</span></div>
                               <div className="flex justify-between font-black text-indigo-900 border-t border-indigo-200 pt-1 mt-1">
-                                <span>EXPECTED CASH:</span><span>Rs {Math.round(dayBookData.drawer.expectedClosingCash).toLocaleString()}</span>
+                                <span>EXPECTED CASH:</span><span>{formatCurrency(Math.round(dayBookData.drawer.expectedClosingCash))}</span>
                               </div>
                             </div>
 
                             {/* 6. Profit */}
                             <div className="border-b border-dashed border-slate-400 pb-2 space-y-0.5">
                               <p className="font-black uppercase text-slate-950 mb-1">6. ESTIMATED PROFIT</p>
-                              <div className="flex justify-between"><span>Gross Revenue:</span><span>Rs {Math.round(dayBookData.profit.totalRevenue).toLocaleString()}</span></div>
-                              <div className="flex justify-between text-slate-500"><span>(&minus;) COGS:</span><span>-Rs {Math.round(dayBookData.profit.estimatedCOGS).toLocaleString()}</span></div>
-                              <div className="flex justify-between text-slate-500"><span>(&minus;) Overheads:</span><span>-Rs {Math.round(dayBookData.profit.totalExpenses).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span>Gross Revenue:</span><span>{formatCurrency(Math.round(dayBookData.profit.totalRevenue))}</span></div>
+                              <div className="flex justify-between text-slate-500"><span>(&minus;) COGS:</span><span>-{formatCurrency(Math.round(dayBookData.profit.estimatedCOGS))}</span></div>
+                              <div className="flex justify-between text-slate-500"><span>(&minus;) Overheads:</span><span>-{formatCurrency(Math.round(dayBookData.profit.totalExpenses))}</span></div>
                               <div className="flex justify-between font-black text-emerald-700 border-t border-slate-300 pt-1 mt-1">
-                                <span>EST. NET PROFIT:</span><span>+Rs {Math.round(dayBookData.profit.estimatedNetProfit).toLocaleString()}</span>
+                                <span>EST. NET PROFIT:</span><span>+{formatCurrency(Math.round(dayBookData.profit.estimatedNetProfit))}</span>
                               </div>
                             </div>
 
@@ -4965,7 +5101,7 @@ const Reports: React.FC = () => {
                                 <div className="bg-red-50/70 border border-red-200 rounded-lg p-2.5">
                                   <span className="text-[9.5px] font-bold text-red-800 uppercase block">Total Outstanding Dues</span>
                                   <span className="text-base font-black font-mono text-red-700 block mt-0.5">
-                                    Rs {Math.round(customerPrintData.totalReceivables).toLocaleString()} <span className="text-xs">Dr</span>
+                                    {formatCurrency(Math.round(customerPrintData.totalReceivables))} <span className="text-xs">Dr</span>
                                   </span>
                                   <span className="text-[9px] text-slate-500 font-medium">
                                     Pending across {customerPrintData.debtorCount} customers
@@ -4985,7 +5121,7 @@ const Reports: React.FC = () => {
                                 <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2.5">
                                   <span className="text-[9.5px] font-bold text-emerald-800 uppercase block">Period Recoveries</span>
                                   <span className="text-base font-black font-mono text-emerald-700 block mt-0.5">
-                                    +Rs {Math.round(customerPrintData.totalPeriodCollections).toLocaleString()}
+                                    +{formatCurrency(Math.round(customerPrintData.totalPeriodCollections))}
                                   </span>
                                   <span className="text-[9px] text-slate-500 font-medium">
                                     Collected in selected range
@@ -4995,7 +5131,7 @@ const Reports: React.FC = () => {
                                 <div className="bg-sky-50/70 border border-sky-200 rounded-lg p-2.5">
                                   <span className="text-[9.5px] font-bold text-sky-800 uppercase block">Advance Balances (Cr)</span>
                                   <span className="text-base font-black font-mono text-sky-700 block mt-0.5">
-                                    Rs {Math.round(customerPrintData.totalAdvances).toLocaleString()} <span className="text-xs">Cr</span>
+                                    {formatCurrency(Math.round(customerPrintData.totalAdvances))} <span className="text-xs">Cr</span>
                                   </span>
                                   <span className="text-[9px] text-slate-500 font-medium">
                                     {customerPrintData.advanceCount} customer advance deposits
@@ -5102,10 +5238,10 @@ const Reports: React.FC = () => {
                                           {customerPrintIncludeSalesDetails && (
                                             <>
                                               <td className="border border-slate-300 p-1.5 text-right font-mono text-slate-800">
-                                                {c.totalRevenue > 0 ? `Rs ${Math.round(c.totalRevenue).toLocaleString()}` : '-'}
+                                                {c.totalRevenue > 0 ? `${formatCurrency(Math.round(c.totalRevenue))}` : '-'}
                                               </td>
                                               <td className="border border-slate-300 p-1.5 text-right font-mono text-emerald-700 font-semibold">
-                                                {c.payments > 0 ? `Rs ${Math.round(c.payments).toLocaleString()}` : '-'}
+                                                {c.payments > 0 ? `${formatCurrency(Math.round(c.payments))}` : '-'}
                                               </td>
                                             </>
                                           )}
@@ -5119,9 +5255,9 @@ const Reports: React.FC = () => {
                                                 : 'text-slate-400 font-normal'
                                           }`}>
                                             {isDue ? (
-                                              <span>Rs {Math.round(c.balance).toLocaleString()} <span className="text-[9px] font-bold">Dr</span></span>
+                                              <span>{formatCurrency(Math.round(c.balance))} <span className="text-[9px] font-bold">Dr</span></span>
                                             ) : isAdvance ? (
-                                              <span>Rs {Math.round(Math.abs(c.balance)).toLocaleString()} <span className="text-[9px] font-bold">Cr</span></span>
+                                              <span>{formatCurrency(Math.round(Math.abs(c.balance)))} <span className="text-[9px] font-bold">Cr</span></span>
                                             ) : (
                                               <span>Rs 0 (Settled)</span>
                                             )}
@@ -5155,15 +5291,15 @@ const Reports: React.FC = () => {
                                     {customerPrintIncludeSalesDetails && (
                                       <>
                                         <td className="border border-slate-300 p-2 text-right font-mono text-slate-900">
-                                          Rs {Math.round(customerPrintData.totalPeriodSales).toLocaleString()}
+                                          {formatCurrency(Math.round(customerPrintData.totalPeriodSales))}
                                         </td>
                                         <td className="border border-slate-300 p-2 text-right font-mono text-emerald-800">
-                                          Rs {Math.round(customerPrintData.totalPeriodCollections).toLocaleString()}
+                                          {formatCurrency(Math.round(customerPrintData.totalPeriodCollections))}
                                         </td>
                                       </>
                                     )}
                                     <td className="border border-slate-300 p-2 text-right font-mono text-sm font-black bg-red-100/80 text-red-800">
-                                      Rs {Math.round(customerPrintData.totalReceivables).toLocaleString()} Dr
+                                      {formatCurrency(Math.round(customerPrintData.totalReceivables))} Dr
                                     </td>
                                     {customerPrintIncludeRecoveryBoxes && (
                                       <td className="border border-slate-300 p-1.5 text-center text-[9px] text-slate-600 bg-amber-50">
@@ -5254,7 +5390,7 @@ const Reports: React.FC = () => {
                             <div className="bg-slate-100 p-1.5 rounded text-center">
                               <span className="text-[9px] uppercase block font-bold">TOTAL OUTSTANDING DUES</span>
                               <span className="text-sm font-black block">
-                                Rs {Math.round(customerPrintData.totalReceivables).toLocaleString()} Dr
+                                {formatCurrency(Math.round(customerPrintData.totalReceivables))} Dr
                               </span>
                               <span className="text-[8.5px] text-slate-600">
                                 {customerPrintData.debtorCount} Owing Customers
@@ -5268,7 +5404,7 @@ const Reports: React.FC = () => {
                                 <div key={c.id} className="border-b border-dotted border-slate-300 pb-1">
                                   <div className="flex justify-between font-bold">
                                     <span>#{i + 1} {c.name.slice(0, 16)}</span>
-                                    <span>Rs {Math.round(c.balance).toLocaleString()}</span>
+                                    <span>{formatCurrency(Math.round(c.balance))}</span>
                                   </div>
                                   <div className="flex justify-between text-[8.5px] text-slate-600">
                                     <span>{c.route !== '-' ? c.route : c.type}</span>
@@ -5282,7 +5418,7 @@ const Reports: React.FC = () => {
 
                             <div className="flex justify-between font-black text-xs pt-1">
                               <span>GRAND TOTAL DUES:</span>
-                              <span>Rs {Math.round(customerPrintData.totalReceivables).toLocaleString()}</span>
+                              <span>{formatCurrency(Math.round(customerPrintData.totalReceivables))}</span>
                             </div>
 
                             <div className="pt-4 space-y-3 text-[9px]">
@@ -5392,7 +5528,7 @@ const Reports: React.FC = () => {
                               {i.quantity.toFixed(1)} {i.unit}
                             </td>
                             <td className="px-4 py-2.5 text-right font-mono font-semibold">
-                              {formatCurrency(i.avgRate)}
+                              {formatCurrency(i.avgRate)}<span className="text-[10px] text-slate-400 font-normal"> / {i.unit}</span>
                             </td>
                             <td className="px-4 py-2.5 text-right font-mono font-black text-lime-600 dark:text-lime-400 text-sm">
                               {formatCurrency(i.revenue)}
@@ -5463,7 +5599,7 @@ const Reports: React.FC = () => {
                           <th className="px-4 py-3">Item / Product</th>
                           <th className="px-4 py-3">Category</th>
                           <th className="px-4 py-3 text-right">Loose Stock</th>
-                          <th className="px-4 py-3 text-right">Variant Units</th>
+                          <th className="px-4 py-3 text-right">Packed Units</th>
                           <th className="px-4 py-3 text-right">Total Base Qty</th>
                           <th className="px-4 py-3 text-right">Cost Rate</th>
                           <th className="px-4 py-3 text-right">Selling Rate</th>
@@ -5483,11 +5619,14 @@ const Reports: React.FC = () => {
                               </span>
                             </td>
                             <td className="px-4 py-2.5 text-right font-mono font-semibold">{i.looseStock.toFixed(1)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono font-semibold">{i.totalVariantsUnits}</td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold" title={i.packBreakdown || undefined}>{i.totalVariantsUnits}</td>
                             <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
                               {i.totalBaseQty.toFixed(1)} {i.unit}
                             </td>
-                            <td className="px-4 py-2.5 text-right font-mono font-semibold">{formatCurrency(i.costPrice)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold">
+                              {formatCurrency(i.costPrice)}
+                              {i.costMissing && <span className="block text-[10px] font-bold text-amber-600">Cost not set</span>}
+                            </td>
                             <td className="px-4 py-2.5 text-right font-mono font-semibold">{formatCurrency(i.sellingPrice)}</td>
                             <td className="px-4 py-2.5 text-right font-mono font-bold text-blue-600 dark:text-blue-400">
                               {formatCurrency(i.valuationCost)}
@@ -5546,13 +5685,17 @@ const Reports: React.FC = () => {
                       </div>
 
                       <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                        <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider block">Current Balance</span>
+                        <span className="text-[11px] font-bold text-purple-600 uppercase tracking-wider block">Closing Balance</span>
                         <span className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-1 block font-mono">
                           {itemLedgerData.closingStock.toFixed(1)} {itemLedgerData.unit}
                         </span>
-                        <span className="text-[11px] text-slate-400 mt-1 block">Physical inventory balance</span>
+                        <span className="text-[11px] text-slate-400 mt-1 block">Loose stock at end of selected period</span>
                       </div>
                     </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-start gap-1.5">
+                      <Info size={12} className="mt-0.5 shrink-0" />
+                      Loose stock in {itemLedgerData.unit}. Dozen/tray sales count in {itemLedgerData.unit}; pre-packed sizes keep their own count and show as pack rows without changing this balance. Raw milk purchases count only after they are allocated to the counter.
+                    </p>
 
                     {/* Movement Audit Table */}
                     <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">

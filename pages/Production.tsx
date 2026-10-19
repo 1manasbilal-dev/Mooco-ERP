@@ -14,12 +14,13 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatQty, formatCurrency, cleanNumber, cleanQty } from '../lib/formatters';
+import { convertQuantity } from '../lib/unitConversion';
 
 // --- Type Fix for Framer Motion ---
 const MotionDiv = motion.div as any;
 
 const Production: React.FC = () => {
-  const { productionBatches, updateBatchStage, cancelBatch, items, allocations, isDayLocked, getBusinessDate } = useDairy();
+  const { productionBatches, updateBatchStage, cancelBatch, items, allocations, settings, isDayLocked, getBusinessDate } = useDairy();
   const { showToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
@@ -69,6 +70,8 @@ const Production: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
   const [looseOutput, setLooseOutput] = useState<number>(0);
   const [variantOutputs, setVariantOutputs] = useState<Record<string, number>>({});
+  // Until the user types a loose figure, loose = estimate minus what went into packs, so packs are never counted twice.
+  const looseEditedRef = useRef(false);
 
   // History State
   const [historySearch, setHistorySearch] = useState('');
@@ -163,15 +166,16 @@ const Production: React.FC = () => {
   }, [looseOutput, variantOutputs, variants, productDef]);
 
   const itemsMap = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
+  const outputUnitOf = (batch?: ProductionBatch | null) => items.find(i => i.name === batch?.product_name)?.unit || 'kg';
 
   // Estimated Cost Calculation for Active Batch (Preview)
   const financialPreview = useMemo(() => {
      if (!selectedBatch || !productDef) return null;
      
      // 1. Milk Cost (Input)
-     const avgMilkRate = allocations.length > 0 
-        ? (allocations.reduce((sum, a) => sum + (a.average_rate || 0), 0) / allocations.length) 
-        : 120; 
+     const actualRate = Number(selectedBatch.input_cost_per_unit || (selectedBatch as any).details?.input_cost_per_unit || 0);
+     // Same rate the completion posts to stock cost; a missing rate shows as Rs 0 instead of a made-up figure.
+     const avgMilkRate = actualRate;
      const milkCost = (selectedBatch.quantity_input || 0) * avgMilkRate;
 
      // 2. Ingredients (Bill of Materials)
@@ -191,15 +195,18 @@ const Production: React.FC = () => {
         const scale = (selectedBatch.quantity_input || 0) / productDef.recipe_base_quantity;
         productDef.recipe.forEach(ing => {
            const item = itemsMap.get(ing.item_id);
-           const qty = ing.quantity * scale;
+           // Priced and deducted in the material's own stock unit, exactly as completion posts it.
+           const recipeQty = ing.quantity * scale;
+           const stockUnit = item?.unit || ing.unit;
+           const qty = (ing.unit && stockUnit ? convertQuantity(recipeQty, ing.unit, stockUnit, settings.inventory?.customUnits || []) : recipeQty) ?? recipeQty;
            const unitCost = item?.cost_price || 0;
            const cost = qty * unitCost;
            additiveCost += cost;
            
            breakdown.push({
-              name: ing.item_name,
-              qty: parseFloat(qty.toFixed(2)),
-              unit: ing.unit,
+              name: item?.name || ing.item_name,
+              qty: parseFloat(qty.toFixed(3)),
+              unit: stockUnit,
               unitCost: unitCost,
               total: cost
            });
@@ -321,6 +328,7 @@ const Production: React.FC = () => {
        const defaultOutput = selectedBatch.quantity_output_estimated || (selectedBatch.quantity_input ? selectedBatch.quantity_input * 0.85 : 0);
        setLooseOutput(parseFloat(defaultOutput.toFixed(2)));
        setVariantOutputs({});
+       looseEditedRef.current = false;
        setLogMessage('');
        setIsCancelMode(false);
        setCancelReason('');
@@ -400,10 +408,8 @@ const Production: React.FC = () => {
         };
     }).filter(v => v.count > 0);
 
-    const hasVariants = variantsData.length > 0;
-    const finalLooseQty = (looseOutput > 0 || !hasVariants) 
-      ? (looseOutput > 0 ? looseOutput : (selectedBatch.quantity_output_estimated || (selectedBatch.quantity_input ? selectedBatch.quantity_input * 0.85 : 0))) 
-      : 0;
+    // What the user sees is what gets stocked, including a zero for a spoilt batch.
+    const finalLooseQty = Math.max(0, Number(looseOutput) || 0);
 
     try {
       const success = await updateBatchStage(
@@ -521,7 +527,7 @@ const Production: React.FC = () => {
             </div>
             <div>
               <span className="text-slate-400 font-semibold">Target: </span>
-              <span className="font-bold font-mono text-emerald-700">{formatQty(batch.quantity_output_estimated || 0)} kg</span>
+              <span className="font-bold font-mono text-emerald-700">{formatQty(batch.quantity_output_estimated || 0)} {outputUnitOf(batch)}</span>
             </div>
           </div>
         </div>
@@ -834,7 +840,7 @@ const Production: React.FC = () => {
                                                <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2 font-medium">
                                                   <span><strong className="text-slate-700">In:</strong> {formatQty(batch.quantity_input || 0)} L</span>
                                                   <span>•</span>
-                                                  {isCompleted ? <span><strong className="text-slate-700">Out:</strong> {formatQty(actualOutput)} kg</span> : <span className="text-rose-600 font-bold">Cancelled</span>}
+                                                  {isCompleted ? <span><strong className="text-slate-700">Out:</strong> {formatQty(actualOutput)} {outputUnitOf(batch)}</span> : <span className="text-rose-600 font-bold">Cancelled</span>}
                                                </div>
                                             </div>
                                          </div>
@@ -985,7 +991,7 @@ const Production: React.FC = () => {
                       </div>
                       <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Target Yield</p>
-                          <p className="text-sm sm:text-base font-black font-mono text-slate-900">{formatQty(selectedBatch.quantity_output_estimated || 0)} <span className="text-[10px] text-slate-400 font-normal">kg</span></p>
+                          <p className="text-sm sm:text-base font-black font-mono text-slate-900">{formatQty(selectedBatch.quantity_output_estimated || 0)} <span className="text-[10px] text-slate-400 font-normal">{outputUnitOf(selectedBatch)}</span></p>
                       </div>
                       <div className={`p-2.5 rounded-xl border ${financialPreview && financialPreview.profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
                           <p className={`text-[9px] font-bold uppercase tracking-wider ${financialPreview && financialPreview.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>Est. Profit</p>
@@ -1057,7 +1063,7 @@ const Production: React.FC = () => {
                                                   type="number" 
                                                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-900 outline-none focus:ring-2 focus:ring-lime-500 shadow-inner"
                                                   value={looseOutput}
-                                                  onChange={e => setLooseOutput(parseFloat(e.target.value) || 0)}
+                                                  onChange={e => { looseEditedRef.current = true; setLooseOutput(parseFloat(e.target.value) || 0); }}
                                                   placeholder="0.00"
                                               />
                                           </div>
@@ -1078,7 +1084,16 @@ const Production: React.FC = () => {
                                                                   className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-right font-black font-mono text-xs bg-slate-50 text-slate-900 outline-none focus:bg-white focus:ring-1 focus:ring-lime-500"
                                                                   placeholder="0"
                                                                   value={variantOutputs[v.id] || ''}
-                                                                  onChange={e => setVariantOutputs(prev => ({ ...prev, [v.id]: parseFloat(e.target.value) || 0 }))}
+                                                                  onChange={e => {
+                                                                      const count = Math.max(0, Math.floor(parseFloat(e.target.value) || 0));
+                                                                      const next = { ...variantOutputs, [v.id]: count };
+                                                                      setVariantOutputs(next);
+                                                                      if (!looseEditedRef.current && selectedBatch) {
+                                                                          const estimate = selectedBatch.quantity_output_estimated || (selectedBatch.quantity_input ? selectedBatch.quantity_input * 0.85 : 0);
+                                                                          const packed = variants.reduce((sum, pv) => sum + (next[pv.id] || 0) * (pv.quantity_in_base_unit || 0), 0);
+                                                                          setLooseOutput(parseFloat(Math.max(0, estimate - packed).toFixed(3)));
+                                                                      }
+                                                                  }}
                                                               />
                                                               <span className="text-[10px] font-bold text-slate-400">units</span>
                                                           </div>

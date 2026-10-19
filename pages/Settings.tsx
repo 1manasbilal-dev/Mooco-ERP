@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { UnitManagerModal } from '../components/units/UnitManagerModal';
 import { getAllAvailableUnits, getUnitFactorDescription } from '../lib/unitConversion';
+import { formatCurrency } from '../lib/formatters';
 
 interface SettingsProps {
   onBack?: () => void;
@@ -1077,7 +1078,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                       <SelectInput 
                         value={settings.financial.defaultCashAccountId} 
                         onChange={v => handleFinancialChange('defaultCashAccountId', v)} 
-                        options={accounts.filter(a => a.type === 'Cash' && a.isActive !== false).map(a => ({ id: a.id, label: `${a.name} (Rs ${Number(a.balance || 0).toLocaleString()})` }))}
+                        options={accounts.filter(a => a.type === 'Cash' && a.isActive !== false).map(a => ({ id: a.id, label: `${a.name} (${formatCurrency(Number(a.balance || 0))})` }))}
                         placeholder="-- Select Default Cash Account --"
                       />
                     </InputGroup>
@@ -1089,7 +1090,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack, themeMode = 'light', toggle
                       <SelectInput 
                         value={settings.financial.defaultDigitalAccountId} 
                         onChange={v => handleFinancialChange('defaultDigitalAccountId', v)} 
-                        options={accounts.filter(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false).map(a => ({ id: a.id, label: `${a.name} ${a.bank_name ? `(${a.bank_name})` : ''} (Rs ${Number(a.balance || 0).toLocaleString()})` }))}
+                        options={accounts.filter(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false).map(a => ({ id: a.id, label: `${a.name} ${a.bank_name ? `(${a.bank_name})` : ''} (${formatCurrency(Number(a.balance || 0))})` }))}
                         placeholder="-- Select Default Bank/Wallet Account --"
                       />
                     </InputGroup>

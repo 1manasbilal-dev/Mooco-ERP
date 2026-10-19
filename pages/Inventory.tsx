@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatQty, formatCurrency, cleanNumber, cleanQty } from '../lib/formatters';
+import { itemStockValue } from '../lib/stockProfit';
 
 const MotionDiv = motion.div as any;
 
@@ -130,22 +131,12 @@ const Inventory: React.FC = () => {
     let outOfStockCount = 0;
 
     syncedInventory.forEach(item => {
-      const isProduct = item.item_type.some(t => ['Sale product'].includes(t));
-      const rate = isProduct ? item.selling_price : item.cost_price;
-      
       const packagedVariants = (item.variants || []).filter(v => v.isActive !== false && v.deduct_from_base !== true);
+      const valuation = itemStockValue(item, item.quantity, item.variantStocks);
+      const totalPackagedCount = valuation.packs.reduce((sum, p) => sum + p.count, 0);
 
-      let variantValue = 0;
-      let totalPackagedCount = 0;
-      packagedVariants.forEach(v => {
-        const vCount = item.variantStocks[v.id] || 0;
-        const vPrice = v.selling_price || (rate * v.quantity_in_base_unit);
-        variantValue += (vCount * vPrice);
-        totalPackagedCount += vCount;
-      });
-
-      const looseValue = item.quantity * rate;
-      totalValue += (looseValue + variantValue);
+      // Same cost valuation as each row, so the header equals the sum of the rows.
+      totalValue += valuation.costValue;
 
       const isPackagedOnly = packagedVariants.length > 0 && item.allow_loose_sale === false;
       if (isPackagedOnly) {
@@ -269,7 +260,7 @@ const Inventory: React.FC = () => {
             <Layers size={18} />
           </div>
           <div className="min-w-0">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">Asset Valuation</p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">Asset Valuation (Cost)</p>
             <p className="text-base sm:text-lg font-black text-emerald-600 font-mono mt-0.5 truncate">
               Rs {(stats.totalValue / 1000).toFixed(1)}k
             </p>
@@ -350,20 +341,14 @@ const Inventory: React.FC = () => {
           syncedInventory.map(item => {
             const isProduct = item.item_type.some(t => ['Sale product'].includes(t));
             const rate = isProduct ? item.selling_price : item.cost_price;
-            
+
             const multiUnits = (item.variants || []).filter(v => v.isActive !== false && v.deduct_from_base === true);
             const packagedVariants = (item.variants || []).filter(v => v.isActive !== false && v.deduct_from_base !== true);
 
-            let variantValue = 0;
-            let totalPackagedCount = 0;
-            packagedVariants.forEach(v => {
-              const vCount = item.variantStocks[v.id] || 0;
-              const vPrice = v.selling_price || (rate * v.quantity_in_base_unit);
-              variantValue += (vCount * vPrice);
-              totalPackagedCount += vCount;
-            });
-            const looseValue = item.quantity * rate;
-            const totalAssetValue = looseValue + variantValue;
+            // Asset value is at cost (loose + active packed counts); retail worth is shown as a hint.
+            const valuation = itemStockValue(item, item.quantity, item.variantStocks);
+            const totalPackagedCount = valuation.packs.reduce((sum, p) => sum + p.count, 0);
+            const totalAssetValue = valuation.costValue;
 
             const isPackagedOnly = packagedVariants.length > 0 && item.allow_loose_sale === false;
             const isOut = isPackagedOnly ? totalPackagedCount <= 0 : (item.quantity <= 0 && totalPackagedCount <= 0);
@@ -462,10 +447,15 @@ const Inventory: React.FC = () => {
                     </span>
                   </div>
                   <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Total Asset</span>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Asset (Cost)</span>
                     <span className="text-xs font-black text-emerald-600 font-mono">
                       {formatCurrency(totalAssetValue)}
                     </span>
+                    {valuation.costMissing ? (
+                      <span className="text-[9px] font-bold text-amber-600 block">Cost not set</span>
+                    ) : isProduct && valuation.retailValue > 0 ? (
+                      <span className="text-[9px] font-semibold text-slate-400 block">Retail {formatCurrency(valuation.retailValue)}</span>
+                    ) : null}
                   </div>
                 </div>
 
@@ -560,16 +550,10 @@ const Inventory: React.FC = () => {
                     const multiUnits = (item.variants || []).filter(v => v.isActive !== false && v.deduct_from_base === true);
                     const packagedVariants = (item.variants || []).filter(v => v.isActive !== false && v.deduct_from_base !== true);
 
-                    let variantValue = 0;
-                    let totalPackagedCount = 0;
-                    packagedVariants.forEach(v => {
-                       const vCount = item.variantStocks[v.id] || 0;
-                       const vPrice = v.selling_price || (rate * v.quantity_in_base_unit);
-                       variantValue += (vCount * vPrice);
-                       totalPackagedCount += vCount;
-                    });
-                    const looseValue = item.quantity * rate;
-                    const totalAssetValue = looseValue + variantValue;
+                    // Asset value is at cost (loose + active packed counts), matching the header total.
+                    const valuation = itemStockValue(item, item.quantity, item.variantStocks);
+                    const totalPackagedCount = valuation.packs.reduce((sum, p) => sum + p.count, 0);
+                    const totalAssetValue = valuation.costValue;
                     
                     const isPackagedOnly = packagedVariants.length > 0 && item.allow_loose_sale === false;
                     const isOut = isPackagedOnly ? totalPackagedCount <= 0 : (item.quantity <= 0 && totalPackagedCount <= 0);
@@ -649,6 +633,11 @@ const Inventory: React.FC = () => {
                           </td>
                           <td className="px-6 py-4 text-right font-bold text-emerald-600 font-mono">
                              {formatCurrency(totalAssetValue)}
+                             {valuation.costMissing ? (
+                                <span className="block text-[10px] font-bold text-amber-600 font-sans">Cost not set</span>
+                             ) : isProduct && valuation.retailValue > 0 ? (
+                                <span className="block text-[10px] font-semibold text-slate-400">Retail {formatCurrency(valuation.retailValue)}</span>
+                             ) : null}
                           </td>
                           <td className="px-6 py-4 text-center">
                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase border shadow-sm ${
@@ -674,7 +663,8 @@ const Inventory: React.FC = () => {
                     const variantRows = packagedVariants.length > 0 ? packagedVariants.map(v => {
                         const actualStock = item.variantStocks[v.id] || 0;
                         const variantPrice = v.selling_price || (rate * v.quantity_in_base_unit);
-                        const variantAssetValue = actualStock * variantPrice;
+                        // Pack value at cost, part of the item's asset value above.
+                        const variantAssetValue = valuation.packs.find(p => p.id === v.id)?.costValue || 0;
 
                         return (
                            <tr key={v.id} className="bg-amber-50/20 border-b border-slate-50 hover:bg-amber-50/40 transition-all">

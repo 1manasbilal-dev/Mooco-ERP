@@ -17,6 +17,7 @@ import {
   ExternalLink 
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import { formatCurrency } from '../lib/formatters';
 
 interface SyncStatusBadgeProps {
   compact?: boolean;
@@ -441,7 +442,7 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = fals
                         <div className="text-right shrink-0">
                           {item.amount !== undefined && (
                             <span className="text-xs font-mono font-black text-slate-900 dark:text-white block">
-                              Rs. {item.amount.toLocaleString()}
+                              {formatCurrency(item.amount)}
                             </span>
                           )}
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1 justify-end mt-0.5">

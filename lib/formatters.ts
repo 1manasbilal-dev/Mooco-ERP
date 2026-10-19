@@ -108,14 +108,16 @@ export const money = (value: number | undefined | null): string => {
 };
 
 /**
- * Returns today's date in local user timezone as 'YYYY-MM-DD'.
+ * Returns today's Pakistan business date as 'YYYY-MM-DD' (Asia/Karachi), whatever the device clock zone.
+ * `new Date().toISOString().split('T')[0]` is the UTC date, which is yesterday between 00:00 and 05:00 PKT.
  */
 export const getTodayLocalDate = (): string => {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  try {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+  } catch {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
 };
 
 /**

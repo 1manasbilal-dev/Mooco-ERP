@@ -239,7 +239,7 @@ const AppContent: React.FC = () => {
                   Quick search...
                 </span>
                 <kbd className="hidden xl:inline-block text-[10px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-600 ml-1">
-                  ⌘K
+                  {/Mac|iPhone|iPad/i.test(typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : '') ? '⌘K' : 'Ctrl K'}
                 </kbd>
               </button>
 

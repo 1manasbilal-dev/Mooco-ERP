@@ -242,3 +242,100 @@ export function sellUnitPresets(baseUnit: string): { name: string; contains: num
     { name: 'Carton', contains: 24 }
   ];
 }
+
+export interface StockPile {
+  id: string;
+  name: string;
+  /** loose: base pile · multi: dozen/tray view of loose · packed: own count · orphan: a count no live pack owns */
+  kind: 'loose' | 'multi' | 'packed' | 'orphan';
+  contains: number;
+  /** Own count: base units for loose, packs for packed/orphan, sellable units for multi. */
+  count: number;
+  baseQty: number;
+  price: number;
+  costEach: number;
+  isActive: boolean;
+}
+
+export interface StockPicture {
+  piles: StockPile[];
+  /** Loose + every packed pile in base units (negatives count as they are). */
+  totalBase: number;
+  /** Base units that the POS can actually sell right now. */
+  sellableBase: number;
+  costValue: number;
+  warnings: string[];
+}
+
+type CatalogItemLike = {
+  name?: string;
+  unit?: string;
+  cost_price?: number;
+  selling_price?: number;
+  allow_loose_sale?: boolean;
+  item_type?: string[];
+  variants?: { id: string; name?: string; quantity_in_base_unit?: number; selling_price?: number; deduct_from_base?: boolean; isActive?: boolean; packaging_item_id?: string }[];
+};
+
+/**
+ * One picture of where a product's stock sits, in its own units, plus plain warnings for the owner.
+ * Loose stock is the base pile; dozen/tray are views of it; ready-made packs hold their own count.
+ */
+export function describeItemStock(item: CatalogItemLike, looseStock: number, variantStocks?: Record<string, number> | null): StockPicture {
+  const unit = item.unit || 'unit';
+  const cost = Number(item.cost_price) || 0;
+  const rate = Number(item.selling_price) || 0;
+  const loose = cleanQty(Number(looseStock) || 0);
+  const variants = item.variants || [];
+  const counts = variantStocks || {};
+  const looseAllowed = item.allow_loose_sale !== false;
+  const piles: StockPile[] = [{ id: 'loose', name: `Loose ${unit}`, kind: 'loose', contains: 1, count: loose, baseQty: loose, price: rate, costEach: cost, isActive: looseAllowed }];
+  const warnings: string[] = [];
+
+  variants.forEach(v => {
+    const contains = sellUnitContains(v);
+    const price = sellUnitPrice(rate, contains, v.selling_price);
+    const active = v.isActive !== false;
+    if (v.deduct_from_base === true) {
+      piles.push({ id: v.id, name: v.name || 'Unit', kind: 'multi', contains, count: cleanQty(Math.max(0, loose) / contains), baseQty: 0, price, costEach: cost * contains, isActive: active });
+    } else {
+      const own = cleanQty(Number(counts[v.id]) || 0);
+      piles.push({ id: v.id, name: v.name || 'Pack', kind: 'packed', contains, count: own, baseQty: cleanQty(own * contains), price, costEach: cost * contains, isActive: active });
+    }
+  });
+  Object.entries(counts).forEach(([id, raw]) => {
+    const count = cleanQty(Number(raw) || 0);
+    const owner = variants.find(v => v.id === id);
+    if (count === 0 || (owner && owner.deduct_from_base !== true)) return;
+    piles.push({ id, name: owner?.name || 'Deleted pack', kind: 'orphan', contains: owner ? sellUnitContains(owner) : 1, count, baseQty: 0, price: 0, costEach: 0, isActive: false });
+  });
+
+  const packed = piles.filter(p => p.kind === 'packed');
+  const totalBase = cleanQty(loose + packed.reduce((sum, p) => sum + p.baseQty, 0));
+  const hasMulti = piles.some(p => p.kind === 'multi' && p.isActive);
+  const looseSellable = looseAllowed || hasMulti ? Math.max(0, loose) : 0;
+  const sellableBase = cleanQty(looseSellable + packed.filter(p => p.isActive).reduce((sum, p) => sum + Math.max(0, p.baseQty), 0));
+  const costValue = cleanNumber(Math.max(0, loose) * cost + packed.reduce((sum, p) => sum + Math.max(0, p.count) * p.costEach, 0));
+
+  const isSale = !item.item_type || item.item_type.includes('Sale product');
+  if (cost <= 0 && totalBase > 0) warnings.push('No cost price, so stock value and profit are wrong.');
+  if (loose < 0) warnings.push(`Loose stock is negative (${formatQty(loose, 3)} ${unit}).`);
+  packed.filter(p => p.count < 0).forEach(p => warnings.push(`${p.name} stock is negative (${formatQty(p.count, 3)}).`));
+  piles.filter(p => p.kind === 'orphan').forEach(p => warnings.push(`Old ${p.name} count of ${formatQty(p.count, 3)} belongs to no pack. Clear it with a stock count.`));
+  if (isSale && loose > 0 && !looseAllowed && !hasMulti) warnings.push(`${formatQty(loose, 3)} ${unit} loose can't be sold: loose sale is off.`);
+  piles.filter(p => p.isActive && p.kind !== 'orphan' && p.price > 0 && cost > 0 && p.price < p.costEach - 0.005)
+    .forEach(p => warnings.push(`${p.kind === 'loose' ? `1 ${unit}` : p.name} sells below cost (${formatCurrency(p.price)} vs ${formatCurrency(p.costEach)}).`));
+  if (isSale && !piles.some(p => p.isActive && p.kind !== 'orphan' && p.price > 0)) warnings.push('No selling price set.');
+
+  return { piles, totalBase, sellableBase, costValue, warnings };
+}
+
+/** "17% below loose" / "5% above loose", or '' when there is no loose rate to compare with. */
+export function compareWithLoose(each: number, looseRate: number): { text: string; tone: 'cheaper' | 'dearer' | 'same' } {
+  if (!(looseRate > 0) || !(each > 0)) return { text: '', tone: 'same' };
+  const pct = ((each - looseRate) / looseRate) * 100;
+  if (Math.abs(pct) < 0.5) return { text: '', tone: 'same' };
+  return pct < 0
+    ? { text: `${Math.round(-pct)}% below loose`, tone: 'cheaper' }
+    : { text: `${Math.round(pct)}% above loose`, tone: 'dearer' };
+}

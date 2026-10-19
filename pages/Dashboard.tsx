@@ -14,12 +14,13 @@ import SwipeCards from '../components/dashboard/SwipeCards';
 import SwipeRegion from '../components/dashboard/SwipeRegion';
 import { getRetailMilkStock, RETAIL_CHILLER_CAPACITY } from '../lib/retailMilkStock';
 import { formatCurrency, formatQty, cleanNumber } from '../lib/formatters';
-import { saleCashCollected, saleOnlineCollected } from '../lib/moneyFlow';
+import { saleCashCollected, saleOnlineCollected, saleNetCollection, isSpotSupplierPayment } from '../lib/moneyFlow';
 import { businessDate, getDashboardPeriod, percentageChange, DashboardRange } from '../lib/dashboardAnalytics';
 import { exportToCSV } from '../lib/exportUtils';
 import { listCustomerOrders, orderIsOpen } from '../lib/customerOrders';
 import { CustomerOrder } from '../types';
-import { availableSellUnits } from '../lib/sellUnits';
+import { availableSellUnits, saleLineStock } from '../lib/sellUnits';
+import { returnedQtyForLine } from '../lib/stockProfit';
 
 const RANGES = [
   { id: 'today', label: 'Today' }, { id: 'yesterday', label: 'Yesterday' },
@@ -56,7 +57,8 @@ const Dashboard: React.FC = () => {
     items = [],
     currentUser, hasPermission, canPerform, activeShiftSession, isDataLoading, retryLoading,
     productionBatches = [],
-    inventoryLogs = []
+    inventoryLogs = [],
+    dailySupplyEntries = []
   } = useDairy();
 
   // Physical stock stays current, independent of the reporting date range.
@@ -131,7 +133,7 @@ const Dashboard: React.FC = () => {
 
   const rangeSales = useMemo(() => {
     return sales.filter(s => {
-      if (!s.date || s.status === 'Returned') return false;
+      if (!s.date || s.status === 'Returned' || s.status === 'Cancelled') return false;
       const sDate = businessDate(s.date);
       return sDate >= dateFilter.start && sDate <= dateFilter.end;
     });
@@ -140,14 +142,14 @@ const Dashboard: React.FC = () => {
   const prevSales = useMemo(() => {
     const previousStart = dateFilter.previousStart;
     return sales.filter(s => {
-      if (!s.date || s.status === 'Returned') return false;
+      if (!s.date || s.status === 'Returned' || s.status === 'Cancelled') return false;
       const date = businessDate(s.date); return date >= previousStart && date <= dateFilter.previousEnd;
     });
   }, [sales, dateFilter]);
 
   const rangeExpenses = useMemo(() => {
     return expenses.filter(e => {
-      if (!e.date) return false;
+      if (!e.date || (e as any).status === 'Cancelled' || (e as any).status === 'Returned') return false;
       const eDate = businessDate(e.date);
       return eDate >= dateFilter.start && eDate <= dateFilter.end;
     });
@@ -193,26 +195,48 @@ const Dashboard: React.FC = () => {
 
     // Sales Calculations
     let totalSalesAmount = 0;
-    let totalSoldUnits = 0;
+    // kg, L and pcs are never added together: sold quantity is kept per base unit.
+    const soldUnitsByUnit: Record<string, number> = {};
+    const addSold = (unit: string, qty: number) => { soldUnitsByUnit[unit] = cleanNumber((soldUnitsByUnit[unit] || 0) + qty, 3); };
     let cashSalesAmount = 0;
     let onlineSalesAmount = 0;
     let creditSalesAmount = 0;
 
     rangeSales.forEach(s => {
-      const billTotal = Number(s.total) || 0;
-      totalSalesAmount += billTotal;
-      const cash = saleCashCollected(s);
-      const online = saleOnlineCollected(s);
-      cashSalesAmount += cash;
-      onlineSalesAmount += online;
-      creditSalesAmount += Math.max(0, billTotal - cash - online);
+      // Net of returns: a refund first reverses khata, then the cash/online that was paid back.
+      const kept = saleNetCollection(s);
+      totalSalesAmount += kept.net;
+      cashSalesAmount += kept.cash;
+      onlineSalesAmount += kept.online;
+      creditSalesAmount += kept.credit;
 
       (s.items || []).forEach((item: any) => {
-        totalSoldUnits += Number(item.qty) || 0;
+        // Sold quantity in the product's base unit, net of refunds on this exact line.
+        const netQty = Math.max(0, (Number(item.qty) || 0) - returnedQtyForLine(s, item));
+        const master = items.find(def => def.id === item.itemId) || items.find(def => def.name === item.name);
+        const unit = master?.unit || item.baseUnit || (!item.variantId ? item.unit : '') || 'units';
+        addSold(unit, saleLineStock({ ...item, qty: netQty }, master).baseQty);
       });
     });
 
-    const avgBillValue = rangeSales.length > 0 ? (totalSalesAmount / rangeSales.length) : 0;
+    const rangeSupplies = (dailySupplyEntries || []).filter(ds => {
+      if (!ds.date || ds.details?.status === 'Cancelled' || ds.details?.status === 'Pending') return false;
+      const d = businessDate(ds.date);
+      return d >= dateFilter.start && d <= dateFilter.end;
+    });
+    rangeSupplies.forEach(ds => {
+      const supplyAmt = Number(ds.total_amount) || 0;
+      totalSalesAmount += supplyAmt;
+      const rec = Number(ds.details?.payment_received) || 0;
+      cashSalesAmount += rec;
+      creditSalesAmount += Math.max(0, supplyAmt - rec);
+      addSold('L', Number(ds.quantity) || 0);
+    });
+    // A single headline number only exists when every sale shares one unit.
+    const soldUnitKeys = Object.keys(soldUnitsByUnit);
+    const totalSoldUnits = soldUnitKeys.length === 1 ? soldUnitsByUnit[soldUnitKeys[0]] : 0;
+
+    const avgBillValue = (rangeSales.length + rangeSupplies.length) > 0 ? (totalSalesAmount / (rangeSales.length + rangeSupplies.length)) : 0;
 
     // Expenses & Profitability
     const totalExpensesAmount = rangeExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
@@ -324,6 +348,7 @@ const Dashboard: React.FC = () => {
       avgFat,
       totalSalesAmount,
       totalSoldUnits,
+      soldUnitsByUnit,
       cashSalesAmount,
       onlineSalesAmount,
       creditSalesAmount,
@@ -414,19 +439,31 @@ const Dashboard: React.FC = () => {
     const prodMap: Record<string, { name: string; qty: number; revenue: number; unit: string }> = {};
 
     rangeSales.forEach(s => {
+      const billSubtotal = (s.items || []).reduce((sum: number, it: any) => sum + (Number(it.total) || (Number(it.qty) * Number(it.price)) || 0), 0);
+      const billDiscount = Number(s.discount) || 0;
+      const discountRatio = billSubtotal > 0 ? Math.max(0, 1 - (billDiscount / billSubtotal)) : 1;
       (s.items || []).forEach((item: any) => {
-        const key = (item.name || '').trim();
+        const master = items.find(def => def.id === item.itemId) || items.find(def => def.name === item.name);
+        // Group by product (not line name, which differs per pack size); quantity in the base unit.
+        const key = master?.id || item.itemId || (item.name || '').trim();
         if (!key) return;
 
-        const itemQty = Number(item.qty) || 0;
-        const master = items.find(def => def.id === item.itemId || def.name === item.name);
-        const itemUnit = item.unit || master?.unit || 'units';
+        const itemQty = Math.max(0, (Number(item.qty) || 0) - returnedQtyForLine(s, item));
+        if (itemQty <= 0) return;
+
+        const itemUnit = master?.unit || item.baseUnit || (!item.variantId ? item.unit : '') || 'units';
+        const baseQty = saleLineStock({ ...item, qty: itemQty }, master).baseQty;
+
+        const lineRawTotal = (item.total || (Number(item.qty) * (item.price || 0)) || 0);
+        const lineDiscountedTotal = lineRawTotal * discountRatio;
+        const origQty = Number(item.qty) || 1;
+        const lineNetRevenue = (lineDiscountedTotal / origQty) * itemQty;
 
         if (!prodMap[key]) {
-          prodMap[key] = { name: key, qty: 0, revenue: 0, unit: itemUnit };
+          prodMap[key] = { name: master?.name || (item.name || '').trim(), qty: 0, revenue: 0, unit: itemUnit };
         }
-        prodMap[key].qty = cleanNumber(prodMap[key].qty + itemQty, 2);
-        prodMap[key].revenue += (item.total || (itemQty * (item.price || 0)) || 0);
+        prodMap[key].qty = cleanNumber(prodMap[key].qty + baseQty, 2);
+        prodMap[key].revenue += lineNetRevenue;
       });
     });
 
@@ -499,6 +536,7 @@ const Dashboard: React.FC = () => {
 
     supplierTransactions.forEach(tx => {
       if (!tx.date) return;
+      if (isSpotSupplierPayment(tx)) return;
       const d = businessDate(tx.date);
       if (d < dateFilter.start || d > dateFilter.end) return;
 

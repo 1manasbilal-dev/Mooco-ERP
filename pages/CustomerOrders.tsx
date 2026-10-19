@@ -6,10 +6,10 @@ import { useTabs } from '../context/TabContext';
 import { useToast } from '../context/ToastContext';
 import { CustomerOrder, CustomerOrderLine, CustomerOrderStatus, CustomerOrderPaymentStatus } from '../types';
 import { generateInvoiceNumber, generateUUID, roundCurrency, roundQuantity } from '../lib/db';
-import { changeCustomerOrderStatus, listCustomerOrders, localOrderDate, orderAmounts, orderIsOpen, saveCustomerOrder } from '../lib/customerOrders';
+import { changeCustomerOrderStatus, listCustomerOrders, localOrderDate, orderAmounts, orderIsOpen, postCustomerOrderAdvance, saveCustomerOrder, unpostedAdvance } from '../lib/customerOrders';
 import { RichSelect, RichSelectOption } from '../components/RichSelect';
 import { availableSellUnits, oneUnitLabel, sellUnitContains, sellUnitPrice } from '../lib/sellUnits';
-import { formatQty } from '../lib/formatters';
+import { formatQty, formatCurrency } from '../lib/formatters';
 
 const input = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600';
 const select = 'w-full appearance-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 pr-10 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all hover:border-slate-300 focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 cursor-pointer';
@@ -57,7 +57,7 @@ function OrderDialog({ title, onClose, children, busy = false }: { title: string
 }
 
 const CustomerOrders: React.FC = () => {
-  const { customers, items, inventory, settings, currentUser, hasPermission, canPerform } = useDairy();
+  const { customers, items, inventory, settings, accounts, activeShiftSession, currentUser, hasPermission, canPerform, retryLoading } = useDairy();
   const { openTab } = useTabs();
   const { showToast } = useToast();
   const location = useLocation();
@@ -77,7 +77,7 @@ const CustomerOrders: React.FC = () => {
   const busyRef = useRef(false);
   const loadCounter = useRef(0);
   const today = localOrderDate();
-  const money = (value: number) => `${settings.general.currencySymbol || 'Rs'} ${Number(value || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 })}`;
+  const money = (value: number) => formatCurrency(value, `${settings.general.currencySymbol || 'Rs'} `);
   const canCreate = canPerform('customer_orders', 'create');
   const canEdit = canPerform('customer_orders', 'edit');
   const canCancel = canPerform('customer_orders', 'cancel');
@@ -114,9 +114,9 @@ const CustomerOrders: React.FC = () => {
         if (!customer.isActive) {
           badge = { text: 'Inactive', variant: 'slate' };
         } else if (bal > 0) {
-          badge = { text: `Due Rs ${bal.toLocaleString('en-PK')}`, variant: 'red' };
+          badge = { text: `Due ${formatCurrency(bal)}`, variant: 'red' };
         } else if (bal < 0) {
-          badge = { text: `Adv Rs ${Math.abs(bal).toLocaleString('en-PK')}`, variant: 'green' };
+          badge = { text: `Adv ${formatCurrency(Math.abs(bal))}`, variant: 'green' };
         }
 
         return {
@@ -264,14 +264,51 @@ const CustomerOrders: React.FC = () => {
         discount: calculated.discount,
         total: calculated.total
       };
-      const saved = await saveCustomerOrder(editor?.existing ? payload : { ...payload, id: draft.id, order_number: draft.order_number, created_by: currentUser.id }, editor?.existing);
+      let saved = await saveCustomerOrder(editor?.existing ? payload : { ...payload, id: draft.id, order_number: draft.order_number, created_by: currentUser.id }, editor?.existing);
+      // The advance is real money received now: post it to the customer khata and the receiving account.
+      if (unpostedAdvance(saved) > 0) {
+        try {
+          saved = await postAdvance(saved);
+        } catch (postErr: any) {
+          const unposted = saved;
+          setOrders(previous => [unposted, ...previous.filter(order => order.id !== unposted.id)]);
+          setEditor({ existing: unposted });
+          throw new Error(`Order save ho gaya, lekin advance khaate mein post nahi hua: ${postErr.message} Dobara Save dabayein.`);
+        }
+      }
       setOrders(previous => [saved, ...previous.filter(order => order.id !== saved.id)]); setEditor(null); setDetailId(saved.id); showToast(editor?.existing ? 'Customer order updated' : 'Customer order booked', 'success');
     } catch (err: any) { setFormError(err.message); }
     finally { busyRef.current = false; setBusy(false); }
   };
+  // Cash advance goes into the open drawer (so the booking shift counts it), else the default cash
+  // account. Online advance goes to the default digital account.
+  const postAdvance = async (order: CustomerOrder) => {
+    const online = order.payment_mode === 'Online';
+    const drawerAccount = activeShiftSession?.status === 'Active' ? (activeShiftSession.account_id || activeShiftSession.drawer_id) : null;
+    const accountId = online
+      ? (settings.financial?.defaultDigitalAccountId || accounts.find(account => account.type === 'Bank' || account.type === 'Wallet')?.id)
+      : (drawerAccount || settings.financial?.defaultCashAccountId || accounts.find(account => account.type === 'Cash')?.id);
+    if (!accountId) throw new Error(online ? 'Koi Bank/Wallet account nahi mila.' : 'Koi Cash account nahi mila.');
+    const inShift = !online && !!drawerAccount;
+    const posted = await postCustomerOrderAdvance(order, {
+      // One id per advance level, so a retry after a lost response never posts the same money twice.
+      tx_id: `ctx_adv_${order.id}_${Math.round(Number(order.advance_paid || 0) * 100)}`,
+      account_id: accountId,
+      business_day_id: inShift ? activeShiftSession?.business_day_id : null,
+      shift_session_id: inShift ? activeShiftSession?.id : null,
+      drawer_id: inShift ? activeShiftSession?.drawer_id : null,
+      cashier_id: currentUser?.id || null
+    });
+    void retryLoading().catch(() => {});
+    return posted;
+  };
   const updateStatus = async (order: CustomerOrder, status: CustomerOrderStatus) => {
     if (busyRef.current || (status === 'Cancelled' ? !canCancel : !canEdit)) return;
-    if (status === 'Cancelled' && !window.confirm(`Cancel order ${order.order_number}? No stock or payment has been posted for this booking.`)) return;
+    const postedAdvance = Number(order.advance_posted || 0);
+    const cancelNote = postedAdvance > 0
+      ? `Advance ${money(postedAdvance)} customer ke khaate mein credit rahega. Wapas karna ho to customer khaate se refund karein.`
+      : 'Is order ka koi stock ya payment post nahi hua.';
+    if (status === 'Cancelled' && !window.confirm(`Order ${order.order_number} cancel karein?\n\n${cancelNote}`)) return;
     busyRef.current = true; setBusy(true);
     try { const saved = await changeCustomerOrderStatus(order, status); setOrders(previous => previous.map(row => row.id === saved.id ? saved : row)); showToast(`Order ${status.toLowerCase()}`, 'success'); }
     catch (err: any) { showToast(err.message, 'error'); void refresh(); }

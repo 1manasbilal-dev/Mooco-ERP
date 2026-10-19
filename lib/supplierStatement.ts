@@ -61,6 +61,10 @@ interface RawTx {
     mode?: string;
     note?: string;
     purchase_id?: string;
+    /** Every material line one bill payment covers. */
+    purchase_ids?: string[];
+    /** Paid share per line id for a multi-line bill. */
+    line_paid?: Record<string, number>;
     cash_refund?: number;
     account_id?: string;
   };
@@ -302,6 +306,35 @@ function escapeHtml(value: unknown) {
   ));
 }
 
+/**
+ * One spot payment for a multi-line material bill covers every line of that bill. New rows carry
+ * details.purchase_ids; older rows are matched to the lines bought the same day whose paid amounts add
+ * up to the payment. Returns how much of each line is covered, and marks the payments as used.
+ */
+function coverBillPayments(lines: Array<{ id: string; date?: string; paid_amount?: number; details?: { paid_amount?: number } }>, txs: RawTx[], used: Set<string>) {
+  const covered = new Map<string, number>();
+  const linked = new Set<string>();
+  txs.filter(tx => isPaymentType(tx.type) && !used.has(tx.id) && Array.isArray(tx.details?.purchase_ids)).forEach(tx => {
+    const ids: string[] = tx.details?.purchase_ids || [];
+    const shares = tx.details?.line_paid || {};
+    ids.forEach(id => {
+      const line = lines.find(row => row.id === id);
+      covered.set(id, (covered.get(id) || 0) + money(shares[id] ?? (line ? paidOf(line) : 0)));
+      linked.add(id);
+    });
+    used.add(tx.id);
+  });
+  txs.filter(tx => isPaymentType(tx.type) && !used.has(tx.id) && String(tx.id || '').startsWith('stx_mp_')).forEach(tx => {
+    const group = lines.filter(row => !linked.has(row.id) && !covered.has(row.id) && paidOf(row) > 0.5 && dayKey(row.date) === dayKey(tx.date));
+    const sum = group.reduce((total, row) => total + paidOf(row), 0);
+    if (group.length > 1 && Math.abs(sum - Number(tx.amount || 0)) < 1) {
+      group.forEach(row => covered.set(row.id, paidOf(row)));
+      used.add(tx.id);
+    }
+  });
+  return covered;
+}
+
 function matchPayments(purchase: { id: string; date?: string; paid_amount?: number; details?: { paid_amount?: number } }, txs: RawTx[], used: Set<string>) {
   const matched: RawTx[] = [];
   const exact = txs.filter(tx => isPaymentType(tx.type) && !used.has(tx.id) && (
@@ -387,6 +420,8 @@ export function buildSupplierStatement(input: {
     matchPayments(row, transactions, allocated).forEach(tx => khataSkip.add(tx.id));
   });
 
+  const billCovered = coverBillPayments(materials.filter(row => !voidedIds.has(row.id)), transactions, allocated);
+
   const khata: Omit<LedgerRow, 'runningBalance'>[] = [];
   const cash: CashLine[] = [];
 
@@ -455,8 +490,9 @@ export function buildSupplierStatement(input: {
       kind: 'Material',
       canDelete: false
     });
-    const matched = matchPayments(row, transactions, allocated);
-    const covered = matched.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+    const fromBill = billCovered.get(row.id) || 0;
+    const matched = fromBill >= paidOf(row) - 0.5 ? [] : matchPayments(row, transactions, allocated);
+    const covered = fromBill + matched.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
     const gap = money(paidOf(row) - covered);
     if (gap > 0.5) {
       const syntheticId = `spot_mat_${row.id}`;
@@ -497,7 +533,9 @@ export function buildSupplierStatement(input: {
     const voided = Boolean(link && voidedIds.has(link)) || khataSkip.has(tx.id);
 
     if (isPaymentType(tx.type)) {
-      if (amount > 0.5) {
+      // A waiver / discount settles the khata but no money left any account.
+      const isWaiver = Boolean((tx.details as any)?.waiver) || /waiver|discount/i.test(mode);
+      if (!voided && amount > 0.5 && !isWaiver) {
         pushCash({
           id: tx.id,
           date,
@@ -514,7 +552,7 @@ export function buildSupplierStatement(input: {
         });
       }
       if (!voided && amount > 0.5) {
-        const label = tx.type === 'Advance' ? 'Advance paid' : 'Payment paid';
+        const label = isWaiver ? 'Settled by waiver' : tx.type === 'Advance' ? 'Advance paid' : 'Payment paid';
         khata.push({
           id: tx.id,
           date,
@@ -629,7 +667,7 @@ export function buildSupplierStatement(input: {
 
   const periodRows = withBalance.filter(row => row.kind === 'Opening' ? !from && !to : inRange(row.date, from, to));
   const beforeRows = from
-    ? withBalance.filter(row => row.date && dayKey(row.date) < from)
+    ? withBalance.filter(row => row.kind === 'Opening' || (row.date && dayKey(row.date) < from))
     : withBalance.filter(row => row.kind === 'Opening');
   const openingBalance = beforeRows.length ? beforeRows[beforeRows.length - 1].runningBalance : (periodRows.find(row => row.kind === 'Opening')?.runningBalance || 0);
   const closingBalance = periodRows.length ? periodRows[periodRows.length - 1].runningBalance : openingBalance;

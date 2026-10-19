@@ -78,6 +78,23 @@ export async function changeCustomerOrderStatus(order: CustomerOrder, status: Cu
   window.dispatchEvent(new Event('mooco-customer-orders-changed'));
   return data as CustomerOrder;
 }
+/** Posts the not-yet-posted part of the order's advance as a khata payment into the receiving account. */
+export async function postCustomerOrderAdvance(order: CustomerOrder, payload: { tx_id: string; account_id: string; business_day_id?: string | null; shift_session_id?: string | null; drawer_id?: string | null; cashier_id?: string | null }): Promise<CustomerOrder> {
+  checkOnline();
+  const { data, error } = await loadRead(supabase.rpc('post_customer_order_advance', {
+    p_order_id: order.id,
+    p_tx_id: payload.tx_id,
+    p_account_id: payload.account_id,
+    p_business_day_id: payload.business_day_id || null,
+    p_shift_session_id: payload.shift_session_id || null,
+    p_drawer_id: payload.drawer_id || null,
+    p_cashier_id: payload.cashier_id || null
+  }));
+  if (error) fail(error);
+  window.dispatchEvent(new Event('mooco-customer-orders-changed'));
+  return data as CustomerOrder;
+}
+export const unpostedAdvance = (order: CustomerOrder) => roundCurrency(Math.max(0, Number(order.advance_paid || 0) - Number(order.advance_posted || 0)));
 export async function checkoutCustomerOrder(order: CustomerOrder, payload: Record<string, unknown>) {
   checkOnline();
   const { data, error } = await loadRead(supabase.rpc('checkout_customer_order', { p_order_id: order.id, p_revision: order.revision, p_payload: payload }));

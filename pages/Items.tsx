@@ -22,12 +22,14 @@ import { UnitSelector } from '../components/units/UnitSelector';
 import { UnitManagerModal } from '../components/units/UnitManagerModal';
 import { detectUnitGroupId } from '../lib/unitConversion';
 import { oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPresets, sellUnitPrice } from '../lib/sellUnits';
+import { SellUnitsTab, sellUnitDraftIssues } from '../components/items/SellUnitsTab';
+import { ItemDetailView, SellInPosEntry } from '../components/items/ItemDetailView';
 
 const MotionDiv = motion.div as any;
 
 type SortField = 'name' | 'category' | 'item_type' | 'cost_price' | 'selling_price' | 'unit' | 'stock' | 'sort_order';
 type SortOrder = 'asc' | 'desc';
-type DrawerMode = 'edit' | 'create';
+type DrawerMode = 'view' | 'edit' | 'create';
 
 // Helper: Reusable MultiSelect
 const MultiSelect: React.FC<{
@@ -370,6 +372,22 @@ const Items: React.FC = () => {
     setIsDrawerOpen(true);
   };
 
+  // Read-only product page: stock by pile, packing, prices and warnings. Edit opens the form from there.
+  const handleOpenViewInternal = (item: ItemDefinition) => {
+    setSelectedItem(item);
+    setDrawerMode('view');
+    setIsDrawerOpen(true);
+  };
+
+  const handleOpenView = (item: ItemDefinition) => {
+    handleOpenViewInternal(item);
+    const sp = new URLSearchParams(location.search);
+    sp.set('id', item.id);
+    sp.set('mode', 'view');
+    const q = sp.toString();
+    navigate(`${location.pathname}${q ? `?${q}` : ''}`, { replace: true });
+  };
+
   // Public handlers with URL sync
   const handleOpenEdit = (item: ItemDefinition) => {
     handleOpenEditInternal(item);
@@ -412,8 +430,10 @@ const Items: React.FC = () => {
     } else if (idParam && items.length > 0) {
       const match = items.find(i => i.id === idParam);
       if (match) {
-        if (!isDrawerOpen || selectedItem?.id !== idParam || drawerMode !== 'edit') {
-          handleOpenEditInternal(match);
+        const wanted: DrawerMode = modeParam === 'view' ? 'view' : 'edit';
+        if (!isDrawerOpen || selectedItem?.id !== idParam || drawerMode !== wanted) {
+          if (wanted === 'view') handleOpenViewInternal(match);
+          else handleOpenEditInternal(match);
         }
       }
     } else if (!idParam && isDrawerOpen) {
@@ -480,9 +500,11 @@ const Items: React.FC = () => {
   const handleVariantSubmit = () => {
     const contains = parseFloat(newVariant.productQty);
     if (!newVariant.name.trim() || !(contains > 0)) { 
-      showToast(`Enter a name and how many ${formData.unit || 'units'} one of these contains`, "warning"); 
+      showToast(`Enter a name and the size in ${formData.unit || 'units'}`, "warning"); 
       return; 
     }
+    const issues = sellUnitDraftIssues(newVariant, variantSubTab, formData.unit || '', formData.variants || [], editingVariantIndex);
+    if (issues.length > 0) { showToast(issues[0], "warning"); return; }
     const isMultiUnit = variantSubTab === 'multi_unit';
     let packItemName = '';
     if (!isMultiUnit && newVariant.packId) { 
@@ -498,7 +520,7 @@ const Items: React.FC = () => {
       quantity_in_base_unit: contains, 
       selling_price: newVariant.price ? parseFloat(newVariant.price) : undefined, 
       deduct_from_base: isMultiUnit, 
-      isActive: true 
+      isActive: editingVariantIndex >= 0 && formData.variants ? formData.variants[editingVariantIndex].isActive !== false : true 
     };
     let updatedVariants = [...(formData.variants || [])];
     if (editingVariantIndex >= 0) { 
@@ -530,10 +552,17 @@ const Items: React.FC = () => {
     const target = formData.variants?.[index];
     const onHand = target ? Number((inventory?.find(i => i.item_id === selectedItem?.id)?.variant_stocks || selectedItem?.variant_stocks || {})[target.id] || 0) : 0;
     if (target && target.deduct_from_base !== true && Math.abs(onHand) > 0.0001) {
-      showToast(`"${target.name}" ke ${onHand} packs stock mein hain. Pehle stock count se 0 karein, phir hatayein.`, "warning");
+      showToast(`${target.name} still has ${onHand} packs in stock. Count it to 0 first, or hide it instead.`, "warning");
       return;
     }
     const updated = [...(formData.variants || [])]; updated.splice(index, 1); setFormData({ ...formData, variants: updated }); if (editingVariantIndex === index) resetVariantForm();
+  };
+  // Hidden units stay on old bills and keep their stock; they just stop showing in POS.
+  const toggleVariantActive = (index: number) => {
+    const updated = [...(formData.variants || [])];
+    if (!updated[index]) return;
+    updated[index] = { ...updated[index], isActive: updated[index].isActive === false };
+    setFormData({ ...formData, variants: updated });
   };
   const resetVariantForm = () => { setNewVariant({ name: '', packId: '', packQty: '1', productQty: '', price: '', fromBase: variantSubTab === 'multi_unit' }); setEditingVariantIndex(-1); };
 
@@ -810,7 +839,7 @@ const Items: React.FC = () => {
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, item.id)}
                 onDragEnd={handleDragEnd}
-                onClick={() => handleOpenEdit(item)}
+                onClick={() => handleOpenView(item)}
                 className={`bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-sm active:bg-slate-50 transition-all cursor-pointer relative overflow-hidden ${dropBorderClass} ${isSource ? 'opacity-40 scale-[0.98]' : ''}`}
               >
                 {/* Header Row */}
@@ -1069,7 +1098,7 @@ const Items: React.FC = () => {
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, item.id)}
                             onDragEnd={handleDragEnd}
-                            onClick={() => handleOpenEdit(item)}
+                            onClick={() => handleOpenView(item)}
                             className={`group transition-all hover:bg-lime-50/40 cursor-pointer ${dropBorderClass} ${isSource ? 'opacity-40 bg-slate-100 dark:bg-slate-800' : ''}`}
                           >
                              {/* POS Sort Order & Drag Handle */}
@@ -1242,7 +1271,50 @@ const Items: React.FC = () => {
       {/* 🌟 UNIFIED SIDE DRAWER (EDIT / CREATE PRODUCT)            */}
       {/* ========================================================= */}
       <AnimatePresence>
-        {isDrawerOpen && (
+        {isDrawerOpen && drawerMode === 'view' && selectedItem && (() => {
+          const liveItem = items.find(i => i.id === selectedItem.id) || selectedItem;
+          const liveInv = inventory?.find(i => i.item_id === liveItem.id);
+          const sellInPos = (entry?: SellInPosEntry) => {
+            const sp = new URLSearchParams({ quick: liveItem.id });
+            if (entry) {
+              sp.set('quickMode', entry.mode);
+              sp.set('quickValue', entry.value);
+              if (entry.variantId) sp.set('quickVariant', entry.variantId);
+            }
+            handleCloseDrawer();
+            openTab(`/pos?${sp.toString()}`);
+          };
+          return (
+            <div className="fixed inset-0 z-[100] flex overflow-hidden">
+              <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={handleCloseDrawer} />
+              <MotionDiv
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+                className="relative ml-auto w-full max-w-xl bg-white dark:bg-slate-900 shadow-2xl flex flex-col h-full z-10 border-l border-slate-200 dark:border-slate-800"
+              >
+                <ItemDetailView
+                  item={liveItem}
+                  stock={Number(liveInv?.quantity ?? (liveItem as any).stock ?? 0)}
+                  variantStocks={(liveInv?.variant_stocks || liveItem.variant_stocks || {}) as Record<string, number>}
+                  allowNegativeStock={Boolean(settings?.inventory?.allowNegativeStock)}
+                  canEdit={canEdit}
+                  canDelete={canDelete}
+                  canOpenPos={canOpenPos}
+                  materialName={id => items.find(i => i.id === id)?.name}
+                  onClose={handleCloseDrawer}
+                  onEdit={() => handleOpenEdit(liveItem)}
+                  onDelete={() => handleDeleteClick(liveItem)}
+                  onReactivate={() => reactivateEntity('item', liveItem.id)}
+                  onDeactivate={() => handleDeleteClick(liveItem)}
+                  onSellInPos={sellInPos}
+                />
+              </MotionDiv>
+            </div>
+          );
+        })()}
+        {isDrawerOpen && drawerMode !== 'view' && (
           <div className="fixed inset-0 z-[100] flex overflow-hidden">
             {/* Backdrop */}
             <MotionDiv 
@@ -1491,7 +1563,7 @@ const Items: React.FC = () => {
                                  onOpenManager={() => !formData.isSystem && setIsUnitManagerOpen(true)}
                               />
                               {unitLocked && (
-                                 <p className="mt-1.5 text-[11px] font-medium text-amber-600">Is product ka stock {selectedItem?.unit} mein para hai, isliye base unit lock hai. Unit badalne ke liye pehle stock 0 karein.</p>
+                                 <p className="mt-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Locked while stock exists.</p>
                               )}
                                                          </div>
 
@@ -1832,461 +1904,30 @@ const Items: React.FC = () => {
 
                      {/* TAB 3: UNITS & PACKAGING */}
                      {activeFormTab === 'variants' && (() => {
-                       const baseUnit = formData.unit || 'unit';
-                       const looseRate = Number(formData.selling_price) || 0;
-                       const allVariants = formData.variants || [];
-                       const multiUnits = allVariants.filter(v => v.deduct_from_base === true);
-                       const packagedVariants = allVariants.filter(v => v.deduct_from_base !== true);
-
-                       const draftContains = Number(newVariant.productQty);
-                       const draftHasSize = draftContains > 0;
-                       const draftPrice = draftHasSize ? sellUnitPrice(looseRate, draftContains, newVariant.price ? Number(newVariant.price) : undefined) : 0;
-                       const draftEach = draftHasSize ? pricePerBase(draftPrice, draftContains) : 0;
-                       const looseEachDiffers = draftHasSize && looseRate > 0 && Math.abs(draftEach - looseRate) > 0.009;
-
+                       const liveInv = selectedItem ? inventory?.find(i => i.item_id === selectedItem.id) : undefined;
                        return (
-                         <div className="space-y-5 animate-in fade-in">
-                           {/* Segmented Sub-Tab Switcher */}
-                           <div className="p-1 bg-slate-100 dark:bg-slate-800/80 rounded-2xl flex items-center gap-1 border border-slate-200/80 dark:border-slate-700/80">
-                             <button
-                               type="button"
-                               onClick={() => {
-                                 setVariantSubTab('multi_unit');
-                                 resetVariantForm();
-                               }}
-                               className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                                 variantSubTab === 'multi_unit'
-                                   ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm border border-slate-200/60 dark:border-slate-700'
-                                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                               }`}
-                             >
-                               <Layers size={15} className={variantSubTab === 'multi_unit' ? 'text-indigo-600' : 'text-slate-400'} />
-                               <span>Multi-Units (یونٹس / پیمانے)</span>
-                               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                                 variantSubTab === 'multi_unit' ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                               }`}>
-                                 {multiUnits.length}
-                               </span>
-                             </button>
-
-                             <button
-                               type="button"
-                               onClick={() => {
-                                 setVariantSubTab('packaging');
-                                 resetVariantForm();
-                               }}
-                               className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                                 variantSubTab === 'packaging'
-                                   ? 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-300 shadow-sm border border-slate-200/60 dark:border-slate-700'
-                                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                               }`}
-                             >
-                               <Package size={15} className={variantSubTab === 'packaging' ? 'text-amber-600' : 'text-slate-400'} />
-                               <span>Pre-Packaged Stock (پیکنگ / ڈبہ)</span>
-                               <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                                 variantSubTab === 'packaging' ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                               }`}>
-                                 {packagedVariants.length}
-                               </span>
-                             </button>
-                           </div>
-
-                           {/* ==================== SUB-TAB 1: MULTI-UNITS ==================== */}
-                           {variantSubTab === 'multi_unit' && (
-                             <div className="space-y-4">
-                               {/* Informational banner */}
-                               <div className="bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl p-3.5 flex items-start gap-3">
-                                 <Info className="text-indigo-600 shrink-0 mt-0.5" size={17} />
-                                 <div className="text-xs text-indigo-900 dark:text-indigo-200 space-y-0.5">
-                                   <p className="font-bold">Multi-Units share one main inventory stock pool</p>
-                                   <p className="opacity-80 leading-relaxed text-[11px]">
-                                     Example: Eggs (Piece, Dozen = 12, Tray = 30). Stock total pieces (e.g. 186 PCS) dikhai dega. Dozen ya Tray alag se 0 stock show nahi hongi. Sale hone per direct main stock se cut hoga.
-                                   </p>
-                                 </div>
-                               </div>
-
-                               {/* Form Card */}
-                               <div className="bg-indigo-50/40 dark:bg-indigo-950/20 p-4 rounded-2xl border border-indigo-200/70 dark:border-indigo-900/50 space-y-3.5 relative">
-                                 {editingVariantIndex >= 0 && (
-                                   <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-t-2xl"></div>
-                                 )}
-                                 
-                                 <div className="flex justify-between items-center">
-                                   <h4 className="font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-2 text-xs uppercase tracking-wider">
-                                     <Layers size={15} className="text-indigo-600" />
-                                     {editingVariantIndex >= 0 ? 'Edit Multi-Unit' : 'Add Multi-Unit (فروخت کا پیمانہ)'}
-                                   </h4>
-                                   {editingVariantIndex >= 0 && (
-                                     <button type="button" onClick={resetVariantForm} className="text-xs text-indigo-600 dark:text-indigo-300 font-bold hover:underline cursor-pointer">
-                                       Cancel edit
-                                     </button>
-                                   )}
-                                 </div>
-
-                                 {/* Quick Presets */}
-                                 {Boolean(formData.unit) && (
-                                   <div className="flex flex-wrap items-center gap-1.5">
-                                     <span className="text-[10px] font-bold text-slate-400 uppercase mr-0.5">Quick Presets:</span>
-                                     {sellUnitPresets(formData.unit).map(preset => (
-                                       <button
-                                         key={preset.name}
-                                         type="button"
-                                         onClick={() => setNewVariant(prev => ({ ...prev, name: preset.name, productQty: String(preset.contains), price: '' }))}
-                                         className="text-[11px] px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-900 dark:text-indigo-200 font-bold border border-indigo-200 dark:border-indigo-800/80 transition-all cursor-pointer active:scale-95"
-                                       >
-                                         + {preset.name} ({formatQty(preset.contains, 3)} {baseUnit})
-                                       </button>
-                                     ))}
-                                   </div>
-                                 )}
-
-                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Unit Name (e.g. Dozen, Tray)</label>
-                                     <input
-                                       type="text"
-                                       className={`${inputClass} text-xs font-bold`}
-                                       placeholder="Dozen, Tray, Pao..."
-                                       value={newVariant.name}
-                                       onChange={e => setNewVariant({ ...newVariant, name: e.target.value })}
-                                     />
-                                   </div>
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Contains ({baseUnit})</label>
-                                     <input
-                                       type="number"
-                                       min="0.001"
-                                       step="any"
-                                       className={`${inputClass} text-xs font-mono font-bold`}
-                                       placeholder="12"
-                                       value={newVariant.productQty}
-                                       onChange={e => setNewVariant({ ...newVariant, productQty: e.target.value })}
-                                     />
-                                   </div>
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Selling Price (Rs)</label>
-                                     <div className="relative">
-                                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">Rs</span>
-                                       <input
-                                         type="number"
-                                         min="0"
-                                         step="any"
-                                         className={`${inputClass} pl-8 text-xs font-mono font-black text-lime-700 dark:text-lime-400`}
-                                         placeholder={draftHasSize ? String(draftPrice) : '275'}
-                                         value={newVariant.price}
-                                         onChange={e => setNewVariant({ ...newVariant, price: e.target.value })}
-                                       />
-                                     </div>
-                                   </div>
-                                 </div>
-
-                                 {draftHasSize && (
-                                   <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-between">
-                                     <span>
-                                       1 {newVariant.name || 'Unit'} = {draftContains} {baseUnit} · Rs {formatCurrency(draftPrice)}
-                                     </span>
-                                     <span className="text-slate-400 font-mono text-[11px]">
-                                       (Rs {formatCurrency(draftEach)}/{baseUnit})
-                                       {looseEachDiffers && <span className="text-amber-600 dark:text-amber-400 ml-1">· loose Rs {formatCurrency(looseRate)}</span>}
-                                     </span>
-                                   </div>
-                                 )}
-
-                                 <button
-                                   type="button"
-                                   onClick={handleVariantSubmit}
-                                   className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm active:scale-98 ${
-                                     editingVariantIndex >= 0
-                                       ? 'bg-indigo-700 hover:bg-indigo-800 text-white'
-                                       : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200'
-                                   }`}
-                                 >
-                                   {editingVariantIndex >= 0 ? <Save size={14} /> : <Plus size={14} />}
-                                   {editingVariantIndex >= 0 ? 'Update Multi-Unit' : 'Save Multi-Unit'}
-                                 </button>
-                               </div>
-
-                               {/* Configured Multi-Units List */}
-                               <div className="space-y-2">
-                                 <div className="flex items-center justify-between">
-                                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                     Configured Units Ladder (Deducts from Main Stock):
-                                   </label>
-                                   <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 font-mono">
-                                     {multiUnits.length} Active Units
-                                   </span>
-                                 </div>
-
-                                 {/* Pinned Base Unit Row */}
-                                 <div className="px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between text-xs">
-                                   <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-200">
-                                     <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                     <span>1 {baseUnit} (Base Stock Unit)</span>
-                                   </div>
-                                   <span className="font-mono font-black text-slate-900 dark:text-white">
-                                     {looseRate > 0 ? `Rs ${formatCurrency(looseRate)}` : 'No Base Price'}
-                                   </span>
-                                 </div>
-
-                                 {multiUnits.length > 0 ? (
-                                   multiUnits.map((v) => {
-                                     const globalIndex = formData.variants?.findIndex(item => item.id === v.id) ?? -1;
-                                     const contains = sellUnitContains(v);
-                                     const price = sellUnitPrice(looseRate, contains, v.selling_price);
-                                     const each = pricePerBase(price, contains);
-                                     return (
-                                       <div
-                                         key={v.id}
-                                         className={`px-3.5 py-2.5 rounded-xl border flex items-center justify-between gap-3 text-xs transition-all ${
-                                           editingVariantIndex === globalIndex
-                                             ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 ring-1 ring-indigo-500'
-                                             : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-indigo-300'
-                                         }`}
-                                       >
-                                         <div className="min-w-0">
-                                           <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                                             <span>1 {v.name} = {contains} {baseUnit}</span>
-                                             <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-                                               Pool Stock
-                                             </span>
-                                           </div>
-                                           <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-                                             Rate: Rs {formatCurrency(price)} · (Rs {formatCurrency(each)}/{baseUnit})
-                                           </p>
-                                         </div>
-                                         <div className="flex items-center gap-1.5 shrink-0">
-                                           <button
-                                             type="button"
-                                             onClick={() => editVariant(globalIndex)}
-                                             className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                             title="Edit"
-                                           >
-                                             <Edit size={14} />
-                                           </button>
-                                           <button
-                                             type="button"
-                                             onClick={() => removeVariant(globalIndex)}
-                                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                             title="Remove"
-                                           >
-                                             <Trash2 size={14} />
-                                           </button>
-                                         </div>
-                                       </div>
-                                     );
-                                   })
-                                 ) : (
-                                   <div className="p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 text-center">
-                                     <p className="text-xs text-slate-400 font-medium">
-                                       No multi-units configured yet. Currently sold as single {baseUnit} only.
-                                     </p>
-                                   </div>
-                                 )}
-                               </div>
-                             </div>
-                           )}
-
-                           {/* ==================== SUB-TAB 2: PRE-PACKAGED STOCK ==================== */}
-                           {variantSubTab === 'packaging' && (
-                             <div className="space-y-4">
-                               {/* Informational banner */}
-                               <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-100 dark:border-amber-900/50 rounded-2xl p-3.5 flex items-start gap-3">
-                                 <Package className="text-amber-600 shrink-0 mt-0.5" size={17} />
-                                 <div className="text-xs text-amber-900 dark:text-amber-200 space-y-0.5">
-                                   <p className="font-bold">Pre-Packaged Stock maintains independent physical counts</p>
-                                   <p className="opacity-80 leading-relaxed text-[11px]">
-                                     Example: Shahi Kheer Cup (0.17 kg + 1 Cup) and Tub (0.5 kg + 1 Tub). Production me ye physically pack hoti hen or alag stock rakhti hen (e.g. 52 Cups, 12 Tubs). Loose stock 0 KG hone per bhi item Out of Stock nahi kehlati!
-                                   </p>
-                                 </div>
-                               </div>
-
-                               {/* Form Card */}
-                               <div className="bg-amber-50/40 dark:bg-amber-950/20 p-4 rounded-2xl border border-amber-200/70 dark:border-amber-900/50 space-y-3.5 relative">
-                                 {editingVariantIndex >= 0 && (
-                                   <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-amber-600 rounded-t-2xl"></div>
-                                 )}
-
-                                 <div className="flex justify-between items-center">
-                                   <h4 className="font-bold text-amber-950 dark:text-amber-200 flex items-center gap-2 text-xs uppercase tracking-wider">
-                                     <Package size={15} className="text-amber-600" />
-                                     {editingVariantIndex >= 0 ? 'Edit Packaged Variant' : 'Add Packaged Variant (تیار شدہ پیکنگ)'}
-                                   </h4>
-                                   {editingVariantIndex >= 0 && (
-                                     <button type="button" onClick={resetVariantForm} className="text-xs text-amber-600 dark:text-amber-300 font-bold hover:underline cursor-pointer">
-                                       Cancel edit
-                                     </button>
-                                   )}
-                                 </div>
-
-                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Package Name (e.g. Cup, Tub)</label>
-                                     <input
-                                       type="text"
-                                       className={`${inputClass} text-xs font-bold`}
-                                       placeholder="Shahi Kheer Cup, 500g Tub..."
-                                       value={newVariant.name}
-                                       onChange={e => setNewVariant({ ...newVariant, name: e.target.value })}
-                                     />
-                                   </div>
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Net Qty per Pack ({baseUnit})</label>
-                                     <input
-                                       type="number"
-                                       min="0.001"
-                                       step="any"
-                                       className={`${inputClass} text-xs font-mono font-bold`}
-                                       placeholder="0.17"
-                                       value={newVariant.productQty}
-                                       onChange={e => setNewVariant({ ...newVariant, productQty: e.target.value })}
-                                     />
-                                   </div>
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Selling Price (Rs)</label>
-                                     <div className="relative">
-                                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold font-mono">Rs</span>
-                                       <input
-                                         type="number"
-                                         min="0"
-                                         step="any"
-                                         className={`${inputClass} pl-8 text-xs font-mono font-black text-lime-700 dark:text-lime-400`}
-                                         placeholder="120"
-                                         value={newVariant.price}
-                                         onChange={e => setNewVariant({ ...newVariant, price: e.target.value })}
-                                       />
-                                     </div>
-                                   </div>
-                                 </div>
-
-                                 {/* Packaging Material Connection */}
-                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Packaging Material (Dabba / Cup)</label>
-                                     <select
-                                       className={`${inputClass} text-xs`}
-                                       value={newVariant.packId}
-                                       onChange={e => setNewVariant({ ...newVariant, packId: e.target.value })}
-                                     >
-                                       <option value="">No packaging material</option>
-                                       {packagingMaterials.map(p => (
-                                         <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>
-                                       ))}
-                                     </select>
-                                   </div>
-                                   <div>
-                                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Material Qty Consumed per Pack</label>
-                                     <input
-                                       type="number"
-                                       min="0.1"
-                                       step="any"
-                                       className={`${inputClass} text-xs font-mono`}
-                                       placeholder="1"
-                                       value={newVariant.packQty}
-                                       onChange={e => setNewVariant({ ...newVariant, packQty: e.target.value })}
-                                       disabled={!newVariant.packId}
-                                     />
-                                   </div>
-                                 </div>
-
-                                 {draftHasSize && (
-                                   <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-between">
-                                     <span>
-                                       1 {newVariant.name || 'Pack'} = {draftContains} {baseUnit}
-                                       {newVariant.packId ? ` + ${newVariant.packQty || 1} material` : ''}
-                                     </span>
-                                     <span className="font-mono font-bold text-lime-700 dark:text-lime-400">
-                                       Rs {formatCurrency(newVariant.price ? Number(newVariant.price) : draftPrice)}
-                                     </span>
-                                   </div>
-                                 )}
-
-                                 <button
-                                   type="button"
-                                   onClick={handleVariantSubmit}
-                                   className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm active:scale-98 ${
-                                     editingVariantIndex >= 0
-                                       ? 'bg-amber-700 hover:bg-amber-800 text-white'
-                                       : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-200'
-                                   }`}
-                                 >
-                                   {editingVariantIndex >= 0 ? <Save size={14} /> : <Plus size={14} />}
-                                   {editingVariantIndex >= 0 ? 'Update Packaged Variant' : 'Save Packaged Variant'}
-                                 </button>
-                               </div>
-
-                               {/* Configured Packaged Variants List */}
-                               <div className="space-y-2">
-                                 <div className="flex items-center justify-between">
-                                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                     Configured Pre-Packaged Stock (Independent Physical Stock):
-                                   </label>
-                                   <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 font-mono">
-                                     {packagedVariants.length} Active Packs
-                                   </span>
-                                 </div>
-
-                                 {packagedVariants.length > 0 ? (
-                                   packagedVariants.map((v) => {
-                                     const globalIndex = formData.variants?.findIndex(item => item.id === v.id) ?? -1;
-                                     const currentVariantStock = selectedItem?.variant_stocks?.[v.id] ?? 0;
-                                     return (
-                                       <div
-                                         key={v.id}
-                                         className={`px-3.5 py-2.5 rounded-xl border flex items-center justify-between gap-3 text-xs transition-all ${
-                                           editingVariantIndex === globalIndex
-                                             ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/40 ring-1 ring-amber-500'
-                                             : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-amber-300'
-                                         }`}
-                                       >
-                                         <div className="min-w-0">
-                                           <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                                             <span>{v.name}</span>
-                                             <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/60">
-                                               {formatQty(v.quantity_in_base_unit, 3)} {baseUnit}
-                                             </span>
-                                             {selectedItem && (
-                                               <span className="text-[10px] font-bold font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                                 Stock: {currentVariantStock} packs
-                                               </span>
-                                             )}
-                                           </div>
-                                           <p className="text-[11px] text-slate-400 font-medium mt-0.5">
-                                             Selling Price: <span className="font-mono font-bold text-slate-700 dark:text-slate-300">Rs {formatCurrency(v.selling_price || 0)}</span>
-                                             {v.packaging_item_name ? ` · Uses: ${formatQty(v.packaging_qty || 0)} ${v.packaging_item_name}` : ''}
-                                           </p>
-                                         </div>
-                                         <div className="flex items-center gap-1.5 shrink-0">
-                                           <button
-                                             type="button"
-                                             onClick={() => editVariant(globalIndex)}
-                                             className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                             title="Edit"
-                                           >
-                                             <Edit size={14} />
-                                           </button>
-                                           <button
-                                             type="button"
-                                             onClick={() => removeVariant(globalIndex)}
-                                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                             title="Remove"
-                                           >
-                                             <Trash2 size={14} />
-                                           </button>
-                                         </div>
-                                       </div>
-                                     );
-                                   })
-                                 ) : (
-                                   <div className="p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 text-center">
-                                     <p className="text-xs text-slate-400 font-medium">
-                                       No pre-packaged variants configured yet.
-                                     </p>
-                                   </div>
-                                 )}
-                               </div>
-                             </div>
-                           )}
-                         </div>
+                         <SellUnitsTab
+                           baseUnit={formData.unit || 'unit'}
+                           looseRate={Number(formData.selling_price) || 0}
+                           costRate={Number(formData.cost_price) || 0}
+                           allowLoose={formData.allow_loose_sale !== false}
+                           onToggleLoose={() => setFormData({ ...formData, allow_loose_sale: formData.allow_loose_sale === false })}
+                           variants={formData.variants || []}
+                           liveLoose={selectedItem ? Number(liveInv?.quantity ?? (selectedItem as any).stock ?? 0) : null}
+                           liveVariantStocks={(liveInv?.variant_stocks || selectedItem?.variant_stocks || {}) as Record<string, number>}
+                           packagingMaterials={packagingMaterials}
+                           draft={newVariant}
+                           setDraft={setNewVariant}
+                           kind={variantSubTab}
+                           onKindChange={next => { setVariantSubTab(next); setNewVariant({ ...newVariant, fromBase: next === 'multi_unit' }); }}
+                           editingIndex={editingVariantIndex}
+                           onSubmit={handleVariantSubmit}
+                           onEdit={editVariant}
+                           onRemove={removeVariant}
+                           onToggleActive={toggleVariantActive}
+                           onCancelEdit={resetVariantForm}
+                           inputClass={inputClass}
+                         />
                        );
                      })()}
                      </div>
@@ -2413,7 +2054,7 @@ const Items: React.FC = () => {
                              {stock} {deleteAudit.item.unit}
                            </span>
                            <span className="text-xs text-amber-700 font-medium block mt-0.5">
-                             Inventory Valuation: Rs {stockVal.toLocaleString()}
+                             Inventory Valuation: {formatCurrency(stockVal)}
                            </span>
                            <p className="text-[11px] text-amber-600 mt-1">
                              Deleting directly without write-off will cause Balance Sheet discrepancy!

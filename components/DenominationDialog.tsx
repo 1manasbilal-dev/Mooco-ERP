@@ -1,11 +1,12 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Banknote, X, RotateCcw, Check } from 'lucide-react';
+import { formatCurrency } from '../lib/formatters';
 
 export const DENOMINATIONS = [5000, 1000, 500, 100, 50, 20, 10, 5, 1];
 
 export const money = (value: number | undefined | null) =>
-  `Rs ${Number(value || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 })}`;
+  formatCurrency(value);
 
 export const splitDenominations = (source: Record<string | number, number>, requestedAmount: number) => {
   let remaining = Math.max(0, Math.round(requestedAmount * 100) / 100);
@@ -150,7 +151,7 @@ export const DenominationDialog: React.FC<DenominationDialogProps> = ({
                 >
                   <div className="flex items-center justify-between text-xs font-bold mb-1.5">
                     <span className="text-slate-700 dark:text-slate-300 font-mono">
-                      Rs {denomination.toLocaleString()}
+                      {formatCurrency(denomination)}
                     </span>
                     <span className={`text-[11px] font-mono ${qty > 0 ? 'text-lime-600 dark:text-lime-400 font-black' : 'text-slate-400'}`}>
                       {qty > 0 ? money(subtotal) : '—'}
@@ -201,7 +202,7 @@ export const DenominationDialog: React.FC<DenominationDialogProps> = ({
               onClick={handleApply}
               className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-black bg-lime-600 hover:bg-lime-500 dark:bg-lime-500 dark:hover:bg-lime-400 text-white dark:text-slate-950 shadow-md shadow-lime-600/20 cursor-pointer transition-all"
             >
-              <Check size={15} /> Apply (Rs {total.toLocaleString()})
+              <Check size={15} /> Apply ({formatCurrency(total)})
             </button>
           </div>
         </div>

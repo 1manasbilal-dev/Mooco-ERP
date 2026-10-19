@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ManualAccount, BankTransaction, JournalLine, FinancialAccount } from '../types';
+import { formatCurrency, formatMoneyRaw } from '../lib/formatters';
 
 // --- Type Fix for Framer Motion ---
 const MotionDiv = motion.div as any;
@@ -49,7 +50,7 @@ interface SelectableAccount {
 const Accounts: React.FC = () => {
   const { 
     accounts, inventory, items, customers, suppliers, 
-    purchases, materialPurchases, sales, dailySupplyEntries, expenses, 
+    purchases, materialPurchases, sales, dailySupplyEntries, expenses, expenseVendors,
     bankTransactions, manualAccounts, addManualAccount, deleteManualAccount, updateManualAccount,
     addAccount, 
     addJournalEntry, journalEntries
@@ -100,7 +101,7 @@ const Accounts: React.FC = () => {
   const [reportNode, setReportNode] = useState<COANode | null>(null);
 
   // --- JOURNAL ENTRY STATE ---
-  const [journalDate, setJournalDate] = useState(new Date().toISOString().split('T')[0]);
+  const [journalDate, setJournalDate] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [journalRef, setJournalRef] = useState('');
   const [journalNarration, setJournalNarration] = useState('');
   const [journalLines, setJournalLines] = useState<JournalLine[]>([
@@ -151,14 +152,34 @@ const Accounts: React.FC = () => {
     
     const totalReceivable = customers.filter(c => c.balance > 0).reduce((sum, c) => sum + c.balance, 0);
     const arNode: COANode = { id: 'sys_ar', code: '1200', name: 'Accounts Receivable (Debtors)', type: 'Asset', balance: totalReceivable, icon: Users, isSystem: true, sourceModule: 'Customers', reportType: 'subledger', subledgerType: 'customer', isActive: true };
-    const totalInventoryValue = inventory.reduce((sum, inv) => { const itemDef = items.find(def => def.name === inv.name); const cost = itemDef?.cost_price || 0; return sum + (inv.quantity * cost); }, 0);
+    const totalInventoryValue = inventory.reduce((sum, inv) => {
+      const itemDef = items.find(def => def.id === (inv as any).item_id || def.id === inv.id || def.name === inv.name);
+      const cost = Number(itemDef?.cost_price || 0);
+      let invSum = (Number(inv.quantity) || 0) * cost;
+      if (inv.variant_stocks && typeof inv.variant_stocks === 'object') {
+        Object.entries(inv.variant_stocks).forEach(([varName, count]) => {
+          const vCount = Number(count) || 0;
+          if (vCount <= 0) return;
+          const variantDef = (itemDef?.variants || []).find((v: any) => v.name === varName);
+          const factor = Number(variantDef?.quantity_in_base_unit || variantDef?.pack_size || 1);
+          invSum += vCount * factor * cost;
+        });
+      }
+      return sum + invSum;
+    }, 0);
     const invNode: COANode = { id: 'sys_inv', code: '1300', name: 'Inventory Asset', type: 'Asset', balance: totalInventoryValue, icon: Box, isSystem: true, sourceModule: 'Inventory', reportType: 'subledger', subledgerType: 'inventory', isActive: true };
     
-    const manualAssets = buildManualNodes(manualAccounts, 'Asset', undefined).filter(n => !['sys_ar', 'sys_inv', '1100'].includes(n.parentId || ''));
-    const totalAssets = [...allCashBankNodes, arNode, invNode, ...manualAssets].reduce((sum, n) => sum + n.balance, 0);
+    const supplierAdvances = suppliers.reduce((sum, s) => sum + (s.pending_balance < 0 ? Math.abs(s.pending_balance) : 0), 0);
+    const suppAdvNode: COANode = { id: 'sys_supp_adv', code: '1250', name: 'Supplier Advances', type: 'Asset', balance: supplierAdvances, icon: Briefcase, isSystem: true, sourceModule: 'Suppliers', reportType: 'subledger', subledgerType: 'supplier', isActive: true };
+
+    const manualAssets = buildManualNodes(manualAccounts, 'Asset', undefined).filter(n => !['sys_ar', 'sys_inv', 'sys_supp_adv', '1100'].includes(n.parentId || ''));
+    const totalAssets = [...allCashBankNodes, arNode, invNode, suppAdvNode, ...manualAssets].reduce((sum, n) => sum + n.balance, 0);
 
     // Liabilities
-    const totalPayable = suppliers.reduce((sum, s) => sum + Math.max(0, s.pending_balance), 0);
+    const supplierPayable = suppliers.reduce((sum, s) => sum + Math.max(0, s.pending_balance), 0);
+    // Expense vendors keep what we still owe in pending_balance (there is no current_balance field).
+    const vendorPayable = (expenseVendors || []).reduce((sum, v) => sum + Math.max(0, Number(v.pending_balance || 0)), 0);
+    const totalPayable = supplierPayable + vendorPayable;
     const apNode: COANode = { id: 'sys_ap', code: '2100', name: 'Accounts Payable (Creditors)', type: 'Liability', balance: totalPayable, icon: Briefcase, isSystem: true, sourceModule: 'Suppliers', reportType: 'subledger', subledgerType: 'supplier', isActive: true };
     const totalAdvances = customers.filter(c => c.balance < 0).reduce((sum, c) => sum + Math.abs(c.balance), 0);
     const advanceNode: COANode = { id: 'sys_adv', code: '2200', name: 'Unearned Revenue (Customer Adv)', type: 'Liability', balance: totalAdvances, icon: Users, isSystem: true, sourceModule: 'Customers', reportType: 'subledger', subledgerType: 'customer', isActive: true };
@@ -166,8 +187,11 @@ const Accounts: React.FC = () => {
     const totalLiabilities = [apNode, advanceNode, ...manualLiabilities].reduce((sum, n) => sum + n.balance, 0);
 
     // Income
-    const posRevenue = sales.filter(s => s.status !== 'Returned').reduce((sum, s) => sum + s.total, 0);
-    const supplyRevenue = dailySupplyEntries.reduce((sum, s) => sum + s.total_amount, 0);
+    const posRevenue = sales.filter(s => s.status !== 'Returned' && s.status !== 'Cancelled').reduce((sum, s) => {
+      const refund = s.status === 'Partially Returned' ? (Number(s.refund_amount) || 0) : 0;
+      return sum + Math.max(0, (Number(s.total) || 0) - refund);
+    }, 0);
+    const supplyRevenue = dailySupplyEntries.filter(s => s.details?.status !== 'Cancelled' && s.details?.status !== 'Pending').reduce((sum, s) => sum + Number(s.total_amount || 0), 0);
     
     const systemSalesNodes: COANode[] = [ 
        { id: 'inc_pos', code: '4101', name: 'POS / Counter Sales', type: 'Income', balance: posRevenue, icon: Store, isSystem: true, sourceModule: 'Sales', reportType: 'transaction', isActive: true }, 
@@ -195,10 +219,11 @@ const Accounts: React.FC = () => {
     const totalIncome = salesRevenueGroup.balance + otherManualIncome.reduce((sum, n) => sum + n.balance, 0);
 
     // Expenses
-    const expenseGroups = expenses.reduce((acc, exp) => { acc[exp.category] = (acc[exp.category] || 0) + exp.amount; return acc; }, {} as Record<string, number>);
+    const validExpenses = expenses.filter(e => (e as any).status !== 'Cancelled' && (e as any).status !== 'Returned');
+    const expenseGroups = validExpenses.reduce((acc, exp) => { acc[exp.category] = (acc[exp.category] || 0) + Number(exp.amount || 0); return acc; }, {} as Record<string, number>);
     const opExpenseNodes: COANode[] = Object.entries(expenseGroups).map(([cat, amount]: [string, number], idx) => ({ id: `exp_${cat}`, code: `510${idx + 1}`, name: `${cat} Expense`, type: 'Expense', balance: amount, icon: FileText, isSystem: true, sourceModule: 'Expenses', reportType: 'transaction', isActive: true }));
-    const milkPurchaseCost = purchases.reduce((sum, p) => sum + p.total_amount, 0);
-    const materialPurchaseCost = materialPurchases.reduce((sum, p) => sum + p.total_amount, 0);
+    const milkPurchaseCost = purchases.filter(p => (p as any).status !== 'Returned' && (p as any).status !== 'Cancelled').reduce((sum, p) => sum + Number(p.total_amount || 0), 0);
+    const materialPurchaseCost = materialPurchases.filter(p => (p as any).status !== 'Returned' && (p as any).status !== 'Cancelled').reduce((sum, p) => sum + Number(p.total_amount || 0), 0);
     const purchaseNodes: COANode[] = [ { id: 'cogs_milk', code: '5201', name: 'Cost of Goods - Milk', type: 'Expense', balance: milkPurchaseCost, icon: TrendingDown, isSystem: true, sourceModule: 'Purchases', reportType: 'transaction', isActive: true }, { id: 'cogs_mat', code: '5202', name: 'Cost of Goods - Materials', type: 'Expense', balance: materialPurchaseCost, icon: TrendingDown, isSystem: true, sourceModule: 'Purchases', reportType: 'transaction', isActive: true } ];
     const manualExpenses = buildManualNodes(manualAccounts, 'Expense', undefined);
     const allExpenseNodes = [...opExpenseNodes, ...purchaseNodes, ...manualExpenses];
@@ -221,13 +246,13 @@ const Accounts: React.FC = () => {
     const totalEquity = totalCapital + totalDrawings + otherManualEquity.reduce((sum, n) => sum + n.balance, 0);
 
     return [
-      { id: '1000', code: '1000', name: 'ASSETS', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: totalAssets, isActive: true, children: [ { id: '1100', code: '1100', name: 'Cash & Bank', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: allCashBankNodes.reduce((s,n)=>s+n.balance,0), isActive: true, children: allCashBankNodes }, { id: '1001', code: '', name: 'Current Assets', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: arNode.balance + invNode.balance, isActive: true, children: [arNode, invNode] }, { id: '1400', code: '1400', name: 'Fixed Assets & Others', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: manualAssets.reduce((s,n)=>s+n.balance,0), isActive: true, children: manualAssets }, ] },
+      { id: '1000', code: '1000', name: 'ASSETS', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: totalAssets, isActive: true, children: [ { id: '1100', code: '1100', name: 'Cash & Bank', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: allCashBankNodes.reduce((s,n)=>s+n.balance,0), isActive: true, children: allCashBankNodes }, { id: '1001', code: '', name: 'Current Assets', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: arNode.balance + invNode.balance + suppAdvNode.balance, isActive: true, children: [arNode, invNode, suppAdvNode] }, { id: '1400', code: '1400', name: 'Fixed Assets & Others', type: 'Asset' as AccountType, isGroup: true, isSystem: true, balance: manualAssets.reduce((s,n)=>s+n.balance,0), isActive: true, children: manualAssets }, ] },
       { id: '2000', code: '2000', name: 'LIABILITIES', type: 'Liability' as AccountType, isGroup: true, isSystem: true, balance: totalLiabilities, isActive: true, children: [ { id: '2001', code: '', name: 'Current Liabilities', type: 'Liability' as AccountType, isGroup: true, isSystem: true, balance: apNode.balance + advanceNode.balance, isActive: true, children: [apNode, advanceNode] }, { id: '2400', code: '2400', name: 'Long Term & Other', type: 'Liability' as AccountType, isGroup: true, isSystem: true, balance: manualLiabilities.reduce((s,n)=>s+n.balance,0), isActive: true, children: manualLiabilities }, ] },
       { id: '3000', code: '3000', name: 'EQUITY', type: 'Equity' as AccountType, isGroup: true, isSystem: true, balance: totalEquity, isActive: true, children: [capitalGroupNode, drawingsGroupNode, ...otherManualEquity] },
       { id: '4000', code: '4000', name: 'INCOME', type: 'Income' as AccountType, isGroup: true, isSystem: true, balance: totalIncome, isActive: true, children: [salesRevenueGroup, ...otherManualIncome] },
       { id: '5000', code: '5000', name: 'EXPENSES', type: 'Expense' as AccountType, isGroup: true, isSystem: true, balance: totalExpenses, isActive: true, children: allExpenseNodes },
     ];
-  }, [accounts, inventory, customers, suppliers, purchases, materialPurchases, sales, dailySupplyEntries, expenses, items, bankTransactions, manualAccounts]);
+  }, [accounts, inventory, customers, suppliers, purchases, materialPurchases, sales, dailySupplyEntries, expenses, expenseVendors, items, bankTransactions, manualAccounts]);
 
   // Search Filtering Logic
   const filteredCOA = useMemo(() => {
@@ -333,10 +358,10 @@ const Accounts: React.FC = () => {
     const list: SelectableAccount[] = [];
     manualAccounts.filter(a => a.isActive !== false).forEach(a => list.push({ id: a.id, name: a.name, type: 'Manual', category: a.type }));
     accounts.filter(a => a.isActive).forEach(a => list.push({ id: a.id, name: a.name, type: 'Bank', category: 'Asset', balance: a.balance }));
-    customers.filter(c => c.isActive).forEach(c => list.push({ id: c.id, name: `${c.name} (Customer)`, type: 'Customer', category: 'Asset', balance: c.balance }));
-    suppliers.filter(s => s.isActive).forEach(s => list.push({ id: s.id, name: `${s.name} (Supplier)`, type: 'Supplier', category: 'Liability', balance: s.pending_balance }));
+    // Customer / supplier khata is not offered: a journal line cannot post to those ledgers, and it
+    // used to be dropped silently. Use Receive Payment / Pay Supplier (or a khata charge) instead.
     return list;
-  }, [manualAccounts, accounts, customers, suppliers]);
+  }, [manualAccounts, accounts]);
 
   const totalDebit = journalLines.reduce((sum, l) => sum + (l.debit || 0), 0);
   const totalCredit = journalLines.reduce((sum, l) => sum + (l.credit || 0), 0);
@@ -495,7 +520,7 @@ const Accounts: React.FC = () => {
           {/* Right: Balance + Actions */}
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <div className={`text-right font-mono font-black ${isHeader ? 'text-xs sm:text-sm text-lime-400' : 'text-xs'} ${amountColor}`}>
-              {node.balance < 0 ? `(${Math.abs(node.balance).toLocaleString()})` : `Rs ${node.balance.toLocaleString()}`}
+              {node.balance < 0 ? `(${formatMoneyRaw(Math.abs(node.balance))})` : `${formatCurrency(node.balance)}`}
             </div>
 
             {!isHeader && (
@@ -745,16 +770,16 @@ const Accounts: React.FC = () => {
                   <div className="grid grid-cols-3 gap-2 text-center bg-white p-2 rounded-xl border border-slate-200">
                      <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase">Debit</p>
-                        <p className="text-xs sm:text-sm font-black font-mono text-slate-900">Rs {totalDebit.toLocaleString()}</p>
+                        <p className="text-xs sm:text-sm font-black font-mono text-slate-900">{formatCurrency(totalDebit)}</p>
                      </div>
                      <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase">Credit</p>
-                        <p className="text-xs sm:text-sm font-black font-mono text-slate-900">Rs {totalCredit.toLocaleString()}</p>
+                        <p className="text-xs sm:text-sm font-black font-mono text-slate-900">{formatCurrency(totalCredit)}</p>
                      </div>
                      <div>
                         <p className="text-[10px] font-bold text-slate-500 uppercase">Difference</p>
                         <p className={`text-xs sm:text-sm font-black font-mono ${isBalanced ? 'text-emerald-600' : 'text-rose-600'}`}>
-                           Rs {Math.abs(totalDebit - totalCredit).toLocaleString()}
+                           {formatCurrency(Math.abs(totalDebit - totalCredit))}
                         </p>
                      </div>
                   </div>
@@ -804,7 +829,7 @@ const Accounts: React.FC = () => {
                                  <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">{entry.referenceNo || 'JV'}</span>
                                  <span className="text-[10px] text-slate-500">{new Date(entry.date).toLocaleDateString()}</span>
                               </div>
-                              <span className="font-mono font-black text-slate-900 text-xs">Rs {entry.totalAmount.toLocaleString()}</span>
+                              <span className="font-mono font-black text-slate-900 text-xs">{formatCurrency(entry.totalAmount)}</span>
                            </div>
                            {entry.narration && (
                               <p className="text-xs text-slate-700 font-medium italic">"{entry.narration}"</p>
@@ -814,8 +839,8 @@ const Accounts: React.FC = () => {
                                  <div key={idx} className="flex justify-between text-slate-600">
                                     <span className="truncate pr-2 font-medium">{line.accountName}</span>
                                     <div className="flex gap-3 font-mono font-bold shrink-0">
-                                       <span className={line.debit > 0 ? 'text-emerald-700' : 'text-slate-300'}>{line.debit > 0 ? `Dr ${line.debit.toLocaleString()}` : '-'}</span>
-                                       <span className={line.credit > 0 ? 'text-rose-700' : 'text-slate-300'}>{line.credit > 0 ? `Cr ${line.credit.toLocaleString()}` : '-'}</span>
+                                       <span className={line.debit > 0 ? 'text-emerald-700' : 'text-slate-300'}>{line.debit > 0 ? `Dr ${formatMoneyRaw(line.debit)}` : '-'}</span>
+                                       <span className={line.credit > 0 ? 'text-rose-700' : 'text-slate-300'}>{line.credit > 0 ? `Cr ${formatMoneyRaw(line.credit)}` : '-'}</span>
                                     </div>
                                  </div>
                               ))}

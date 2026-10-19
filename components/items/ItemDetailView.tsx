@@ -6,7 +6,7 @@ import {
 import { ItemDefinition } from '../../types';
 import { formatCurrency, formatQty } from '../../lib/formatters';
 import { buildQuickPreview, getQuickPresets } from '../../lib/posQuickEntry';
-import { oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { describeItemStock, oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
 
 export interface SellInPosEntry {
   mode: 'amount' | 'qty';
@@ -28,6 +28,8 @@ interface Props {
   onReactivate: () => void;
   onDeactivate: () => void;
   onSellInPos: (entry?: SellInPosEntry) => void;
+  /** Current catalog name for a recipe material, so renamed materials don't show their old name. */
+  materialName?: (itemId: string) => string | undefined;
 }
 
 const Section: React.FC<{ icon: React.ReactNode; title: string; aside?: React.ReactNode; children: React.ReactNode }> = ({ icon, title, aside, children }) => (
@@ -49,7 +51,7 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 
 export const ItemDetailView: React.FC<Props> = ({
   item, stock, variantStocks, allowNegativeStock, canEdit, canDelete, canOpenPos,
-  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos,
+  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos, materialName,
 }) => {
   const isSale = Boolean(item.item_type?.includes('Sale product'));
   const rate = Number(item.selling_price) || 0;
@@ -58,8 +60,10 @@ export const ItemDetailView: React.FC<Props> = ({
   const qtyFirst = item.pos_primary_mode === 'qty';
   const activeVariants = (item.variants || []).filter(v => v.isActive !== false);
   const reorder = item.reorder_level || 5;
-  const stockTone: 'out' | 'low' | 'ok' = stock <= 0 ? 'out' : stock <= reorder ? 'low' : 'ok';
-  const stockPct = Math.max(0, Math.min(100, (stock / (reorder * 4 || 20)) * 100));
+  const picture = useMemo(() => describeItemStock(item, stock, variantStocks), [item, stock, variantStocks]);
+  const onHand = picture.sellableBase;
+  const stockTone: 'out' | 'low' | 'ok' = onHand <= 0 ? 'out' : onHand <= reorder ? 'low' : 'ok';
+  const stockPct = Math.max(0, Math.min(100, (onHand / (reorder * 4 || 20)) * 100));
   // Only pre-packed sizes hold their own count (dozen/tray draw from loose stock). Never add different sizes together.
   const packedVariants = activeVariants.filter(v => v.deduct_from_base !== true);
   const packsReady = packedVariants
@@ -73,19 +77,21 @@ export const ItemDetailView: React.FC<Props> = ({
   const packCounts = useMemo(() => getQuickPresets({ mode: 'qty', packaged: true, unit: item.unit, rate: 1 }).filter(n => n <= 10), [item.unit]);
 
   // Profit is shown for the unit people actually buy: loose rate, else the first priced pack.
+  // With loose sale off nobody pays the per-kg rate, so the headline and profit follow the pack.
+  const looseRate = looseAllowed ? rate : 0;
   const profitBasis = useMemo(() => {
-    if (rate > 0) return { sell: rate, cost, per: item.unit };
-    const pack = activeVariants.find(v => Number(v.selling_price) > 0);
-    if (pack) return { sell: Number(pack.selling_price), cost: cost * sellUnitContains(pack), per: pack.name };
+    if (looseRate > 0) return { sell: looseRate, cost, per: item.unit };
+    const pack = activeVariants.find(v => sellUnitPrice(rate, sellUnitContains(v), v.selling_price) > 0);
+    if (pack) return { sell: sellUnitPrice(rate, sellUnitContains(pack), pack.selling_price), cost: cost * sellUnitContains(pack), per: pack.name };
     return null;
-  }, [rate, cost, item.unit, activeVariants]);
+  }, [looseRate, rate, cost, item.unit, activeVariants]);
   const profit = profitBasis ? profitBasis.sell - profitBasis.cost : 0;
   const marginPct = profitBasis && profitBasis.sell > 0 ? (profit / profitBasis.sell) * 100 : 0;
   const markupPct = profitBasis && profitBasis.cost > 0 ? (profit / profitBasis.cost) * 100 : 0;
 
   const packPrices = activeVariants.map(v => Number(v.selling_price) || rate * (Number(v.quantity_in_base_unit) || 1)).filter(p => p > 0);
-  const priceHeadline = rate > 0
-    ? { value: formatCurrency(rate), sub: `per ${item.unit}` }
+  const priceHeadline = looseRate > 0
+    ? { value: formatCurrency(looseRate), sub: `per ${item.unit}` }
     : packPrices.length
       ? { value: Math.min(...packPrices) === Math.max(...packPrices) ? formatCurrency(packPrices[0]) : `${formatCurrency(Math.min(...packPrices))}+`, sub: activeVariants.length === 1 ? `per ${activeVariants[0].name}` : 'per pack' }
       : { value: formatCurrency(0), sub: 'not set' };
@@ -188,12 +194,12 @@ export const ItemDetailView: React.FC<Props> = ({
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${tone.pill}`}>{tone.text}</span>
             </div>
             <div className="mt-1.5 flex items-baseline gap-1">
-              <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{formatQty(stock)}</span>
+              <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{formatQty(picture.totalBase, 3)}</span>
               <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">{item.unit}</span>
             </div>
             <div className="mt-2 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden" aria-hidden="true"><div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${stockPct}%` }} /></div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1.5 block">
-              {packedVariants.length > 0 ? `${packsReady || 'No packs'} ready · ` : ''}reorder at {formatQty(reorder)}
+              {packedVariants.length > 0 ? `loose ${formatQty(stock, 3)} · ${packsReady || 'no packs'} · ` : ''}reorder at {formatQty(reorder)}
             </span>
           </div>
 
@@ -224,6 +230,52 @@ export const ItemDetailView: React.FC<Props> = ({
             )}
           </div>
         </div>
+
+        {/* Where the stock sits, pile by pile */}
+        <Section
+          icon={<Boxes size={13} className="text-indigo-500 dark:text-indigo-400" />}
+          title="Stock by unit"
+          aside={<span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{formatCurrency(picture.costValue)} at cost</span>}
+        >
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+            {picture.piles.map(pile => (
+              <div key={pile.id} className={`p-2.5 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 ${pile.isActive || pile.kind === 'loose' ? '' : 'opacity-60'}`}>
+                <div className="min-w-0">
+                  <span className="font-bold text-slate-800 dark:text-slate-200 block truncate">
+                    {pile.kind === 'loose' ? `Loose (${item.unit})` : `${pile.name} · ${formatQty(pile.contains, 3)} ${item.unit}`}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {pile.kind === 'loose' && (looseAllowed ? 'Base' : 'Base · not sold loose')}
+                    {pile.kind === 'multi' && 'From loose'}
+                    {pile.kind === 'packed' && (pile.isActive ? 'Own stock' : 'Own stock · hidden')}
+                    {pile.kind === 'orphan' && 'Old count'}
+                  </span>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className={`font-mono font-black block ${pile.count < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>
+                    {pile.kind === 'loose' && `${formatQty(pile.count, 3)} ${item.unit}`}
+                    {pile.kind === 'multi' && `≈ ${formatQty(pile.count, 2)} ${pile.name}`}
+                    {(pile.kind === 'packed' || pile.kind === 'orphan') && `${formatQty(pile.count, 3)} packs`}
+                  </span>
+                  {pile.kind === 'packed' && <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">= {formatQty(pile.baseQty, 3)} {item.unit}</span>}
+                </div>
+              </div>
+            ))}
+            <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
+              <span>Total</span>
+              <span className="font-mono">{formatQty(picture.totalBase, 3)} {item.unit}</span>
+            </div>
+          </div>
+          {picture.warnings.length > 0 && (
+            <ul className="mt-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 px-3 py-2 space-y-1" aria-label="Product warnings">
+              {picture.warnings.map(w => (
+                <li key={w} className="flex items-start gap-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-300">
+                  <AlertTriangle size={12} className="shrink-0 mt-0.5" />{w}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
 
         {/* POS quick sell */}
         {isSale && (
@@ -371,14 +423,14 @@ export const ItemDetailView: React.FC<Props> = ({
           <Section
             icon={<ChefHat size={14} className="text-amber-600 dark:text-amber-400" />}
             title="Recipe & bill of materials"
-            aside={item.recipe_base_quantity ? <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">{formatQty(item.recipe_base_quantity)} L milk → {formatQty(item.recipe_expected_output || 0)} {item.unit}</span> : undefined}
+            aside={item.recipe_base_quantity ? <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">{formatQty(item.recipe_base_quantity)} {item.recipe_base_item_id && item.recipe_base_item_id !== 'MILK_BASE' ? (materialName?.(item.recipe_base_item_id) || 'base') : 'L milk'} → {formatQty(item.recipe_expected_output || 0)} {item.unit}</span> : undefined}
           >
             <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
               {item.recipe.map((ing, idx) => (
                 <div key={idx} className="p-2.5 bg-white dark:bg-slate-900 flex items-center justify-between">
                   <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
                     <span className="w-5 h-5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 text-[10px] font-bold flex items-center justify-center">{idx + 1}</span>
-                    {ing.item_name}
+                    {materialName?.(ing.item_id) || ing.item_name}
                   </span>
                   <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{formatQty(ing.quantity)} {ing.unit}</span>
                 </div>

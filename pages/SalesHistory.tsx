@@ -10,7 +10,7 @@ import {
   Copy, Sparkles, Filter
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { isDateOnlyOrMidnight } from '../lib/formatters';
+import { isDateOnlyOrMidnight, formatCurrency, formatMoneyRaw } from '../lib/formatters';
 import { saleLineStock } from '../lib/sellUnits';
 
 const MotionDiv = motion.div as any;
@@ -219,13 +219,14 @@ const matchSaleWithToken = (
 };
 
 const SalesHistory: React.FC = () => {
-  const { sales, customers, accounts, settings, items, processSalesReturn, updateSalePaymentMode, canPerform } = useDairy();
+  const { sales, customers, accounts, settings, items, processSalesReturn, updateSalePaymentMode, canPerform, activeShiftSession, cashDrawers } = useDairy();
   const { showToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
 
   const canReturn = canPerform('sales_history', 'return');
   const canDelete = canPerform('sales_history', 'delete');
+  const canChangeMode = canPerform('sales_history', 'edit');
 
   // Customer map for rapid phone & name lookups
   const customerMap = useMemo(() => {
@@ -419,41 +420,41 @@ const SalesHistory: React.FC = () => {
     });
 
     setReturnItems(itemsList);
+    setRefundAccountId(defaultRefundAccount(initialRefundMode));
+  };
 
-    if (initialRefundMode === 'Cash') {
-      setRefundAccountId(settings.financial?.defaultCashAccountId || accounts.find(a => (a.type === 'Cash' || a.type === 'Drawer') && a.isActive !== false)?.id || accounts.find(a => a.type === 'Cash')?.id || '');
-    } else {
-      setRefundAccountId(settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id || '');
-    }
+  // Cash refunds leave the drawer that is open now; head cash is a deliberate manual choice.
+  const drawerAccountFor = (drawerId?: string | null) => {
+    if (!drawerId) return '';
+    if (accounts.some(a => a.id === drawerId)) return drawerId;
+    return cashDrawers.find(d => d.id === drawerId)?.account_id || '';
+  };
+  const digitalAccountDefault = () => settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id || '';
+  const defaultRefundAccount = (mode: 'Cash' | 'Online') => {
+    if (mode === 'Online') return digitalAccountDefault();
+    const shift = activeShiftSession?.status === 'Active' ? activeShiftSession : null;
+    return (shift && (shift.account_id || drawerAccountFor(shift.drawer_id))) || '';
   };
 
   const handleRefundModeChange = (mode: 'Cash' | 'Online') => {
     setRefundPaymentMode(mode);
-    if (mode === 'Cash') {
-      setRefundAccountId(settings.financial?.defaultCashAccountId || accounts.find(a => (a.type === 'Cash' || a.type === 'Drawer') && a.isActive !== false)?.id || accounts.find(a => a.type === 'Cash')?.id || '');
-    } else {
-      setRefundAccountId(settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id || '');
-    }
+    setRefundAccountId(defaultRefundAccount(mode));
   };
+
+  // Cash -> the drawer that took the bill, so the money moves back into the till it is sitting in.
+  const modeTargetDefault = (sale: POSBill, mode: 'Cash' | 'Online') =>
+    mode === 'Online' ? digitalAccountDefault() : (drawerAccountFor(sale.drawer_id) || defaultRefundAccount('Cash'));
 
   const openModeEditModal = (sale: POSBill) => {
     setModeEditSale(sale);
     const newMode: 'Cash' | 'Online' = sale.payment_mode === 'Cash' ? 'Online' : 'Cash';
     setTargetMode(newMode);
-    if (newMode === 'Online') {
-      setTargetAccountId(settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || '');
-    } else {
-      setTargetAccountId(settings.financial?.defaultCashAccountId || accounts.find(a => (a.type === 'Cash' || a.type === 'Drawer') && a.isActive !== false)?.id || '');
-    }
+    setTargetAccountId(modeTargetDefault(sale, newMode));
   };
 
   const handleTargetModeChange = (mode: 'Cash' | 'Online') => {
     setTargetMode(mode);
-    if (mode === 'Online') {
-      setTargetAccountId(settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || '');
-    } else {
-      setTargetAccountId(settings.financial?.defaultCashAccountId || accounts.find(a => (a.type === 'Cash' || a.type === 'Drawer') && a.isActive !== false)?.id || '');
-    }
+    if (modeEditSale) setTargetAccountId(modeTargetDefault(modeEditSale, mode));
   };
 
   const handleConfirmModeChange = async (e: React.FormEvent) => {
@@ -593,12 +594,17 @@ const SalesHistory: React.FC = () => {
   }, [filteredSales, visibleCount]);
 
   // Statistics
-  const totalSalesCount = filteredSales.length;
-  const completedSales = filteredSales.filter(s => s.status !== 'Returned');
-  const returnedSales = filteredSales.filter(s => s.status === 'Returned' || (s as any).status === 'Partially Returned');
+  const validSales = filteredSales.filter(s => s.status !== 'Cancelled');
+  const totalSalesCount = validSales.length;
+  const completedSales = validSales.filter(s => s.status !== 'Returned');
+  const returnedSales = validSales.filter(s => s.status === 'Returned' || (s as any).status === 'Partially Returned');
   
-  const grossRevenue = completedSales.reduce((acc, s) => acc + (s.total || 0), 0);
-  const totalReturnedAmount = filteredSales.reduce((acc, s) => acc + (s.refund_amount || 0), 0);
+  const grossRevenue = validSales.reduce((acc, s) => acc + (s.total || 0), 0);
+  const totalReturnedAmount = validSales.reduce((acc, s) => {
+    if (s.status === 'Returned') return acc + (Number(s.total) || Number(s.refund_amount) || 0);
+    if ((s as any).status === 'Partially Returned') return acc + Number(s.refund_amount || 0);
+    return acc;
+  }, 0);
   const netRevenue = Math.max(0, grossRevenue - totalReturnedAmount);
 
   // Counts for date filter options
@@ -717,7 +723,7 @@ const SalesHistory: React.FC = () => {
             </div>
           </div>
           <p className="text-xs sm:text-lg font-bold font-mono text-emerald-700 mt-1 truncate">
-            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{grossRevenue.toLocaleString()}
+            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{formatMoneyRaw(grossRevenue)}
           </p>
           <span className="text-[9px] text-emerald-600 truncate hidden sm:block">Active Sales</span>
         </div>
@@ -731,7 +737,7 @@ const SalesHistory: React.FC = () => {
             </div>
           </div>
           <p className="text-xs sm:text-lg font-bold font-mono text-red-600 mt-1 truncate">
-            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{totalReturnedAmount.toLocaleString()}
+            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{formatMoneyRaw(totalReturnedAmount)}
           </p>
           <span className="text-[9px] text-red-500 truncate hidden sm:block">{returnedSales.length} Returned</span>
         </div>
@@ -745,7 +751,7 @@ const SalesHistory: React.FC = () => {
             </div>
           </div>
           <p className="text-xs sm:text-lg font-bold font-mono text-blue-700 mt-1 truncate">
-            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{netRevenue.toLocaleString()}
+            <span className="text-[9px] sm:text-xs font-normal">Rs </span>{formatMoneyRaw(netRevenue)}
           </p>
           <span className="text-[9px] text-blue-600 truncate hidden sm:block">Net Turnover</span>
         </div>
@@ -967,22 +973,26 @@ const SalesHistory: React.FC = () => {
                       </>
                     )}
                     <span className="text-slate-300">•</span>
-                    {sale.payment_mode !== 'Credit' ? (
+                    {sale.payment_mode !== 'Credit' && sale.status !== 'Returned' && sale.status !== 'Partially Returned' && !(Number(sale.refund_amount || 0) > 0) && canChangeMode ? (
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); openModeEditModal(sale); }}
-                        className={`px-1.5 py-0.2 rounded font-bold text-[9px] inline-flex items-center gap-1 active:scale-95 transition-transform cursor-pointer ${
-                          sale.payment_mode === 'Cash' 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                        className={`px-1.5 py-0.5 rounded font-bold text-[11px] inline-flex items-center gap-1 active:scale-95 transition-transform cursor-pointer ${
+                          sale.payment_mode === 'Cash'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-blue-50 text-blue-700 border border-blue-200'
                         }`}
-                        title="Payment Mode Tabdeel Karein (Cash ⇄ Online)"
+                        title="Payment mode badlein (Cash ⇄ Online)"
+                        aria-label={`Payment mode ${sale.payment_mode} — badlein`}
                       >
                         {sale.payment_mode}
-                        <ArrowLeftRight size={8} className="opacity-50" />
+                        <ArrowLeftRight size={10} className="opacity-50" />
                       </button>
                     ) : (
-                      <span className="px-1.5 py-0.2 rounded font-bold text-[9px] bg-purple-50 text-purple-700">
+                      <span
+                        className={`px-1.5 py-0.5 rounded font-bold text-[11px] ${sale.payment_mode === 'Credit' ? 'bg-purple-50 text-purple-700' : sale.payment_mode === 'Cash' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}
+                        title={sale.payment_mode === 'Credit' ? 'Udhaar bill — payment khaate se lein' : 'Returned bill ka mode nahi badla ja sakta'}
+                      >
                         {sale.payment_mode}
                       </span>
                     )}
@@ -998,7 +1008,7 @@ const SalesHistory: React.FC = () => {
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="text-right">
                     <span className={`font-mono font-bold text-xs block ${isReturned ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
-                      Rs {(sale.total || 0).toLocaleString()}
+                      {formatCurrency((sale.total || 0))}
                     </span>
                     {isReturned ? (
                       <span className="text-[9px] font-bold text-red-600 uppercase">Returned</span>
@@ -1057,7 +1067,7 @@ const SalesHistory: React.FC = () => {
                                 </span>
                               </div>
                               <span className="font-mono font-bold text-slate-900">
-                                Rs {(it.total || (it.qty * it.price)).toLocaleString()}
+                                {formatCurrency((it.total || (it.qty * it.price)))}
                               </span>
                             </div>
                           ))
@@ -1071,23 +1081,23 @@ const SalesHistory: React.FC = () => {
                     <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1 text-xs">
                       <div className="flex justify-between text-slate-500 text-[11px]">
                         <span>Subtotal:</span>
-                        <span className="font-mono">Rs {(sale.subtotal || sale.total).toLocaleString()}</span>
+                        <span className="font-mono">{formatCurrency((sale.subtotal || sale.total))}</span>
                       </div>
                       {sale.discount > 0 && (
                         <div className="flex justify-between text-emerald-600 text-[11px] font-semibold">
                           <span>Discount:</span>
-                          <span className="font-mono">- Rs {sale.discount.toLocaleString()}</span>
+                          <span className="font-mono">- {formatCurrency(sale.discount)}</span>
                         </div>
                       )}
                       {sale.refund_amount && sale.refund_amount > 0 && (
                         <div className="flex justify-between text-red-600 text-[11px] font-semibold">
                           <span>Refunded Amount:</span>
-                          <span className="font-mono">- Rs {sale.refund_amount.toLocaleString()}</span>
+                          <span className="font-mono">- {formatCurrency(sale.refund_amount)}</span>
                         </div>
                       )}
                       <div className="flex justify-between font-bold text-slate-900 pt-1 border-t border-slate-100 text-xs">
                         <span>Grand Total:</span>
-                        <span className="font-mono text-sm">Rs {(sale.total || 0).toLocaleString()}</span>
+                        <span className="font-mono text-sm">{formatCurrency((sale.total || 0))}</span>
                       </div>
                       {sale.return_reason && (
                         <div className="p-1.5 bg-red-50 text-red-700 rounded text-[10px] mt-1">
@@ -1284,16 +1294,16 @@ const SalesHistory: React.FC = () => {
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <div className="flex flex-col items-end">
                         <span className={`font-mono font-bold text-xs sm:text-sm ${isReturned ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
-                          Rs {(sale.total || 0).toLocaleString()}
+                          {formatCurrency((sale.total || 0))}
                         </span>
                         {sale.discount > 0 && (
                           <span className="text-[10px] text-emerald-600 font-semibold font-mono">
-                            Disc: Rs {sale.discount.toLocaleString()}
+                            Disc: {formatCurrency(sale.discount)}
                           </span>
                         )}
                         {sale.refund_amount && sale.refund_amount > 0 && (
                           <span className="text-[10px] text-red-600 font-semibold font-mono">
-                            Ref: Rs {sale.refund_amount.toLocaleString()}
+                            Ref: {formatCurrency(sale.refund_amount)}
                           </span>
                         )}
                       </div>
@@ -1583,10 +1593,10 @@ const SalesHistory: React.FC = () => {
                               {it.qty} <span className="text-[10px] font-normal text-slate-400">{(it as any).variantName || (it as any).unit || 'Unit'}</span>
                             </td>
                             <td className="px-2 py-2.5 text-right font-mono text-slate-600">
-                              Rs {it.price?.toLocaleString()}
+                              {formatCurrency(it.price)}
                             </td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-900">
-                              Rs {(it.total || (it.qty * it.price)).toLocaleString()}
+                              {formatCurrency((it.total || (it.qty * it.price)))}
                             </td>
                           </tr>
                         ))
@@ -1604,23 +1614,23 @@ const SalesHistory: React.FC = () => {
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Subtotal:</span>
-                  <span className="font-mono font-semibold">Rs {(selectedDetailSale.subtotal || selectedDetailSale.total).toLocaleString()}</span>
+                  <span className="font-mono font-semibold">{formatCurrency((selectedDetailSale.subtotal || selectedDetailSale.total))}</span>
                 </div>
                 {selectedDetailSale.discount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-semibold">
                     <span>Discount:</span>
-                    <span className="font-mono">- Rs {selectedDetailSale.discount.toLocaleString()}</span>
+                    <span className="font-mono">- {formatCurrency(selectedDetailSale.discount)}</span>
                   </div>
                 )}
                 {selectedDetailSale.refund_amount && selectedDetailSale.refund_amount > 0 && (
                   <div className="flex justify-between text-red-600 font-semibold">
                     <span>Refunded Amount:</span>
-                    <span className="font-mono">- Rs {selectedDetailSale.refund_amount.toLocaleString()}</span>
+                    <span className="font-mono">- {formatCurrency(selectedDetailSale.refund_amount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between items-center font-black text-slate-900 pt-2 border-t border-slate-200">
                   <span className="text-sm">Grand Total:</span>
-                  <span className="text-base font-mono text-lime-700">Rs {(selectedDetailSale.total || 0).toLocaleString()}</span>
+                  <span className="text-base font-mono text-lime-700">{formatCurrency((selectedDetailSale.total || 0))}</span>
                 </div>
 
                 {selectedDetailSale.return_reason && (
@@ -1750,7 +1760,7 @@ const SalesHistory: React.FC = () => {
 
                           <div className="text-right w-16">
                             <span className="font-mono font-bold text-xs text-slate-900 block">
-                              Rs {((item.isSelected ? item.returnQty : 0) * item.price).toLocaleString()}
+                              {formatCurrency(((item.isSelected ? item.returnQty : 0) * item.price))}
                             </span>
                           </div>
                         </div>
@@ -1811,10 +1821,10 @@ const SalesHistory: React.FC = () => {
                 </div>
                 <div className="text-right">
                   <span className={`text-base font-bold font-mono ${returnAction === 'replace' ? 'text-blue-600' : 'text-red-600'}`}>
-                    {returnAction === 'replace' ? 'Rs 0.00' : `Rs ${currentRefundAmount.toLocaleString()}`}
+                    {returnAction === 'replace' ? 'Rs 0.00' : `${formatCurrency(currentRefundAmount)}`}
                   </span>
                   {returnAction === 'replace' && (
-                    <span className="text-[10px] text-slate-400 block">(Fresh stock worth Rs {currentRefundAmount.toLocaleString()} issued)</span>
+                    <span className="text-[10px] text-slate-400 block">(Fresh stock worth {formatCurrency(currentRefundAmount)} issued)</span>
                   )}
                 </div>
               </div>
@@ -1968,7 +1978,7 @@ const SalesHistory: React.FC = () => {
                         .filter(a => refundPaymentMode === 'Cash' ? (a.type === 'Cash' || a.type === 'Drawer') : (a.type === 'Bank' || a.type === 'Wallet'))
                         .map(acc => (
                           <option key={acc.id} value={acc.id}>
-                            {acc.name} ({acc.type}) - Bal: Rs {acc.balance.toLocaleString()}
+                            {acc.name} ({acc.type}) - Bal: {formatCurrency(acc.balance)}
                           </option>
                         ))}
                     </select>
@@ -2080,7 +2090,7 @@ const SalesHistory: React.FC = () => {
                   <div key={idx} className="flex justify-between items-baseline text-[10px]">
                     <span className="font-semibold">{it.name}</span>
                     <span className="font-bold text-right shrink-0">
-                      {it.qty} x {it.price} = Rs {(it.total || it.qty * it.price).toLocaleString()}
+                      {it.qty} x {it.price} = {formatCurrency((it.total || it.qty * it.price))}
                     </span>
                   </div>
                 ))}
@@ -2090,17 +2100,17 @@ const SalesHistory: React.FC = () => {
               <div className="space-y-0.5 text-[10px] pt-0.5">
                 <div className="flex justify-between text-slate-600">
                   <span>Subtotal:</span>
-                  <span>Rs {(selectedReceiptSale.subtotal || selectedReceiptSale.total).toLocaleString()}</span>
+                  <span>{formatCurrency((selectedReceiptSale.subtotal || selectedReceiptSale.total))}</span>
                 </div>
                 {selectedReceiptSale.discount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-semibold">
                     <span>Discount:</span>
-                    <span>- Rs {selectedReceiptSale.discount.toLocaleString()}</span>
+                    <span>- {formatCurrency(selectedReceiptSale.discount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-black text-xs pt-1 border-t border-slate-900 text-slate-900">
                   <span>TOTAL:</span>
-                  <span>Rs {(selectedReceiptSale.total || 0).toLocaleString()}</span>
+                  <span>{formatCurrency((selectedReceiptSale.total || 0))}</span>
                 </div>
               </div>
 
@@ -2129,7 +2139,7 @@ const SalesHistory: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-black text-sm tracking-tight">Payment Mode Tabdeel Karein</h3>
-                  <p className="text-[11px] text-blue-100">Bill #{modeEditSale.bill_number} • Rs {(modeEditSale.total || 0).toLocaleString()}</p>
+                  <p className="text-[11px] text-blue-100">Bill #{modeEditSale.bill_number} • {formatCurrency((modeEditSale.total || 0))}</p>
                 </div>
               </div>
               <button
@@ -2160,7 +2170,7 @@ const SalesHistory: React.FC = () => {
                 <div className="flex justify-between items-center text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200 dark:border-slate-700">
                   <span>Bill Amount:</span>
                   <span className="font-mono font-black text-sm text-slate-900 dark:text-white">
-                    Rs {(modeEditSale.total || 0).toLocaleString()}
+                    {formatCurrency((modeEditSale.total || 0))}
                   </span>
                 </div>
               </div>
@@ -2222,7 +2232,7 @@ const SalesHistory: React.FC = () => {
                     .filter(a => targetMode === 'Online' ? (a.type === 'Bank' || a.type === 'Wallet') : (a.type === 'Cash' || a.type === 'Drawer'))
                     .map(acc => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} ({acc.type}) - Balance: Rs {acc.balance.toLocaleString()}
+                        {acc.name} ({acc.type}) - Balance: {formatCurrency(acc.balance)}
                       </option>
                     ))}
                 </select>

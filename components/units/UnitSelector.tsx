@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useDairy } from '../../context/DairyContext';
 import { 
+  baseUnitWarning,
   getAllAvailableUnits, 
   detectUnitGroupId 
 } from '../../lib/unitConversion';
@@ -485,10 +486,15 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
         </div>
       )}
 
+      {value && baseUnitWarning(value, customUnits) && (
+        <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
+          {baseUnitWarning(value, customUnits)}
+        </p>
+      )}
       <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
         {isCustomMode 
-          ? 'Enter your custom unit name. Secondary packaging (Dozen, Tray, etc.) can be configured below.'
-          : 'Select weight (kg, g), liquid (L, ml), count (pcs, dz), or click + Custom.'}
+          ? 'Pack sizes go in the Units & Packaging tab.'
+          : 'The smallest unit you count or weigh, e.g. kg, L or pcs.'}
       </p>
     </div>
   );

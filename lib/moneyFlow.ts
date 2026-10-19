@@ -53,6 +53,27 @@ export function splitRefund(sale: any, refundAmount: number): { khata: number; c
   return { khata, cash };
 }
 
+/**
+ * Money a bill still keeps after its returns, split by where it sits. Refunds reverse khata first,
+ * so only the part above the unpaid khata was paid back in cash/online.
+ */
+export function saleNetCollection(sale: any): { cash: number; online: number; credit: number; net: number } {
+  const total = Math.max(0, Number(sale?.total || 0));
+  const refunded = roundCurrency(Math.min(total, Math.max(0, Number(sale?.refund_amount || 0))));
+  const net = roundCurrency(Math.max(0, total - refunded));
+  const collected = salePaidAmount(sale);
+  const khataCharged = roundCurrency(Math.max(0, total - collected));
+  const moneyRefunded = roundCurrency(Math.max(0, refunded - khataCharged));
+  const keptCollected = roundCurrency(Math.max(0, collected - moneyRefunded));
+  const online = String(sale?.payment_mode || '').toLowerCase() === 'online';
+  return {
+    cash: online ? 0 : keptCollected,
+    online: online ? keptCollected : 0,
+    credit: roundCurrency(Math.max(0, net - keptCollected)),
+    net
+  };
+}
+
 export function expenseCashPaid(expense: any): number {
   const explicit = expense?.paidAmount ?? expense?.paid_amount ?? expense?.details?.paidAmount ?? expense?.details?.paid_amount;
   if (explicit !== undefined && explicit !== null && explicit !== '') {
@@ -96,6 +117,8 @@ export function isInternalCashTransfer(tx: any): boolean {
 /** Spot milk/material payments are already counted on the purchase. Counting the supplier ledger row again doubles the cash out. */
 export function isSpotSupplierPayment(tx: any): boolean {
   if (tx?.purchase_id || tx?.details?.purchase_id) return true;
+  const txId = String(tx?.id || '');
+  if (txId.startsWith('stx_pur_') || txId.startsWith('stx_mp_')) return true;
   const note = String(tx?.note || tx?.details?.note || '');
   return note.startsWith('Spot Payment for Milk Intake') || note.startsWith('Spot Payment for Material Purchase');
 }

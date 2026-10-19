@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useToast } from '../context/ToastContext';
 import { RichSelect, RichSelectOption } from '../components/RichSelect';
 import { SegmentedControl } from '../components/SegmentedControl';
-import { formatQty, formatCurrency, cleanNumber, cleanQty } from '../lib/formatters';
+import { formatQty, formatCurrency, cleanNumber, cleanQty, normalizeTransactionTimestamp, getTodayLocalDate } from '../lib/formatters';
 import { businessDate } from '../lib/dashboardAnalytics';
 import { SmartNumberInput } from '../components/SmartNumberInput';
 import { roundCurrency, roundQuantity } from '../lib/db';
@@ -232,7 +232,7 @@ const SearchableSupplierDropdown: React.FC<{
                             : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
                         }`}
                       >
-                        Rs {Math.abs(bal).toLocaleString()} {bal > 0 ? 'Due' : 'Adv'}
+                        {formatCurrency(Math.abs(bal))} {bal > 0 ? 'Due' : 'Adv'}
                       </span>
                     ) : (
                       <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">
@@ -315,6 +315,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const [returnQty, setReturnQty] = useState<number | string>(0);
   const [maxReturnQty, setMaxReturnQty] = useState<number>(0);
   const [returnReason, setReturnReason] = useState('Substandard Quality / Curdled');
+  const [refundAs, setRefundAs] = useState<'cash' | 'khata'>('cash');
   const [customReturnReason, setCustomReturnReason] = useState('');
   const [isProcessingReturn, setIsProcessingReturn] = useState(false);
 
@@ -339,7 +340,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     snf: number;
   }>({
     supplier_id: '',
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
     shift: 'Morning',
     milk_type: MilkType.BUFFALO,
     quantity: 0,
@@ -361,7 +362,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
   // Other Products / Materials Invoice State
   const [invoiceSupplier, setInvoiceSupplier] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [invoiceItems, setInvoiceItems] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [paidAmount, setPaidAmount] = useState<string>('');
@@ -498,7 +499,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
         label: s.name,
         subLabel: s.village ? `${s.village}${s.phone ? ` • ${s.phone}` : ''}` : s.phone || undefined,
         badge: bal !== 0 ? {
-          text: `Rs ${Math.abs(bal).toLocaleString()} ${bal > 0 ? 'Due' : 'Advance'}`,
+          text: `${formatCurrency(Math.abs(bal))} ${bal > 0 ? 'Due' : 'Advance'}`,
           variant: bal > 0 ? 'red' : 'green'
         } : undefined,
         avatarLetter: s.name.charAt(0).toUpperCase(),
@@ -606,10 +607,9 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     }
     
     // Construct timestamp with exact current time if entry is for today, so ledger sorts correctly
-    const todayYMD = new Date().toISOString().split('T')[0];
-    const submissionDate = milkForm.date === todayYMD 
-      ? new Date().toISOString() 
-      : `${milkForm.date}T${new Date().toTimeString().slice(0, 8)}Z`;
+    // Today -> the real moment; a back-dated entry -> noon of that Pakistan day. The old
+    // `${date}T${localTime}Z` labelled local time as UTC and moved evening entries to the next day.
+    const submissionDate = normalizeTransactionTimestamp(milkForm.date);
 
     isSubmittingMilkRef.current = true;
     setIsSubmitting(true);
@@ -659,6 +659,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
     setReturnModalEntry(entry);
     setReturnModalType('milk');
+    setRefundAs('cash');
     setReturnQty(availableUnallocated);
     setMaxReturnQty(availableUnallocated);
     setReturnReason('Substandard Quality / Curdled');
@@ -681,11 +682,12 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     // the stock then goes below zero, which is shown rather than hidden.
     const maxQty = availableStock > 0 ? Math.min(entry.quantity, availableStock) : entry.quantity;
     if (itemDef && availableStock <= 0) {
-      showToast(`${entry.item_name} ka stock ${formatQty(availableStock)} hai. Return karne se stock minus mein chala jayega.`, "warning");
+      showToast(`${entry.item_name} stock is ${formatQty(availableStock)}. This return will make it negative.`, "warning");
     }
 
     setReturnModalEntry(entry);
     setReturnModalType('material');
+    setRefundAs('cash');
     setReturnQty(maxQty > 0 ? maxQty : entry.quantity);
     setMaxReturnQty(maxQty > 0 ? maxQty : entry.quantity);
     setReturnReason('Defective / Damaged Material');
@@ -714,9 +716,9 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     setIsProcessingReturn(true);
     let success = false;
     if (returnModalType === 'milk') {
-      success = await returnPurchase(returnModalEntry.id, numQty, finalReason);
+      success = await returnPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
     } else {
-      success = await returnMaterialPurchase(returnModalEntry.id, numQty, finalReason);
+      success = await returnMaterialPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
     }
     setIsProcessingReturn(false);
 
@@ -755,7 +757,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
           units.push({
             unit: v.name,
             // Ready-made packs are stocked as packs; dozen/tray style units go into loose stock.
-            label: `${v.name} (${factor} ${baseUnit}${v.deduct_from_base === true ? '' : ' · packed stock'})`,
+            label: `${v.name} (${factor} ${baseUnit}${v.deduct_from_base === true ? '' : ', pack'})`,
             factor,
             isBase: false
           });
@@ -764,6 +766,33 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     }
 
     return units;
+  };
+
+  // Where a bill line lands: ready-made pack units add packs, everything else adds loose base units.
+  const lineDestination = (line: { item_id: string; unit?: string; quantity?: number; conversion_factor?: number; rate?: number }) => {
+    const def = items.find(i => i.id === line.item_id);
+    if (!def) return null;
+    const unitName = String(line.unit || '').trim().toLowerCase();
+    const pack = unitName && unitName !== String(def.unit || '').trim().toLowerCase()
+      ? (def.variants || []).find(v => v.isActive !== false && v.deduct_from_base !== true && String(v.name || '').trim().toLowerCase() === unitName)
+      : undefined;
+    const qty = Number(line.quantity) || 0;
+    const conv = Number(line.conversion_factor) || 1;
+    const rate = Number(line.rate) || 0;
+    const perBase = conv > 0 && rate > 0 ? rate / conv : 0;
+    return pack
+      ? { packed: true, text: `+${formatQty(qty, 3)} ${pack.name}`, rate: '' }
+      : { packed: false, text: `+${formatQty(qty * conv, 3)} ${def.unit} loose`, rate: conv !== 1 && perBase > 0 ? `${formatCurrency(perBase)}/${def.unit}` : '' };
+  };
+
+  const destinationTag = (line: any) => {
+    const dest = lineDestination(line);
+    if (!dest) return null;
+    return (
+      <span className={`inline-flex items-center gap-1 mt-1 text-[10px] font-bold px-1.5 py-0.5 rounded border ${dest.packed ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60'}`}>
+        {dest.text}{dest.rate ? ` · ${dest.rate}` : ''}
+      </span>
+    );
   };
 
   const handleAddItem = (itemId: string) => {
@@ -948,10 +977,12 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
       return;
     }
 
-    const todayYMD = new Date().toISOString().split('T')[0];
-    const submissionDate = invoiceDate === todayYMD 
-      ? new Date().toISOString() 
-      : `${invoiceDate}T${new Date().toTimeString().slice(0, 8)}Z`;
+    if (effectivePaid > invoiceTotal + 0.01) {
+      showToast(`Paid (${formatCurrency(effectivePaid)}) bill (${formatCurrency(invoiceTotal)}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`, "warning");
+      return;
+    }
+
+    const submissionDate = normalizeTransactionTimestamp(invoiceDate);
 
     setIsSubmittingInvoice(true);
     try {
@@ -965,20 +996,20 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
         account_id: effectivePaid > 0 ? materialAccountId : undefined
       }); 
 
-      if (success) {
-        showToast(
-          invoiceSupplier 
-            ? `Purchase bill of Rs ${invoiceTotal.toLocaleString()} saved!` 
-            : `Cash Purchase of Rs ${invoiceTotal.toLocaleString()} logged!`,
-          'success'
-        );
-      }
+      // Keep the bill on screen when the save failed, so nothing has to be typed again.
+      if (!success) return;
+      showToast(
+        invoiceSupplier
+          ? `Purchase bill of ${formatCurrency(invoiceTotal)} saved!`
+          : `Cash Purchase of ${formatCurrency(invoiceTotal)} logged!`,
+        'success'
+      );
 
-      setInvoiceItems([]); 
-      setInvoiceSupplier(''); 
-      setPaidAmount(''); 
+      setInvoiceItems([]);
+      setInvoiceSupplier('');
+      setPaidAmount('');
       setPaymentMode('Cash');
-      setInvoiceDate(new Date().toISOString().split('T')[0]);
+      setInvoiceDate(getTodayLocalDate());
     } catch (err: any) {
       showToast("Error saving purchase: " + (err?.message || "Failed"), "error");
     } finally {
@@ -992,21 +1023,25 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const inputClass = "w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-100 focus:border-lime-500 dark:focus:border-lime-400 focus:ring-1 focus:ring-lime-500 outline-none transition-all";
   const labelClass = "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1";
 
-  // Product Search Dropdown Component
-  const ProductSearchDropdown = () => {
-    const [isOpen, setIsOpen] = useState(false);
-    const dropdownRef = useRef<HTMLDivElement>(null);
-    const results = getFilteredItems();
+  const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
+  const productSearchRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (productSearchRef.current && !productSearchRef.current.contains(e.target as Node)) {
+        setIsProductSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-    useEffect(() => { 
-      const handleClickOutside = (e: MouseEvent) => { 
-        if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-          setIsOpen(false); 
-        }
-      }; 
-      document.addEventListener('mousedown', handleClickOutside); 
-      return () => document.removeEventListener('mousedown', handleClickOutside); 
-    }, []);
+  // Product search dropdown. Rendered inline (not as a nested component) so typing does not
+  // remount the input, which used to drop focus and close the results after every key.
+  const renderProductSearch = () => {
+    const isOpen = isProductSearchOpen;
+    const setIsOpen = setIsProductSearchOpen;
+    const dropdownRef = productSearchRef;
+    const results = getFilteredItems();
 
     return (
       <div className="relative w-full" ref={dropdownRef}>
@@ -1214,7 +1249,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                           ? 'bg-rose-50 text-rose-700 border-rose-200' 
                           : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       }`}>
-                        Rs {Math.abs(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)).toLocaleString()} {(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
+                        {formatCurrency(Math.abs(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)))} {(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
                       </span>
                     )}
                   </div>
@@ -1281,7 +1316,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                           ? 'bg-amber-50 text-amber-700 border-amber-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}>
-                        {effectiveMilkPaid >= milkTotalPayable ? 'Fully Paid' : effectiveMilkPaid > 0 ? `Partial (Rs ${effectiveMilkPaid.toLocaleString()})` : 'On Khata (Unpaid)'}
+                        {effectiveMilkPaid >= milkTotalPayable ? 'Fully Paid' : effectiveMilkPaid > 0 ? `Partial (${formatCurrency(effectiveMilkPaid)})` : 'On Khata (Unpaid)'}
                       </span>
                     )}
                   </div>
@@ -1361,7 +1396,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                             >
                               {availableAccounts.map(acc => (
                                 <option key={acc.id} value={acc.id}>
-                                  {acc.name} ({acc.type}) — Balance: Rs {acc.balance.toLocaleString()}
+                                  {acc.name} ({acc.type}) — Balance: {formatCurrency(acc.balance)}
                                 </option>
                               ))}
                             </select>
@@ -1376,15 +1411,15 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 text-center">
                       <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
                         <span className="text-[9px] font-bold text-slate-400 uppercase block">Total Bill</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-slate-900">Rs {milkTotalPayable.toLocaleString()}</span>
+                        <span className="text-xs sm:text-sm font-bold font-mono text-slate-900">{formatCurrency(milkTotalPayable)}</span>
                       </div>
                       <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
                         <span className="text-[9px] font-bold text-emerald-600 uppercase block">Paid Now</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-emerald-700">Rs {effectiveMilkPaid.toLocaleString()}</span>
+                        <span className="text-xs sm:text-sm font-bold font-mono text-emerald-700">{formatCurrency(effectiveMilkPaid)}</span>
                       </div>
                       <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
                         <span className="text-[9px] font-bold text-rose-600 uppercase block">Added to Khata</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-rose-700">Rs {milkDueAmount.toLocaleString()}</span>
+                        <span className="text-xs sm:text-sm font-bold font-mono text-rose-700">{formatCurrency(milkDueAmount)}</span>
                       </div>
                     </div>
                   )}
@@ -1398,11 +1433,11 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Payable</span>
                   <div className="flex items-baseline gap-2 flex-wrap">
                     <span className="text-xl sm:text-2xl font-bold font-mono text-lime-700 leading-tight">
-                      Rs {milkTotalPayable.toLocaleString()}
+                      {formatCurrency(milkTotalPayable)}
                     </span>
                     {effectiveMilkPaid > 0 && (
                       <span className="text-xs text-slate-500 font-medium">
-                        (Paid: <strong className="text-emerald-700 font-mono">Rs {effectiveMilkPaid.toLocaleString()}</strong> • Due: <strong className="text-rose-700 font-mono">Rs {milkDueAmount.toLocaleString()}</strong>)
+                        (Paid: <strong className="text-emerald-700 font-mono">{formatCurrency(effectiveMilkPaid)}</strong> • Due: <strong className="text-rose-700 font-mono">{formatCurrency(milkDueAmount)}</strong>)
                       </span>
                     )}
                   </div>
@@ -1414,7 +1449,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     onClick={() => {
                       setMilkForm({
                         supplier_id: '',
-                        date: new Date().toISOString().split('T')[0],
+                        date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
                         shift: configuredShifts[0] || 'Morning',
                         milk_type: MilkType.BUFFALO,
                         quantity: 0,
@@ -1483,7 +1518,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                             const bal = Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0) || 0;
                             return (
                               <span className={`font-bold font-mono ${bal > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-                                Rs {bal.toLocaleString()}
+                                {formatCurrency(bal)}
                               </span>
                             );
                           })()}
@@ -1497,7 +1532,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                               const proj = bal + milkDueAmount;
                               return (
                                 <span className={`font-bold font-mono ${proj > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                                  Rs {proj.toLocaleString()}
+                                  {formatCurrency(proj)}
                                 </span>
                               );
                             })()}
@@ -1577,7 +1612,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                           ? 'bg-rose-50 text-rose-700 border-rose-200' 
                           : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       }`}>
-                        Rs {Math.abs(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)).toLocaleString()} {(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
+                        {formatCurrency(Math.abs(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)))} {(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
                       </span>
                     )}
                   </div>
@@ -1608,7 +1643,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
               <div>
                 <label className={`${labelClass} mb-1 block`}>Search & Add Products to Bill</label>
-                <ProductSearchDropdown />
+                {renderProductSearch()}
               </div>
             </div>
 
@@ -1672,6 +1707,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                               <p className="font-bold text-slate-800 text-xs truncate leading-tight group-hover:text-lime-600 transition-colors">
                                 {item.item_name}
                               </p>
+                              {destinationTag(item)}
                               <div className="flex items-center gap-1.5 mt-0.5">
                                 <span className="bg-lime-50 text-lime-800 border border-lime-200 text-[10px] font-bold px-1.5 py-0.5 rounded">
                                   {item.unit}
@@ -1756,6 +1792,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                               >
                                 {item.item_name}
                               </span>
+                              <div>{destinationTag(item)}</div>
                             </td>
                             <td className="px-3 py-3 text-center">
                               {(() => {
@@ -1777,7 +1814,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                                       >
                                         {availUnits.map(u => (
                                           <option key={u.unit} value={u.unit}>
-                                            {u.unit} {u.factor !== 1 ? `(${u.factor} ${item.base_unit || 'base'})` : ''}
+                                            {u.label}
                                           </option>
                                         ))}
                                       </select>
@@ -1868,16 +1905,16 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Purchase Bill</span>
                   <div className="flex items-baseline gap-2 flex-wrap">
                     <span className="text-xl sm:text-2xl font-bold font-mono text-lime-700 leading-tight">
-                      Rs {invoiceTotal.toLocaleString()}
+                      {formatCurrency(invoiceTotal)}
                     </span>
                     <span className="text-xs font-semibold text-slate-500">
                       ({invoiceItems.length} {invoiceItems.length === 1 ? 'product' : 'products'})
                     </span>
                     {effectivePaid > 0 && (
                       <span className="text-xs text-slate-500 font-medium">
-                        • Paid: <strong className="text-emerald-700 font-mono">Rs {effectivePaid.toLocaleString()}</strong>
+                        • Paid: <strong className="text-emerald-700 font-mono">{formatCurrency(effectivePaid)}</strong>
                         {unpaidInvoiceBalance > 0 && (
-                          <> • Due: <strong className="text-rose-700 font-mono">Rs {unpaidInvoiceBalance.toLocaleString()}</strong></>
+                          <> • Due: <strong className="text-rose-700 font-mono">{formatCurrency(unpaidInvoiceBalance)}</strong></>
                         )}
                       </span>
                     )}
@@ -1938,7 +1975,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                         >
                           {availableAccounts.map(acc => (
                             <option key={acc.id} value={acc.id}>
-                              {acc.name} ({acc.type}) — Rs {acc.balance.toLocaleString()}
+                              {acc.name} ({acc.type}) — {formatCurrency(acc.balance)}
                             </option>
                           ))}
                         </select>
@@ -2054,6 +2091,10 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                             <span className="text-[10px] text-slate-400 font-normal block mt-0.5">
                               {u.factor === 1 ? 'Base unit' : `= ${u.factor} ${editingLineItem.base_unit || 'base'}`}
                             </span>
+                            {(() => {
+                              const dest = lineDestination({ ...editingLineItem, unit: u.unit, conversion_factor: u.factor, quantity: 1 });
+                              return dest ? <span className={`text-[10px] font-bold block mt-0.5 ${dest.packed ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`}>{dest.packed ? 'Adds packs' : 'Adds loose'}</span> : null;
+                            })()}
                           </button>
                         );
                       })}
@@ -2432,6 +2473,29 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
                     />
                   </div>
                 )}
+
+                {/* Refund: cash back vs khata. Preview shows exactly where the money goes. */}
+                {(() => {
+                  const entryTotal = Number(returnModalEntry.total_amount || 0) || (Number(returnModalEntry.quantity || 0) * Number(returnModalEntry.rate || 0));
+                  const entryPaid = Number(returnModalEntry.paid_amount ?? returnModalEntry.details?.paid_amount ?? 0);
+                  const hasAccount = Boolean(returnModalEntry.details?.account_id || returnModalEntry.account_id);
+                  const returnValue = roundCurrency((parseFloat(String(returnQty)) || 0) * Number(returnModalEntry.rate || 0));
+                  const cashPart = refundAs === 'cash' && hasAccount && entryTotal > 0 ? roundCurrency(Math.min(entryPaid, returnValue * (entryPaid / entryTotal))) : 0;
+                  const khataPart = roundCurrency(Math.max(0, returnValue - cashPart));
+                  return (
+                    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs dark:border-slate-700 dark:bg-slate-800/50">
+                      {entryPaid > 0 && hasAccount && (
+                        <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Refund kaise hoga">
+                          <button type="button" role="radio" aria-checked={refundAs === 'cash'} onClick={() => setRefundAs('cash')} className={`rounded-md border px-2 py-1.5 font-semibold ${refundAs === 'cash' ? 'border-red-500 bg-white text-red-700 dark:bg-slate-900' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Supplier ne cash wapas diya</button>
+                          <button type="button" role="radio" aria-checked={refundAs === 'khata'} onClick={() => setRefundAs('khata')} className={`rounded-md border px-2 py-1.5 font-semibold ${refundAs === 'khata' ? 'border-red-500 bg-white text-red-700 dark:bg-slate-900' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Sirf khaata kam karein</button>
+                        </div>
+                      )}
+                      <p className="text-slate-600 dark:text-slate-300">Return value: <b className="font-mono">{formatCurrency(returnValue)}</b></p>
+                      {cashPart > 0 && <p className="text-emerald-700 dark:text-emerald-400">{formatCurrency(cashPart)} account mein wapas aayenge</p>}
+                      {khataPart > 0 && <p className="text-amber-700 dark:text-amber-400">{formatCurrency(khataPart)} supplier ke khaate se kam honge</p>}
+                    </div>
+                  );
+                })()}
 
                 {/* Buttons */}
                 <div className="pt-2 flex gap-2">

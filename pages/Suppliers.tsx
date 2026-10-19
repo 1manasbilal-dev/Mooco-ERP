@@ -36,6 +36,7 @@ import {
   printMilkSupplierReport,
   shareMilkReportImage
 } from '../lib/milkSupplierReport';
+import { formatCurrency } from '../lib/formatters';
 
 const Suppliers: React.FC = () => {
   const { 
@@ -156,7 +157,7 @@ const Suppliers: React.FC = () => {
   // Payment Form State
   const [paymentData, setPaymentData] = useState({
     amount: '',
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
     mode: 'Cash',
     accountId: '',
     type: 'Payment', // Payment (Clear dues) or Advance (Loan)
@@ -469,7 +470,10 @@ const Suppliers: React.FC = () => {
     setIsSubmitting(true);
     try {
       if (editingSupplier) {
-        const ok = await updateSupplier(editingSupplier.id, payload);
+        // The live balance moves only through purchases, payments and returns; an edit must never
+        // write it back (a purchase posted while the form was open would be wiped out).
+        const { pending_balance: _ignoredBalance, ...profileOnly } = payload;
+        const ok = await updateSupplier(editingSupplier.id, profileOnly);
         if (!ok) return;
         showToast('Supplier updated successfully', 'success');
       } else {
@@ -495,7 +499,7 @@ const Suppliers: React.FC = () => {
     const initialMode = 'Cash';
     setPaymentData({
       amount: supplier.pending_balance && supplier.pending_balance > 0 ? supplier.pending_balance.toString() : '',
-      date: new Date().toISOString().split('T')[0],
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
       mode: initialMode,
       accountId: getDefaultSupplierAccount(initialMode),
       type: 'Payment',
@@ -559,11 +563,27 @@ const Suppliers: React.FC = () => {
     }
   };
 
-  const handleDeleteTransaction = (id: string) => {
-     if(confirm("Are you sure? This will revert the balance in supplier ledger.")) {
-        deleteSupplierTransaction(id);
-        showToast("Transaction deleted", "success");
-     }
+  const handleDeleteTransaction = async (id: string) => {
+     const tx: any = supplierTransactions.find(t => t.id === id);
+     const supplier = tx ? suppliers.find(s => s.id === tx.supplier_id) : undefined;
+     const amount = Number(tx?.amount || 0);
+     const isWaiver = Boolean(tx?.details?.waiver) || /waiver|discount/i.test(String(tx?.mode || tx?.details?.mode || ''));
+     const accountId = tx?.account_id || tx?.details?.account_id;
+     const account = accountId ? accounts.find((a: any) => a.id === accountId) : undefined;
+     const balanceNow = Number(supplier?.pending_balance || 0);
+     const balanceAfter = balanceNow + amount;
+     const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(dena hai)' : value < 0 ? '(advance)' : ''}`.trim();
+     const message = [
+       `Payment ${formatCurrency(amount)} delete karein?`,
+       '',
+       `• ${supplier?.name || 'Supplier'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
+       isWaiver ? '• Ye maafi (waiver) thi, koi account nahi badlega' : account ? `• ${formatCurrency(amount)} wapas "${account.name}" mein aayenge` : '• Kisi account mein paisa wapas nahi aayega',
+       '',
+       'Ye wapas nahi hoga.'
+     ].join('\n');
+     if (!window.confirm(message)) return;
+     const ok = await deleteSupplierTransaction(id);
+     if (ok) showToast("Entry delete ho gayi", "success");
   };
 
   const statementSupplier = (supplier: Supplier) => ({
@@ -780,7 +800,7 @@ const Suppliers: React.FC = () => {
                     Math.abs(activeSupplier.pending_balance) < 0.01 ? 'text-slate-700 dark:text-slate-300' :
                     activeSupplier.pending_balance > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'
                   }`}>
-                    Rs {Math.abs(activeSupplier.pending_balance).toLocaleString()}
+                    {formatCurrency(Math.abs(activeSupplier.pending_balance))}
                   </span>
                 </div>
                 <span className={`text-[10px] font-bold px-2.5 py-1 rounded-xl uppercase ${
@@ -820,7 +840,7 @@ const Suppliers: React.FC = () => {
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-800/40 p-2 rounded-xl border border-slate-100 dark:border-slate-700/50">
                       <span className="text-[9px] text-slate-400 block font-semibold">Amount</span>
-                      <span className="font-mono font-bold text-amber-600 text-[11px]">Rs {milkReport.amount.toLocaleString('en-PK')}</span>
+                      <span className="font-mono font-bold text-amber-600 text-[11px]">{formatCurrency(milkReport.amount)}</span>
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-800/40 p-2 rounded-xl border border-slate-100 dark:border-slate-700/50">
                       <span className="text-[9px] text-slate-400 block font-semibold">Rate</span>
@@ -1013,8 +1033,11 @@ const Suppliers: React.FC = () => {
                       </div>
                       {entry.canDelete && (
                         <button
+                          type="button"
                           onClick={() => handleDeleteTransaction(entry.id)}
                           className="p-1 text-slate-400 hover:text-red-600 rounded"
+                          title="Payment delete karein"
+                          aria-label="Payment delete karein"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -1030,13 +1053,13 @@ const Suppliers: React.FC = () => {
                       <div>
                         <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Supply (Cr)</span>
                         <span className="font-mono font-bold text-amber-600">
-                          {entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : '—'}
+                          {entry.credit > 0 ? `${formatCurrency(entry.credit)}` : '—'}
                         </span>
                       </div>
                       <div>
                         <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Paid (Dr)</span>
                         <span className="font-mono font-bold text-emerald-600">
-                          {entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : '—'}
+                          {entry.debit > 0 ? `${formatCurrency(entry.debit)}` : '—'}
                         </span>
                       </div>
                       <div>
@@ -1116,7 +1139,7 @@ const Suppliers: React.FC = () => {
                     <span className={`text-2xl font-black font-mono ${
                       Math.abs(activeSupplier.pending_balance) < 0.01 ? 'text-slate-700' : activeSupplier.pending_balance > 0 ? 'text-amber-600' : 'text-emerald-700'
                     }`}>
-                      Rs {Math.abs(activeSupplier.pending_balance).toLocaleString()}
+                      {formatCurrency(Math.abs(activeSupplier.pending_balance))}
                     </span>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${
                       Math.abs(activeSupplier.pending_balance) < 0.01 ? 'bg-slate-200 text-slate-600' : activeSupplier.pending_balance > 0 ? 'bg-amber-200/70 text-amber-800' : 'bg-emerald-200/70 text-emerald-800'
@@ -1232,19 +1255,19 @@ const Suppliers: React.FC = () => {
                   <>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cash Paid</span>
-                      <span className="text-lg font-black text-emerald-600 font-mono mt-0.5 block">Rs {ledgerDetails.cashPaid.toLocaleString()}</span>
+                      <span className="text-lg font-black text-emerald-600 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.cashPaid)}</span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Bank / Other</span>
-                      <span className="text-lg font-black text-slate-900 font-mono mt-0.5 block">Rs {ledgerDetails.otherPaid.toLocaleString()}</span>
+                      <span className="text-lg font-black text-slate-900 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.otherPaid)}</span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Refunds In</span>
-                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">Rs {ledgerDetails.cashIn.toLocaleString()}</span>
+                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.cashIn)}</span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Net Paid</span>
-                      <span className="text-lg font-black text-slate-900 font-mono mt-0.5 block">Rs {(ledgerDetails.cashOut - ledgerDetails.cashIn).toLocaleString()}</span>
+                      <span className="text-lg font-black text-slate-900 font-mono mt-0.5 block">{formatCurrency((ledgerDetails.cashOut - ledgerDetails.cashIn))}</span>
                     </div>
                   </>
                 ) : ledgerView === 'milk' ? (
@@ -1256,7 +1279,7 @@ const Suppliers: React.FC = () => {
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Milk Amount</span>
-                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">Rs {milkReport.amount.toLocaleString('en-PK')}</span>
+                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">{formatCurrency(milkReport.amount)}</span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Average Rate</span>
@@ -1277,13 +1300,13 @@ const Suppliers: React.FC = () => {
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Supplies (Cr)</span>
-                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">Rs {ledgerDetails.totalCredit.toLocaleString()}</span>
+                      <span className="text-lg font-black text-amber-600 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.totalCredit)}</span>
                       <span className="text-[10px] font-semibold text-slate-400">{ledgerDetails.totalMilkLitres.toLocaleString()} L milk</span>
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Paid Out (Dr)</span>
-                      <span className="text-lg font-black text-emerald-600 font-mono mt-0.5 block">Rs {ledgerDetails.netPaid.toLocaleString()}</span>
-                      {ledgerDetails.refunds > 0 && <span className="text-[10px] font-semibold text-amber-600">Refund Rs {ledgerDetails.refunds.toLocaleString()}</span>}
+                      <span className="text-lg font-black text-emerald-600 font-mono mt-0.5 block">{formatCurrency(ledgerDetails.netPaid)}</span>
+                      {ledgerDetails.refunds > 0 && <span className="text-[10px] font-semibold text-amber-600">Refund {formatCurrency(ledgerDetails.refunds)}</span>}
                     </div>
                     <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Closing Balance</span>
@@ -1352,10 +1375,10 @@ const Suppliers: React.FC = () => {
                               {entry.accountName && <div className="text-[10px] font-medium text-slate-400">{entry.accountName}</div>}
                             </td>
                             <td className="px-5 py-3 text-right font-mono font-bold text-amber-600">
-                              {entry.credit > 0 ? `Rs ${entry.credit.toLocaleString()}` : '—'}
+                              {entry.credit > 0 ? `${formatCurrency(entry.credit)}` : '—'}
                             </td>
                             <td className="px-5 py-3 text-right font-mono font-bold text-emerald-600">
-                              {entry.debit > 0 ? `Rs ${entry.debit.toLocaleString()}` : '—'}
+                              {entry.debit > 0 ? `${formatCurrency(entry.debit)}` : '—'}
                             </td>
                             <td className="px-5 py-3 text-right font-mono font-black">
                               <BalanceAmount value={entry.runningBalance} />
@@ -1363,9 +1386,11 @@ const Suppliers: React.FC = () => {
                             <td className="px-5 py-3 text-center">
                               {entry.canDelete && (
                                 <button
+                                  type="button"
                                   onClick={() => handleDeleteTransaction(entry.id)}
                                   className="p-1 text-slate-400 hover:text-red-600 transition-colors"
-                                  title="Delete Transaction"
+                                  title="Payment delete karein"
+                                  aria-label="Payment delete karein"
                                 >
                                   <Trash2 size={14} />
                                 </button>
@@ -1573,15 +1598,15 @@ const Suppliers: React.FC = () => {
                   </div>
                   <div className="bg-white p-3 rounded-2xl border border-slate-200">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Cash</p>
-                    <p className="font-mono font-black text-emerald-600">Rs {paymentRegister.cashPaid.toLocaleString()}</p>
+                    <p className="font-mono font-black text-emerald-600">{formatCurrency(paymentRegister.cashPaid)}</p>
                   </div>
                   <div className="bg-white p-3 rounded-2xl border border-slate-200">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Bank / Other</p>
-                    <p className="font-mono font-black text-slate-800">Rs {paymentRegister.otherPaid.toLocaleString()}</p>
+                    <p className="font-mono font-black text-slate-800">{formatCurrency(paymentRegister.otherPaid)}</p>
                   </div>
                   <div className="bg-white p-3 rounded-2xl border border-slate-200">
                     <p className="text-[10px] font-bold text-slate-400 uppercase">Net Paid</p>
-                    <p className="font-mono font-black text-slate-900">Rs {paymentRegister.net.toLocaleString()}</p>
+                    <p className="font-mono font-black text-slate-900">{formatCurrency(paymentRegister.net)}</p>
                   </div>
                 </div>
                 <CashPaymentDays
@@ -1662,7 +1687,7 @@ const Suppliers: React.FC = () => {
                           isPayable ? 'bg-amber-50 text-amber-700 border-amber-200' :
                           'bg-emerald-50 text-emerald-700 border-emerald-200'
                         }`}>
-                          {isSettled ? 'Settled' : isPayable ? `Due Rs ${s.pending_balance.toLocaleString()}` : `Adv Rs ${Math.abs(s.pending_balance).toLocaleString()}`}
+                          {isSettled ? 'Settled' : isPayable ? `Due ${formatCurrency(s.pending_balance)}` : `Adv ${formatCurrency(Math.abs(s.pending_balance))}`}
                         </span>
                       </div>
                     </div>
@@ -1743,7 +1768,7 @@ const Suppliers: React.FC = () => {
                           </td>
                           <td className="px-6 py-4 text-right font-bold font-mono">
                             <span className={s.pending_balance > 0 ? 'text-amber-600' : s.pending_balance < 0 ? 'text-emerald-600' : 'text-slate-500'}>
-                              Rs {Math.abs(s.pending_balance || 0).toLocaleString()}
+                              {formatCurrency(Math.abs(s.pending_balance || 0))}
                             </span>
                           </td>
                           <td className="px-6 py-4 text-center" onClick={(e) => e.stopPropagation()}>
@@ -1973,13 +1998,21 @@ const Suppliers: React.FC = () => {
                      )}
                   </div>
 
-                  {/* SECTION 3: OPENING BALANCE */}
+                  {/* SECTION 3: OPENING BALANCE (new supplier) / CURRENT BALANCE (read-only on edit) */}
                   <div className="space-y-2 pt-1">
                      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
                         <Wallet size={15} className="text-amber-600" />
-                        <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">3. Opening Balance (Rs)</h4>
+                        <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">{editingSupplier ? '3. Current Balance (Rs)' : '3. Opening Balance (Rs)'}</h4>
                      </div>
 
+                     {editingSupplier ? (
+                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                         <p className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                           {formatCurrency(Math.abs(Number(editingSupplier.pending_balance) || 0))} {Number(editingSupplier.pending_balance) > 0 ? '(Payable / Dena hai)' : Number(editingSupplier.pending_balance) < 0 ? '(Advance diya hua)' : '(Settled)'}
+                         </p>
+                         <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Balance yahan se nahi badalta. Purchase, payment ya return se khud update hota hai.</p>
+                       </div>
+                     ) : (
                      <div>
                         <div className="relative">
                            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-sm">Rs</span>
@@ -1994,6 +2027,7 @@ const Suppliers: React.FC = () => {
                         </div>
                         <p className="text-[11px] text-slate-400 mt-1">Enter positive amount for Payable balance (Dena Hai), or negative (-) for Advance paid.</p>
                      </div>
+                     )}
                   </div>
 
                   {/* SECTION 4: REMARKS & ACCOUNT STATUS */}
@@ -2079,7 +2113,7 @@ const Suppliers: React.FC = () => {
               <form onSubmit={handlePaymentSubmit} className="p-6 space-y-4">
                  <div className="bg-amber-50 p-3.5 rounded-2xl border border-amber-200 flex justify-between items-center">
                     <span className="text-xs text-amber-800 font-bold">Current Payable Balance:</span>
-                    <span className="text-base font-black text-amber-700 font-mono">Rs {(activePaymentSupplier.pending_balance || 0).toLocaleString()}</span>
+                    <span className="text-base font-black text-amber-700 font-mono">{formatCurrency((activePaymentSupplier.pending_balance || 0))}</span>
                  </div>
 
                  <div>
@@ -2150,7 +2184,7 @@ const Suppliers: React.FC = () => {
                               const isActiveTill = activeShiftSession && (a.id === activeShiftSession.drawer_id || a.id === activeShiftSession.account_id);
                               return (
                                 <option key={a.id} value={a.id}>
-                                   {a.name} ({a.type}) - Bal: Rs {Number(a.balance || 0).toLocaleString()}
+                                   {a.name} ({a.type}) - Bal: {formatCurrency(Number(a.balance || 0))}
                                    {isActiveTill ? ' [Active Till]' : ''}
                                    {isDefaultCash ? ' ★ Default Cash' : ''}
                                    {isDefaultDigital ? ' ★ Default Digital' : ''}
@@ -2165,7 +2199,7 @@ const Suppliers: React.FC = () => {
                        return (
                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex items-center justify-between">
                            <span>Deducting from: <strong className="text-slate-700 dark:text-slate-200">{selAcc.name}</strong> ({selAcc.type})</span>
-                           <span className="font-semibold text-emerald-600 dark:text-emerald-400">Available Bal: Rs {Number(selAcc.balance || 0).toLocaleString()}</span>
+                           <span className="font-semibold text-emerald-600 dark:text-emerald-400">Available Bal: {formatCurrency(Number(selAcc.balance || 0))}</span>
                          </p>
                        );
                      })()}
@@ -2259,7 +2293,7 @@ const Suppliers: React.FC = () => {
                         {bal > 0 ? 'Pending Payable (Mooco Owes Supplier)' : 'Advance Paid (Supplier Owes Mooco)'}
                       </span>
                       <span className="text-2xl font-black font-mono text-amber-800 mt-1 block">
-                        Rs {Math.abs(bal).toLocaleString()}
+                        {formatCurrency(Math.abs(bal))}
                       </span>
                       <p className="text-[11px] text-amber-700/90 mt-1">
                         Deleting directly will corrupt Creditors on your Balance Sheet!

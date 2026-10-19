@@ -2,8 +2,9 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
+import { useTabs } from '../context/TabContext';
 import { roundCurrency, roundQuantity } from '../lib/db';
-import { cleanNumber, cleanQty, formatQty } from '../lib/formatters';
+import { cleanNumber, cleanQty, formatQty, formatCurrency } from '../lib/formatters';
 import { checkoutCustomerOrder, getCustomerOrder } from '../lib/customerOrders';
 import { CustomerOrder } from '../types';
 import { stepWholeQuantity } from '../lib/posQuickEntry';
@@ -77,7 +78,10 @@ const POS: React.FC = () => {
   const [paymentMode, setPaymentMode] = useState<string>(() => {
     try {
       const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft && draft.paymentMode) return draft.paymentMode;
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed.paymentMode) return parsed.paymentMode;
+      }
     } catch {}
     return 'Cash';
   });
@@ -313,9 +317,10 @@ const POS: React.FC = () => {
 
   // Today's Counter Sales Analytics Summary (Excluding returns & deducting refunds)
   const todaySummary = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+    // Bill timestamps are UTC; compare on the Pakistan day they were punched.
     const todaySales = (sales || []).filter(s => {
-      const saleDate = typeof s?.date === 'string' ? s.date.split('T')[0] : '';
+      const saleDate = typeof s?.date === 'string' ? new Date(s.date).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }) : '';
       return saleDate === todayStr;
     });
 
@@ -557,6 +562,8 @@ const POS: React.FC = () => {
     return roundCurrency(Math.max(0, cashGiven - grandTotal));
   }, [paymentMode, cashGiven, grandTotal]);
 
+  // A booking's advance was already collected, so it reduces what the customer still owes on this bill.
+  const bookingAdvance = booking ? Number(booking.advance_paid || 0) : 0;
   const customerPaidVal = useMemo(() => {
     if (!selectedCustomerId) return grandTotal;
     if (paymentMode === 'Credit') {
@@ -571,17 +578,27 @@ const POS: React.FC = () => {
 
   const customerDueAmount = useMemo(() => {
     if (!selectedCustomerId) return 0;
-    return roundCurrency(Math.max(0, grandTotal - customerPaidVal));
-  }, [selectedCustomerId, grandTotal, customerPaidVal]);
+    return roundCurrency(Math.max(0, grandTotal - customerPaidVal - bookingAdvance));
+  }, [selectedCustomerId, grandTotal, customerPaidVal, bookingAdvance]);
 
   const customerChangeReturn = useMemo(() => {
     if (!selectedCustomerId || paymentMode !== 'Cash') return 0;
-    return roundCurrency(Math.max(0, customerPaidVal - grandTotal));
-  }, [selectedCustomerId, paymentMode, customerPaidVal, grandTotal]);
+    return roundCurrency(Math.max(0, customerPaidVal - Math.max(0, grandTotal - bookingAdvance)));
+  }, [selectedCustomerId, paymentMode, customerPaidVal, grandTotal, bookingAdvance]);
+
+  // Recently used pages stay mounted but hidden, so shortcuts must only act while POS is on screen.
+  // The listener calls the latest checkout/hold handlers through refs, so F9 never submits stale
+  // amounts (e.g. a partial payment typed just before the key press).
+  const { activeTabId } = useTabs();
+  const pageActiveRef = useRef(true);
+  pageActiveRef.current = activeTabId === 'pos';
+  const checkoutRef = useRef<() => Promise<boolean>>(async () => false);
+  const holdOrderRef = useRef<() => void>(() => {});
 
   // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!pageActiveRef.current) return;
       // Dialogs own their keys; F8/F9 must not hold or submit the cart behind them.
       const target = e.target as HTMLElement | null;
       if (e.key !== 'Escape' && (quickModalOpen || newCustomerModalOpen || heldOrdersModalOpen || shortcutsModalOpen || completedSaleModalOpen || isShiftModalOpen || editingCartItem || target?.closest('[role="dialog"], [aria-modal="true"]'))) return;
@@ -599,11 +616,11 @@ const POS: React.FC = () => {
         setCustomerDropdownOpen(true);
       } else if (e.key === 'F8') {
         e.preventDefault();
-        handleHoldOrder();
+        holdOrderRef.current();
       } else if (e.key === 'F9') {
         e.preventDefault();
-        if (!isSubmittingRef.current && !isSubmitting && cart.length > 0) {
-          handleCheckout();
+        if (!isSubmittingRef.current) {
+          void checkoutRef.current();
         }
       } else if (e.key === 'Escape') {
         if (customerDropdownOpen) {
@@ -1077,7 +1094,25 @@ const POS: React.FC = () => {
       showToast("Business Day has been closed & locked! Reopen day or contact Owner to punch bills.", "error");
       return false;
     }
-    
+
+    const discountInput = parseFloat(discountValue) || 0;
+    if (discountInput < 0 || (discountType === 'percent' && discountInput > 100) || discountAmount > subtotal) {
+      showToast('Discount bill ki raqam se zyada nahi ho sakta.', 'warning');
+      return false;
+    }
+
+    // A walk-in has no khata, so a short cash payment would leave the unpaid part recorded nowhere.
+    if (!selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal) {
+      showToast(`${formatCurrency(roundCurrency(grandTotal - cashGiven))} kam hain. Poori raqam lein ya customer select karein taake baqi khaate mein jaye.`, 'warning');
+      return false;
+    }
+
+    // Only cash can be over-tendered (the excess is change). Online/credit money above the bill has nowhere to go.
+    if (selectedCustomerId && paymentMode !== 'Cash' && customerPaidAmount !== '' && (parseFloat(customerPaidAmount) || 0) > roundCurrency(grandTotal - bookingAdvance)) {
+      showToast('Received amount bill ki baqi raqam se zyada hai. Zyada raqam customer payment (khata) mein alag se lein.', 'warning');
+      return false;
+    }
+
     isSubmittingRef.current = true;
     setIsSubmitting(true);
 
@@ -1085,13 +1120,16 @@ const POS: React.FC = () => {
     const customerName = customer ? customer.name : 'Walk-in Customer';
     let invoiceNo = `INV-${Date.now().toString().slice(-5)}`;
 
-    const actualPaid = roundCurrency(
+    const advancePaidOnBooking = booking ? Number(booking.advance_paid || 0) : 0;
+    const billBalance = roundCurrency(Math.max(0, grandTotal - advancePaidOnBooking));
+    // Kept on the bill: never more than what is still owed on it. Extra cash is change, not revenue.
+    const actualPaid = roundCurrency(Math.min(billBalance,
       selectedCustomerId
         ? (paymentMode === 'Credit'
             ? (customerPaidAmount !== '' ? Math.max(0, parseFloat(customerPaidAmount) || 0) : 0)
-            : (customerPaidAmount !== '' ? Math.max(0, parseFloat(customerPaidAmount) || 0) : grandTotal))
-        : (paymentMode === 'Cash' && cashGiven > 0 ? Math.min(cashGiven, grandTotal) : grandTotal)
-    );
+            : (customerPaidAmount !== '' ? Math.max(0, parseFloat(customerPaidAmount) || 0) : billBalance))
+        : billBalance
+    ));
 
     // Enforce 'Credit' mode when customer is selected and zero cash/online payment received
     let effectivePaymentMode: 'Cash' | 'Online' | 'Credit' = paymentMode as any;
@@ -1099,12 +1137,12 @@ const POS: React.FC = () => {
       effectivePaymentMode = 'Credit';
     }
 
-    const dueAmount = roundCurrency(customer ? Math.max(0, grandTotal - actualPaid) : 0);
+    const dueAmount = roundCurrency(customer ? Math.max(0, billBalance - actualPaid) : 0);
     const finalChangeReturn = roundCurrency(
       effectivePaymentMode === 'Cash'
         ? (selectedCustomerId
-            ? (customerPaidAmount !== '' && parseFloat(customerPaidAmount) > grandTotal ? parseFloat(customerPaidAmount) - grandTotal : 0)
-            : (cashGiven > grandTotal ? cashGiven - grandTotal : 0))
+            ? (customerPaidAmount !== '' && parseFloat(customerPaidAmount) > billBalance ? parseFloat(customerPaidAmount) - billBalance : 0)
+            : (cashGiven > billBalance ? cashGiven - billBalance : 0))
         : 0
     );
 
@@ -1115,14 +1153,14 @@ const POS: React.FC = () => {
           ? (settings.financial?.defaultDigitalAccountId || accounts.find(account => account.type === 'Bank' || account.type === 'Wallet')?.id)
           : (activeShiftSession.account_id || activeShiftSession.drawer_id || settings.financial?.defaultCashAccountId);
         bookingSale = await checkoutCustomerOrder(booking, {
-          payment_mode: effectivePaymentMode, paid_amount: actualPaid, account_id: accountId || null,
+          payment_mode: effectivePaymentMode, paid_amount: actualPaid, advance_paid: advancePaidOnBooking, account_id: accountId || null,
           shift_session_id: activeShiftSession.id, cash_given: actualPaid + finalChangeReturn, change_return: finalChangeReturn
         });
         invoiceNo = bookingSale.bill_number;
         // The booking RPC committed sale, stock, cash and khata together. Never queue it again.
         void retryLoading().catch(() => {});
       }
-      const ok = bookingSale ? true : await addSale(
+      const savedBillNumber = bookingSale ? bookingSale.bill_number : await addSale(
         cart,
         customer ? { id: customer.id, name: customer.name, phone: customer.phone, cashGiven: actualPaid + finalChangeReturn, changeReturn: finalChangeReturn } : { name: 'Walk-in Customer', cashGiven: actualPaid + finalChangeReturn, changeReturn: finalChangeReturn },
         subtotal,
@@ -1132,7 +1170,8 @@ const POS: React.FC = () => {
         actualPaid
       );
 
-      if (!ok) return false;
+      if (!savedBillNumber) return false;
+      invoiceNo = savedBillNumber;
 
       const completedRecord: LastCompletedSale = {
         invoiceNo,
@@ -1146,7 +1185,7 @@ const POS: React.FC = () => {
         grandTotal,
         paidAmount: actualPaid,
         dueAmount,
-        paymentMode,
+        paymentMode: effectivePaymentMode,
         cashGiven: actualPaid + finalChangeReturn,
         changeReturn: finalChangeReturn
       };
@@ -1161,8 +1200,11 @@ const POS: React.FC = () => {
         completedRecord.subtotal = Number(bookingSale.subtotal);
         completedRecord.discountAmount = Number(bookingSale.discount);
         completedRecord.grandTotal = Number(bookingSale.total);
-        completedRecord.paidAmount = Number(bookingSale.details?.paid_amount || 0);
-        completedRecord.dueAmount = Number(bookingSale.details?.due_amount || 0);
+        // Receipt view: advance + counter money is what the customer has paid against this bill.
+        const counterPaid = Number(bookingSale.details?.counter_paid ?? bookingSale.details?.paid_amount ?? 0);
+        const advancePaid = Number(bookingSale.details?.advance_paid || 0);
+        completedRecord.paidAmount = roundCurrency(counterPaid + advancePaid);
+        completedRecord.dueAmount = roundCurrency(Math.max(0, Number(bookingSale.total || 0) - counterPaid - advancePaid));
         completedRecord.paymentMode = bookingSale.payment_mode;
         completedRecord.cashGiven = Number(bookingSale.details?.cash_given || 0);
         completedRecord.changeReturn = Number(bookingSale.details?.change_return || 0);
@@ -1173,9 +1215,9 @@ const POS: React.FC = () => {
       setCompletedSaleModalOpen(true);
       
       if (dueAmount > 0) {
-        showToast(`Sale completed! Rs ${actualPaid.toLocaleString()} paid, Rs ${dueAmount.toLocaleString()} added to ${customerName}'s ledger`, 'success');
+        showToast(`Sale completed! ${formatCurrency(actualPaid)} paid, ${formatCurrency(dueAmount)} added to ${customerName}'s ledger`, 'success');
       } else {
-        showToast(`Sale completed! Rs ${grandTotal.toLocaleString()}`, 'success');
+        showToast(`Sale completed! ${formatCurrency(grandTotal)}`, 'success');
       }
 
       setCart([]); 
@@ -1196,6 +1238,8 @@ const POS: React.FC = () => {
       }, 350);
     }
   };
+  checkoutRef.current = handleCheckout;
+  holdOrderRef.current = handleHoldOrder;
 
   // Quick Open Receipt / Reprint for any completed or recent transaction
   const handleOpenSaleReceipt = (sale: any) => {
@@ -1302,7 +1346,7 @@ const POS: React.FC = () => {
   if (bookingId) return <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 text-slate-900 dark:text-slate-100 sm:p-5">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-black"><ClipboardCheck size={20} className="text-lime-600" />Customer Order Billing</h2><p className="mt-1 text-xs text-slate-500">{booking?.order_number || 'Loading booking'} · Products and prices are saved with the order.</p></div><button type="button" disabled={isSubmitting} onClick={() => { setCompletedSaleModalOpen(false); navigate('/customer-orders'); }} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900"><ArrowLeft size={16} />Customer Orders</button></div>
     {bookingLoading ? <div role="status" className="flex items-center justify-center gap-2 p-10 text-sm text-slate-500"><Loader2 size={20} className="animate-spin" />Loading order…</div> : bookingError ? <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"><p className="flex items-center gap-2"><AlertCircle size={18} />{bookingError}</p><button type="button" onClick={() => setBookingReload(value => value + 1)} className="mt-4 font-bold underline">Reload order</button></div> : booking && <>
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><h3 className="font-bold">{booking.customer_name}</h3><p className="mt-1 text-xs text-slate-500">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>{booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-slate-500">{booking.address}</p>}{booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{booking.notes}</p>}{Number(booking.advance_paid || 0) > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs dark:border-emerald-900/60 dark:bg-emerald-950/40"><div className="flex items-center justify-between font-bold text-emerald-800 dark:text-emerald-300"><span className="flex items-center gap-1.5"><Banknote size={15} /> Advance Paid on Booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span><span className="font-mono text-sm font-black">Rs {Number(booking.advance_paid).toLocaleString()}</span></div><div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300"><span>Remaining Balance to Collect:</span><span className="font-mono font-bold text-amber-700 dark:text-amber-400">Rs {Math.max(0, Number(booking.total) - Number(booking.advance_paid)).toLocaleString()}</span></div></div>}<div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{booking.items.map((line, index) => <div key={index} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p><p className="mt-1 text-xs text-slate-500">{line.qty} {line.unit} × Rs {line.price.toLocaleString()}</p></div><span className="text-sm font-bold">Rs {roundCurrency(line.qty * line.price).toLocaleString()}</span></div>)}</div></div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><h3 className="font-bold">{booking.customer_name}</h3><p className="mt-1 text-xs text-slate-500">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>{booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-slate-500">{booking.address}</p>}{booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{booking.notes}</p>}{Number(booking.advance_paid || 0) > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs dark:border-emerald-900/60 dark:bg-emerald-950/40"><div className="flex items-center justify-between font-bold text-emerald-800 dark:text-emerald-300"><span className="flex items-center gap-1.5"><Banknote size={15} /> Advance Paid on Booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span><span className="font-mono text-sm font-black">{formatCurrency(Number(booking.advance_paid))}</span></div><div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300"><span>Remaining Balance to Collect:</span><span className="font-mono font-bold text-amber-700 dark:text-amber-400">{formatCurrency(Math.max(0, Number(booking.total) - Number(booking.advance_paid)))}</span></div></div>}<div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{booking.items.map((line, index) => <div key={index} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p><p className="mt-1 text-xs text-slate-500">{line.qty} {line.unit} × {formatCurrency(line.price)}</p></div><span className="text-sm font-bold">{formatCurrency(roundCurrency(line.qty * line.price))}</span></div>)}</div></div>
       {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} lockDiscount /></div>}
     </>}
     <PosReceiptModal open={completedSaleModalOpen} onClose={() => setCompletedSaleModalOpen(false)} lastCompletedSale={lastCompletedSale} settings={settings} />
@@ -1432,7 +1476,7 @@ const POS: React.FC = () => {
               </div>
             </div>
             <div className="text-right">
-              <span className="text-xs font-mono font-black block">Rs {grandTotal.toLocaleString()}</span>
+              <span className="text-xs font-mono font-black block">{formatCurrency(grandTotal)}</span>
               <span className="text-[10px] text-lime-100 uppercase tracking-wider font-bold">Checkout &rarr;</span>
             </div>
           </button>

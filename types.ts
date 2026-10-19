@@ -354,6 +354,8 @@ export interface CustomerOrder {
   discount: number;
   total: number;
   advance_paid?: number;
+  /** Part of advance_paid already posted to the customer khata and an account (set by the server). */
+  advance_posted?: number;
   payment_mode?: CustomerOrderPaymentMode;
   payment_status?: CustomerOrderPaymentStatus;
   payment_notes?: string;
@@ -441,6 +443,7 @@ export interface ShiftSession {
   start_time: string;
   end_time?: string;
   business_day_id?: string;
+  business_date?: string; // YYYY-MM-DD (Pakistan business day the shift belongs to)
   drawer_id?: string;
   drawer_name?: string;
   opening_source?: 'Head Float' | 'Drawer Handover' | 'Carry Forward' | 'Manual Adjustment' | string;

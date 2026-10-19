@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { ExpenseEntry, ExpenseVendor, ExpenseVendorTransaction } from '../../types';
 import { LedgerRow, KhataDateRangeType, VendorPaymentLogRow, ExpenseDateFilterMode } from './ExpenseTypes';
+import { formatCurrency } from '../../lib/formatters';
 
 interface ExpenseVendorsTabProps {
   expenseVendors: ExpenseVendor[];
@@ -106,12 +107,12 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
 
   // State for All Payments Log view
   const [paymentsDateMode, setPaymentsDateMode] = useState<ExpenseDateFilterMode>('this_month');
-  const [paymentsSingleDate, setPaymentsSingleDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [paymentsSingleDate, setPaymentsSingleDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [paymentsStartDate, setPaymentsStartDate] = useState<string>(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   });
-  const [paymentsEndDate, setPaymentsEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [paymentsEndDate, setPaymentsEndDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [paymentsActionFilter, setPaymentsActionFilter] = useState<'all' | 'Payment' | 'Refund' | 'Bill'>('all');
   const [paymentsVendorFilter, setPaymentsVendorFilter] = useState<string>('All');
   const [paymentsSearchTerm, setPaymentsSearchTerm] = useState<string>('');
@@ -219,18 +220,20 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
 
   // Filtered Payments for the All Payments Register
   const filteredPaymentLogs = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Filter edges and row dates are all compared on the Pakistan business day.
+    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+    const todayStr = pkDay(new Date());
     const yday = new Date();
     yday.setDate(yday.getDate() - 1);
-    const ydayStr = yday.toISOString().split('T')[0];
+    const ydayStr = pkDay(yday);
 
     const d7 = new Date();
     d7.setDate(d7.getDate() - 6);
-    const d7Str = d7.toISOString().split('T')[0];
+    const d7Str = pkDay(d7);
 
     const d30 = new Date();
     d30.setDate(d30.getDate() - 29);
-    const d30Str = d30.toISOString().split('T')[0];
+    const d30Str = pkDay(d30);
 
     const now = new Date();
     const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -267,7 +270,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
 
       // 5. Date Filter
       const rawDate = row.date || '';
-      const rDate = rawDate.includes('T') ? rawDate.split('T')[0] : rawDate.slice(0, 10);
+      const rDate = rawDate.includes('T') ? pkDay(new Date(rawDate)) : rawDate.slice(0, 10);
 
       if (paymentsDateMode === 'all') return true;
       if (paymentsDateMode === 'today') return rDate === todayStr;
@@ -404,7 +407,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <div className="min-w-0">
                 <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Payment Di</span>
                 <span className="text-base sm:text-xl font-black font-mono text-emerald-600 dark:text-emerald-400 block mt-0.5 truncate">
-                  Rs {paymentsStats.totalPaid.toLocaleString()}
+                  {formatCurrency(paymentsStats.totalPaid)}
                 </span>
               </div>
             </div>
@@ -416,7 +419,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <div className="min-w-0">
                 <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Payment Li</span>
                 <span className="text-base sm:text-xl font-black font-mono text-blue-600 dark:text-blue-400 block mt-0.5 truncate">
-                  Rs {paymentsStats.totalReceived.toLocaleString()}
+                  {formatCurrency(paymentsStats.totalReceived)}
                 </span>
               </div>
             </div>
@@ -428,7 +431,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <div className="min-w-0">
                 <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Net Outflow</span>
                 <span className="text-base sm:text-xl font-black font-mono text-slate-900 dark:text-white block mt-0.5 truncate">
-                  Rs {paymentsStats.netPayout.toLocaleString()}
+                  {formatCurrency(paymentsStats.netPayout)}
                 </span>
               </div>
             </div>
@@ -440,7 +443,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <div className="min-w-0">
                 <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Total Billed</span>
                 <span className="text-base sm:text-xl font-black font-mono text-rose-600 dark:text-rose-400 block mt-0.5 truncate">
-                  Rs {paymentsStats.totalBilled.toLocaleString()}
+                  {formatCurrency(paymentsStats.totalBilled)}
                 </span>
               </div>
             </div>
@@ -742,7 +745,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                                 ? 'text-blue-600 dark:text-blue-400'
                                 : 'text-rose-600 dark:text-rose-400'
                             }`}>
-                              {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}Rs {row.amount.toLocaleString()}
+                              {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}{formatCurrency(row.amount)}
                             </span>
                           </td>
 
@@ -819,7 +822,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                             ? 'text-blue-600 dark:text-blue-400'
                             : 'text-rose-600 dark:text-rose-400'
                         }`}>
-                          {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}Rs {row.amount.toLocaleString()}
+                          {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}{formatCurrency(row.amount)}
                         </span>
                         <span className={`mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                           isPaymentDi
@@ -1000,7 +1003,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                       </div>
                       <div className="text-right">
                         <span className={`text-xs font-bold font-mono ${hasDues ? 'text-rose-600 dark:text-rose-400' : hasAdvance ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                          Rs {Math.abs(bal).toLocaleString()}
+                          {formatCurrency(Math.abs(bal))}
                         </span>
                       </div>
                     </div>
@@ -1111,14 +1114,14 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                     <div className="bg-slate-50 dark:bg-slate-800/40 p-2 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 min-w-0">
                       <span className="text-[9px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider block leading-tight">Billed</span>
                       <span className="text-xs sm:text-xl font-bold font-mono text-slate-900 dark:text-slate-100 block mt-1 truncate">
-                        Rs {(selectedVendor.total_billed || 0).toLocaleString()}
+                        {formatCurrency((selectedVendor.total_billed || 0))}
                       </span>
                     </div>
 
                     <div className="bg-emerald-50/60 dark:bg-emerald-950/20 p-2 sm:p-4 rounded-xl sm:rounded-2xl border border-emerald-200 dark:border-emerald-800/60 min-w-0">
                       <span className="text-[9px] sm:text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold uppercase tracking-wider block leading-tight">Paid</span>
                       <span className="text-xs sm:text-xl font-bold font-mono text-emerald-700 dark:text-emerald-400 block mt-1 truncate">
-                        Rs {(selectedVendor.total_paid || 0).toLocaleString()}
+                        {formatCurrency((selectedVendor.total_paid || 0))}
                       </span>
                     </div>
 
@@ -1139,7 +1142,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                           ? 'text-blue-700 dark:text-blue-400'
                           : 'text-slate-800 dark:text-slate-200'
                       }`}>
-                        Rs {Math.abs(selectedVendor.pending_balance || 0).toLocaleString()}
+                        {formatCurrency(Math.abs(selectedVendor.pending_balance || 0))}
                       </span>
                     </div>
                   </div>
@@ -1249,15 +1252,15 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                                 {row.modeAccount && <span className="text-[10px] text-slate-400 font-normal">Account: {row.modeAccount}</span>}
                               </td>
                               <td className="px-4 py-2.5 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                                {row.debit > 0 ? `Rs ${row.debit.toLocaleString()}` : '—'}
+                                {row.debit > 0 ? `${formatCurrency(row.debit)}` : '—'}
                               </td>
                               <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                                {row.credit > 0 ? `Rs ${row.credit.toLocaleString()}` : '—'}
+                                {row.credit > 0 ? `${formatCurrency(row.credit)}` : '—'}
                               </td>
                               <td className={`px-4 py-2.5 text-right font-mono font-black ${
                                 row.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : row.runningBalance < 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-slate-200'
                               }`}>
-                                Rs {Math.abs(row.runningBalance).toLocaleString()}
+                                {formatCurrency(Math.abs(row.runningBalance))}
                               </td>
                               {canDelete && (
                                 <td className="px-3 py-2.5 text-center whitespace-nowrap">
@@ -1326,13 +1329,13 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                             <div className="min-w-0">
                               <span className="block text-[9px] font-bold uppercase text-slate-400">Bill</span>
                               <span className="block text-[11px] font-mono font-bold text-rose-600 dark:text-rose-400 truncate">
-                                {row.debit > 0 ? `Rs ${row.debit.toLocaleString()}` : '—'}
+                                {row.debit > 0 ? `${formatCurrency(row.debit)}` : '—'}
                               </span>
                             </div>
                             <div className="min-w-0">
                               <span className="block text-[9px] font-bold uppercase text-slate-400">Paid</span>
                               <span className="block text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate">
-                                {row.credit > 0 ? `Rs ${row.credit.toLocaleString()}` : '—'}
+                                {row.credit > 0 ? `${formatCurrency(row.credit)}` : '—'}
                               </span>
                             </div>
                             <div className="min-w-0">
@@ -1340,7 +1343,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                               <span className={`block text-[11px] font-mono font-black truncate ${
                                 row.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : row.runningBalance < 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-slate-200'
                               }`}>
-                                Rs {Math.abs(row.runningBalance).toLocaleString()}
+                                {formatCurrency(Math.abs(row.runningBalance))}
                               </span>
                             </div>
                           </div>

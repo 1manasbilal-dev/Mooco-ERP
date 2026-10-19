@@ -3,6 +3,7 @@ import { useDairy } from '../../context/DairyContext';
 import { useToast } from '../../context/ToastContext';
 import { UnitDefinition } from '../../types';
 import { 
+  describeUnitRole,
   getAllAvailableUnits, 
   getUnitFactorDescription 
 } from '../../lib/unitConversion';
@@ -138,6 +139,12 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
     }
 
     if (editingUnitId) {
+      const original = allUnits.find(u => u.id === editingUnitId);
+      const inUse = Boolean(original && (usageMap[original.symbol.toLowerCase()] || 0) > 0);
+      if (original && inUse && (symbol !== original.symbol || formData.type !== (original.type || 'Count') || factorNum !== Number(original.factor))) {
+        showToast(`"${original.symbol}" is used by products. Only its name and note can change.`, "warning");
+        return;
+      }
       const ok = await updateUnit(editingUnitId, {
         name,
         symbol,
@@ -184,6 +191,9 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
   if (!isOpen) return null;
 
   const baseSymbolForType = formData.type === 'Volume' ? 'L' : formData.type === 'Mass' ? 'kg' : 'pcs';
+  // Products store the unit by its symbol; renaming or resizing one in use would silently change their stock meaning.
+  const editingUnit = editingUnitId ? allUnits.find(u => u.id === editingUnitId) : undefined;
+  const editingInUse = Boolean(editingUnit && (usageMap[editingUnit.symbol.toLowerCase()] || 0) > 0);
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4">
@@ -220,7 +230,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Metric and traditional Pakistani dairy measurement standards with automated conversions.
+                Base and conversion units for weight, volume and count.
               </p>
             </div>
           </div>
@@ -279,6 +289,12 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
               {isFormOpen && !editingUnitId ? 'Close Form' : 'New Custom Unit'}
             </button>
           </div>
+
+          {/* Pack sizes live on the product, not here */}
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+            <Info size={13} className="shrink-0" />
+            Add product pack sizes (dozen, tray, cup) in that product's Units &amp; Packaging tab.
+          </p>
 
           {/* Clean Vector-Icon Tabs (Zero Emojis) */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none border-b border-slate-100 dark:border-slate-800">
@@ -368,6 +384,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                         type="text" 
                         required
                         value={formData.symbol}
+                        disabled={editingInUse}
                         onChange={e => setFormData({ ...formData, symbol: e.target.value })}
                         placeholder="e.g. maund, gal, ctn"
                         className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm font-mono font-bold text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-slate-900 dark:focus:ring-lime-500 shadow-2xs"
@@ -381,6 +398,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                       </label>
                       <select
                         value={formData.type}
+                        disabled={editingInUse}
                         onChange={e => setFormData({ ...formData, type: e.target.value as any })}
                         className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs sm:text-sm text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-slate-900 dark:focus:ring-lime-500 font-medium shadow-2xs"
                       >
@@ -404,6 +422,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                           min="0.0001"
                           required
                           value={formData.factor}
+                          disabled={editingInUse}
                           onChange={e => setFormData({ ...formData, factor: e.target.value })}
                           placeholder="e.g. 40, 24, 0.25"
                           className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl pl-3 pr-12 py-2 text-xs sm:text-sm font-mono font-bold text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-slate-900 dark:focus:ring-lime-500 shadow-2xs"
@@ -442,6 +461,10 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                       />
                     </div>
                   </div>
+
+                  {editingInUse && (
+                    <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5"><Lock size={12} />In use by products: symbol, type and size are locked.</p>
+                  )}
 
                   {/* Technical Formula Calculation Box */}
                   <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs">
@@ -492,6 +515,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                   const usageCount = usageMap[unit.symbol.toLowerCase()] || 0;
                   const isSystem = Boolean(unit.isSystem);
                   const formula = getUnitFactorDescription(unit);
+                  const unitRole = describeUnitRole(unit);
                   const typeIcon = unit.type === 'Volume' ? Droplet : unit.type === 'Mass' ? Scale : Boxes;
                   const IconComponent = typeIcon;
 
@@ -515,6 +539,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                           <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">
                             {unit.description || (isSystem ? 'Standard Built-in System Unit' : 'Custom Defined Business Unit')}
                           </p>
+                          <span title={unitRole.hint} className={`inline-block mt-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-md cursor-help ${unitRole.role === 'base' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : unitRole.role === 'convertible' ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>{unitRole.label}</span>
                         </div>
 
                         {/* Monospaced Symbol Badge */}
@@ -596,7 +621,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
         {/* Modal Footer */}
         <div className="px-5 py-3 sm:px-6 sm:py-3.5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex justify-between items-center shrink-0">
           <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-            Measurement definitions automatically sync across milk procurement, recipe batches, and point of sale.
+            Units used by products can't change symbol, type or size.
           </p>
           <button
             type="button"

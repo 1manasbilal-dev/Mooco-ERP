@@ -8,6 +8,7 @@ import {
 import { RichSelect } from '../RichSelect';
 import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../../types';
 import { CategoryStructure, ExpenseDateFilterMode } from './ExpenseTypes';
+import { formatCurrency } from '../../lib/formatters';
 
 const DATE_FILTER_OPTIONS: { value: ExpenseDateFilterMode; label: string }[] = [
   { value: 'this_month', label: 'This Month' },
@@ -273,9 +274,9 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                 type="button"
                 onClick={() => {
                   setDateFilterMode('this_month');
-                  setFilterSingleDate(new Date().toISOString().split('T')[0]);
-                  setFilterStartDate(new Date().toISOString().split('T')[0]);
-                  setFilterEndDate(new Date().toISOString().split('T')[0]);
+                  setFilterSingleDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
+                  setFilterStartDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
+                  setFilterEndDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
                   setFilterCategory('All');
                   setFilterVendor('All');
                   setFilterPaymentStatus('All');
@@ -428,9 +429,9 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                 type="button"
                 onClick={() => {
                   setDateFilterMode('this_month');
-                  setFilterSingleDate(new Date().toISOString().split('T')[0]);
-                  setFilterStartDate(new Date().toISOString().split('T')[0]);
-                  setFilterEndDate(new Date().toISOString().split('T')[0]);
+                  setFilterSingleDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
+                  setFilterStartDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
+                  setFilterEndDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
                   setFilterCategory('All');
                   setFilterVendor('All');
                   setFilterPaymentStatus('All');
@@ -471,7 +472,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                 value: v.id,
                 label: v.name,
                 subtext: v.service_type || 'Vendor',
-                badge: v.pending_balance && v.pending_balance > 0 ? `Rs ${v.pending_balance.toLocaleString()}` : undefined,
+                badge: v.pending_balance && v.pending_balance > 0 ? `${formatCurrency(v.pending_balance)}` : undefined,
                 badgeColor: (v.pending_balance && v.pending_balance > 0 ? 'red' : 'emerald') as any,
                 icon: <Users size={12} />
               }))
@@ -569,7 +570,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-black text-slate-900 dark:text-slate-100 text-xs whitespace-nowrap">
-                      Rs {exp.amount.toLocaleString()}
+                      {formatCurrency(exp.amount)}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex flex-col items-center">
@@ -582,14 +583,14 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/90 dark:border-amber-800 shadow-2xs">
                               <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Partial
                             </span>
-                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">Rs {remainingDue.toLocaleString()} Due</span>
+                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
                           </div>
                         ) : (
                           <div className="flex flex-col items-center gap-0.5">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200/90 dark:border-rose-800 shadow-2xs">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> Unpaid
                             </span>
-                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">Rs {remainingDue.toLocaleString()} Due</span>
+                            <span className="text-[10px] text-rose-600 dark:text-rose-400 font-bold">{formatCurrency(remainingDue)} Due</span>
                           </div>
                         )}
                       </div>
@@ -654,7 +655,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                   <p className="text-xs text-lime-700 dark:text-lime-400 font-medium">{exp.category}{exp.subcategory ? ` • ${exp.subcategory}` : ''}</p>
                 </div>
                 <div className="text-right">
-                  <span className="font-mono font-black text-sm text-slate-900 dark:text-slate-100 block">Rs {exp.amount.toLocaleString()}</span>
+                  <span className="font-mono font-black text-sm text-slate-900 dark:text-slate-100 block">{formatCurrency(exp.amount)}</span>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1 ${
                     exp.paymentStatus === 'Unpaid' 
                       ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300' 

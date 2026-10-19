@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getOperatorSession } from './operatorAuth';
 import { saleItemSnapshot } from './saleSnapshot';
 import { db, LocalOrder, LocalCustomer, LocalOutboxItem, OutboxActionType, generateUUID, SyncStatus, roundCurrency, roundQuantity } from './db';
 import { loadRead } from './loadRequest';
@@ -196,6 +197,13 @@ class SyncService {
 
   public async syncPending(): Promise<{ success: boolean; syncedOrders: number; syncedCustomers: number; syncedOutbox: number }> {
     if (this.isSyncing || !this.isOnline) {
+      await this.updateCounts();
+      return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
+    }
+
+    // Without an operator session the database refuses every write; leave the queue untouched
+    // (no retry counts, no dead-letters) until someone signs in.
+    if (!(await getOperatorSession())) {
       await this.updateCounts();
       return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
     }

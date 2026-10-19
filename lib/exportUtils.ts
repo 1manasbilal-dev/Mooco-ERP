@@ -20,7 +20,7 @@ export function exportToCSV(filename: string, headers: string[], rows: (string |
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `${filename.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`);
+  link.setAttribute('download', `${filename.replace(/\s+/g, '_')}_${new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

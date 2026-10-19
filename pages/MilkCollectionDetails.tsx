@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Moon, Search, Sun, X } from 'lucide-react';
 import { useDairy } from '../context/DairyContext';
 import { useTabs } from '../context/TabContext';
@@ -132,7 +132,10 @@ function settlementLabel(paid: number, due: number) {
 
 const MilkCollectionDetails: React.FC = () => {
   const { purchases, suppliers, settings } = useDairy();
-  const { openTab } = useTabs();
+  const { openTab, activeTabId } = useTabs();
+  // This page stays mounted while hidden; its '/' shortcut must only act while it is on screen.
+  const pageActiveRef = useRef(true);
+  pageActiveRef.current = activeTabId === 'purchase-details';
   const today = businessDate();
   const [period, setPeriod] = useState<Period>('today');
   const [customStart, setCustomStart] = useState(today);
@@ -253,7 +256,7 @@ const MilkCollectionDetails: React.FC = () => {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!pageActiveRef.current || event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
       event.preventDefault();

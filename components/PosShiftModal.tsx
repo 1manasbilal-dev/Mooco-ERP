@@ -45,6 +45,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     currentUser,
     currentRole,
     activeShiftSession,
+    shiftSessions,
     cashDrawers,
     cashHandovers,
     accounts,
@@ -81,6 +82,17 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     if (!activeAccount) return undefined;
     return cashHandovers.find(h => (h.drawer_id === activeAccount.id || (cashDrawers.find(d => d.id === h.drawer_id)?.account_id === activeAccount.id)) && h.status === 'Pending');
   }, [activeAccount, cashHandovers, cashDrawers]);
+
+  // Check if there is an active shift currently on this drawer from today
+  const currentBizDate = getBusinessDate();
+  const drawerActiveShift = useMemo(() => {
+    if (!activeAccount) return null;
+    return shiftSessions.find(s =>
+      (s.drawer_id === activeAccount.id || (cashDrawers.find(d => d.id === s.drawer_id)?.account_id === activeAccount.id)) &&
+      ['Active', 'Closing', 'Pending Acceptance'].includes(s.status) &&
+      (!s.business_date || s.business_date >= currentBizDate)
+    ) || null;
+  }, [activeAccount, shiftSessions, cashDrawers, currentBizDate]);
 
   // Opening cash amount: pending handover from previous cashier, or the live balance of the cash drawer account
   const defaultOpeningAmount = useMemo(() => {
@@ -243,7 +255,19 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
 
   const hasVariance = Math.abs(variance) >= 0.01;
 
-  if (!isOpen) return null;
+  // Escape key handler
+  useEffect(() => {
+    if (!isOpen || isClosingDenomOpen || Boolean(detailModalTab)) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isClosingDenomOpen, detailModalTab, onClose]);
 
   // --- Handlers ---
   const handleStartShift = async () => {
@@ -308,22 +332,11 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     }
   };
 
-  useEffect(() => {
-    if (!isOpen || isClosingDenomOpen || Boolean(detailModalTab)) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isClosingDenomOpen, detailModalTab, onClose]);
-
   const formattedStartTime = activeShiftSession?.started_at
     ? new Date(activeShiftSession.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : activeShiftSession?.start_time || '—';
+
+  if (!isOpen) return null;
 
   const modalContent = (
     <>
@@ -496,15 +509,29 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                       )}
                     </div>
 
+                    {drawerActiveShift && (
+                      <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-left mt-2">
+                        <div className="flex items-start gap-2.5">
+                          <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="font-bold text-xs">Drawer has an unclosed active shift</p>
+                            <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
+                              Started by <strong>{drawerActiveShift.user_name || 'Cashier'}</strong> ({drawerActiveShift.business_date || 'earlier session'}). A new shift cannot be started on this drawer until the active shift is closed.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Single 1-Click Action Button */}
                     <button
                       type="button"
-                      disabled={isStarting || !activeAccount}
+                      disabled={isStarting || !activeAccount || Boolean(drawerActiveShift)}
                       onClick={handleStartShift}
                       className="w-full inline-flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl bg-lime-500 hover:bg-lime-400 active:scale-[0.99] text-slate-950 font-black text-sm shadow-lg shadow-lime-500/25 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
                     >
                       <CheckCircle2 size={18} />
-                      <span>{isStarting ? 'Starting Shift...' : 'Start Shift'}</span>
+                      <span>{drawerActiveShift ? 'Close Active Shift First' : isStarting ? 'Starting Shift...' : 'Start Shift'}</span>
                     </button>
                   </>
                 )}
@@ -703,7 +730,8 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                   {/* Submit Button */}
                   <button
                     type="button"
-                    disabled={isClosing || effectiveCountedCash <= 0 || effectiveCountedCash < effectiveLeaveInDrawer || (hasVariance && !differenceReason.trim())}
+                    // A count of 0 is allowed once it is typed (an honest empty drawer); a blank field is not a count.
+                    disabled={isClosing || effectiveCountedCash < 0 || (closingDenomTotal <= 0 && countedCash.trim() === '') || effectiveCountedCash < effectiveLeaveInDrawer || (hasVariance && !differenceReason.trim())}
                     onClick={handleCloseShift}
                     className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-black text-sm shadow-md shadow-emerald-500/15 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
                   >

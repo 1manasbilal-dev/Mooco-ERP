@@ -8,12 +8,14 @@ import {
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
 import { roundCurrency, roundQuantity } from '../lib/db';
+import { isSpotSupplierPayment, materialCashPaid, purchaseCashPaid, salePaidAmount } from '../lib/moneyFlow';
 import type { CashDrawer } from '../types';
+import { formatCurrency } from '../lib/formatters';
 
 const DENOMINATIONS = [5000, 1000, 500, 100, 50, 20, 10, 5, 1];
 type Tab = 'head' | 'days' | 'audit' | 'drawers';
 
-const money = (value: number | undefined | null) => `Rs ${Number(value || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 })}`;
+const money = (value: number | undefined | null) => formatCurrency(value);
 
 const initials = (name?: string | null) =>
   (name || '?').trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() || '').join('') || '?';
@@ -34,7 +36,7 @@ const DenominationChips: React.FC<{ value: Record<string | number, number> | und
     <div className="flex flex-wrap gap-1.5">
       {entries.map(([denomination, count]) => (
         <span key={denomination} className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">
-          {count} × Rs {denomination.toLocaleString()}
+          {count} × {formatCurrency(denomination)}
         </span>
       ))}
     </div>
@@ -142,7 +144,7 @@ const DenominationDialog: React.FC<{
                 >
                   <div className="flex items-center justify-between text-xs font-bold mb-1.5">
                     <span className="text-slate-700 dark:text-slate-300 font-mono">
-                      Rs {denomination.toLocaleString()}
+                      {formatCurrency(denomination)}
                     </span>
                     {qty > 0 && (
                       <span className="text-[10px] font-bold text-lime-700 dark:text-lime-300 font-mono">
@@ -267,7 +269,7 @@ const CashControl: React.FC = () => {
     Boolean(currentRole?.permissions?.includes('cash_control' as any)) ||
     Boolean((currentUser?.permissions || []).includes('cash_control'));
 
-  const todayDate = getBusinessDate ? getBusinessDate() : new Date().toISOString().split('T')[0];
+  const todayDate = getBusinessDate ? getBusinessDate() : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
   const isTodayLocked = Boolean(isDayLocked && isDayLocked(todayDate));
 
   // Real Cash Accounts from Bank & Cash acting as Drawers / Tills. Only Cash
@@ -1029,7 +1031,7 @@ const CashControl: React.FC = () => {
                     <option value="">-- Source account select karein --</option>
                     {addCashSourceOptions.map(option => (
                       <option key={option.id} value={option.id}>
-                        {option.name} ({option.type} · Rs {Number(option.balance || 0).toLocaleString()})
+                        {option.name} ({option.type} · {formatCurrency(Number(option.balance || 0))})
                       </option>
                     ))}
                   </select>
@@ -1039,8 +1041,8 @@ const CashControl: React.FC = () => {
                     return (
                       <p className={`text-[11px] font-bold mt-1.5 ${source && Number(source.balance || 0) < amount ? 'text-rose-500' : 'text-slate-500 dark:text-slate-400'}`}>
                         {source && Number(source.balance || 0) < amount
-                          ? `Source mein sirf Rs ${Number(source.balance || 0).toLocaleString()} hai — Rs ${amount.toLocaleString()} transfer nahi ho sakti.`
-                          : `${source?.name} -Rs ${amount.toLocaleString()} → Drawer +Rs ${amount.toLocaleString()} (dono taraf ledger entry).`}
+                          ? `Source mein sirf ${formatCurrency(Number(source.balance || 0))} hai — ${formatCurrency(amount)} transfer nahi ho sakti.`
+                          : `${source?.name} -${formatCurrency(amount)} → Drawer +${formatCurrency(amount)} (dono taraf ledger entry).`}
                       </p>
                     );
                   })()}
@@ -1170,34 +1172,47 @@ const CashControl: React.FC = () => {
         const { dayShifts, summary } = summarizeBusinessDay(day.id);
         // --- Cash closing data (Candela-style EOD): sources in, outflows, expected vs counted
         const bdDate = day.business_date;
-        const dayCashSales = sales.filter(s => s.business_day_id === day.id && s.status !== 'Returned' && String(s.payment_mode || '').toLowerCase() === 'cash');
-        const cashSalesTotal = roundCurrency(dayCashSales.reduce((sum, s) => sum + Math.min(Number(s.paid_amount ?? s.total ?? 0), Number(s.total || 0)), 0));
-        const dayLedger = customerTransactions.filter(t => t.type === 'Payment' && String((t as any).mode || '').toLowerCase().includes('cash') && Number(t.amount || 0) > 0 && ((t as any).business_day_id === day.id || String(t.date || '').slice(0, 10) === bdDate));
+        // Every date below is compared on the Pakistan business day; stored timestamps are UTC.
+        const onBusinessDay = (value?: string | null) => {
+          if (!value) return false;
+          const text = String(value);
+          return (/^\d{4}-\d{2}-\d{2}$/.test(text) ? text : new Date(text).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })) === bdDate;
+        };
+        const allDaySales = sales.filter(s => s.business_day_id === day.id);
+        // Refund events point at their bill as `${saleId}_xxxx`; sale ids contain underscores themselves.
+        const refundEventsForSale = (saleId: string) => shiftCashEvents.filter(ev =>
+          ev.business_day_id === day.id && ev.direction === 'Out' && String(ev.event_type || '').toLowerCase().includes('refund') &&
+          (String(ev.source_id || '') === saleId || String(ev.source_id || '').startsWith(`${saleId}_`)));
+        // Drawer cash from the day's bills: any bill that is not online (a credit bill's cash down-payment
+        // counts), net of the cash refunded for it the same day.
+        const dayCashSales = allDaySales.filter(s => String(s.payment_mode || '').toLowerCase() !== 'online' && salePaidAmount(s) > 0);
+        const cashSalesTotal = roundCurrency(dayCashSales.reduce((sum, s) => {
+          const sameDayRefund = refundEventsForSale(s.id).reduce((total, ev) => total + Number(ev.amount || 0), 0);
+          return sum + Math.max(0, salePaidAmount(s) - sameDayRefund);
+        }, 0));
+        const dayLedger = customerTransactions.filter(t => t.type === 'Payment' && String((t as any).mode || '').toLowerCase().includes('cash') && Number(t.amount || 0) > 0 && ((t as any).business_day_id === day.id || onBusinessDay(t.date)));
         const ledgerTotal = roundCurrency(dayLedger.reduce((sum, t) => sum + Number(t.amount || 0), 0));
-        const dayDelivery = dailySupplyEntries.filter(e => String(e.payment_mode || '').toLowerCase().includes('cash') && Number(e.payment_received || 0) > 0 && ((e as any).business_day_id === day.id || String(e.date || '').slice(0, 10) === bdDate));
+        const dayDelivery = dailySupplyEntries.filter(e => String(e.payment_mode || '').toLowerCase().includes('cash') && Number(e.payment_received || 0) > 0 && ((e as any).business_day_id === day.id || onBusinessDay(e.date)));
         const deliveryTotal = roundCurrency(dayDelivery.reduce((sum, e) => sum + Number(e.payment_received || 0), 0));
-        const dayExpenses = expenses.filter(e => String(e.paymentMode || '').toLowerCase().includes('cash') && Number(e.paidAmount || 0) > 0 && String(e.date || '').slice(0, 10) === bdDate);
+        const dayExpenses = expenses.filter(e => String(e.paymentMode || '').toLowerCase().includes('cash') && Number(e.paidAmount || 0) > 0 && onBusinessDay(e.date));
         const expensesTotal = roundCurrency(dayExpenses.reduce((sum, e) => sum + Number(e.paidAmount || 0), 0));
-        
+
         // Milk purchases paid in cash
-        const dayPurchases = purchases.filter(p => String(p.payment_mode || (p as any).details?.payment_mode || '').toLowerCase().includes('cash') && Number(p.paid_amount || 0) > 0 && String(p.date || '').slice(0, 10) === bdDate);
-        const purchasesTotal = roundCurrency(dayPurchases.reduce((sum, p) => sum + Number(p.paid_amount || 0), 0));
+        const dayPurchases = purchases.filter(p => String(p.payment_mode || (p as any).details?.payment_mode || '').toLowerCase().includes('cash') && purchaseCashPaid(p) > 0 && onBusinessDay(p.date));
+        const purchasesTotal = roundCurrency(dayPurchases.reduce((sum, p) => sum + purchaseCashPaid(p), 0));
 
-        // Material purchases paid in cash
-        const dayMaterialPurchases = (materialPurchases || []).filter(mp => String(mp.payment_mode || (mp as any).details?.payment_mode || '').toLowerCase().includes('cash') && Number((mp as any).paid_amount || mp.total_amount || 0) > 0 && String(mp.date || '').slice(0, 10) === bdDate);
-        const materialPurchasesTotal = roundCurrency(dayMaterialPurchases.reduce((sum, mp: any) => sum + Number(mp.paid_amount || mp.total_amount || 0), 0));
+        // Material purchases paid in cash (a credit line's total is not cash)
+        const dayMaterialPurchases = (materialPurchases || []).filter(mp => String(mp.payment_mode || (mp as any).details?.payment_mode || '').toLowerCase().includes('cash') && materialCashPaid(mp) > 0 && onBusinessDay(mp.date));
+        const materialPurchasesTotal = roundCurrency(dayMaterialPurchases.reduce((sum, mp: any) => sum + materialCashPaid(mp), 0));
 
-        // Supplier Khata cash payments (spot payments not linked to purchases)
-        const daySupplierCashTx = (supplierTransactions || []).filter(stx => stx.type === 'Payment' && String((stx as any).mode || '').toLowerCase().includes('cash') && Number(stx.amount || 0) > 0 && String(stx.date || '').slice(0, 10) === bdDate && !(stx as any).purchase_id);
+        // Supplier khata cash payments; spot payments are already in the purchases above, waivers moved no cash
+        const daySupplierCashTx = (supplierTransactions || []).filter(stx => stx.type === 'Payment' && String((stx as any).mode || '').toLowerCase().includes('cash') && Number(stx.amount || 0) > 0 && onBusinessDay(stx.date) && !isSpotSupplierPayment(stx) && !(stx as any).details?.waiver);
         const supplierCashTxTotal = roundCurrency(daySupplierCashTx.reduce((sum, stx) => sum + Number(stx.amount || 0), 0));
 
-        const allDaySales = sales.filter(s => s.business_day_id === day.id);
-        const daySaleIds = new Set(allDaySales.map(s => s.id));
         const dayPriorRefunds = shiftCashEvents.filter(ev => {
           if (ev.business_day_id !== day.id || ev.direction !== 'Out' || !String(ev.event_type || '').toLowerCase().includes('refund')) return false;
-          const saleId = ev.source_id?.split('_')[0];
-          if (saleId && daySaleIds.has(saleId)) return false;
-          return true;
+          const source = String(ev.source_id || '');
+          return !allDaySales.some(s => source === s.id || source.startsWith(`${s.id}_`));
         });
         const refundsTotal = roundCurrency(dayPriorRefunds.reduce((sum, ev) => sum + Number(ev.amount || 0), 0));
         const dayRemits = cashRemittances.filter(r => r.business_day_id === day.id && r.status === 'Accepted');

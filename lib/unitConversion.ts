@@ -505,3 +505,39 @@ export const getVariantStockPresets = (baseUnit: string = 'kg'): VariantStockPre
     { label: '100 Units', qty: 100, hint: '100 items' }
   ];
 };
+
+/**
+ * What a unit actually does in this app, in plain words for the owner.
+ * - base: what stock, cost and price are counted in (kg, L, pcs)
+ * - convertible: a weight/volume that converts exactly (g → kg, ml → L, pao, maund); used in recipes
+ * - fixed-pack: a count with a fixed size (dozen = 12). Real pack sizes differ per product,
+ *   so they belong in that product's Units & Packaging tab, not here.
+ * - label: a count name with no size of its own (pack, box, bottle)
+ */
+export const describeUnitRole = (unit: UnitDefinition): { role: 'base' | 'convertible' | 'fixed-pack' | 'label'; label: string; hint: string } => {
+  const factor = Number(unit.factor) || 1;
+  if (unit.isBase) {
+    return { role: 'base', label: 'Base', hint: 'Stock, cost and price are counted in this unit.' };
+  }
+  if (unit.type === 'Mass' || unit.type === 'Volume') {
+    return { role: 'convertible', label: 'Converts', hint: 'Converted to the base unit in recipes.' };
+  }
+  if (factor !== 1) {
+    return { role: 'fixed-pack', label: 'Fixed size', hint: "Pack sizes vary by product. Add dozens, trays and cartons in the product's Units & Packaging tab." };
+  }
+  return { role: 'label', label: 'Name only', hint: "Has no size of its own. Add packs in the product's Units & Packaging tab." };
+};
+
+/** A base unit should be the smallest thing you count or weigh. Dozen/carton as a base hides loose pieces. */
+export const baseUnitWarning = (symbol: string, customUnits: UnitDefinition[] = []): string => {
+  const unit = findUnitDefinition(symbol, customUnits);
+  if (!unit) return '';
+  const role = describeUnitRole(unit);
+  if (role.role === 'fixed-pack') {
+    return `Use pcs as the base unit and add ${unit.name} under Units & Packaging.`;
+  }
+  if (unit.type !== 'Count' && !unit.isBase && Number(unit.factor) > 1) {
+    return `Use ${unit.type === 'Mass' ? 'kg' : 'L'} as the base unit; ${unit.symbol} is too large to count loose stock.`;
+  }
+  return '';
+};

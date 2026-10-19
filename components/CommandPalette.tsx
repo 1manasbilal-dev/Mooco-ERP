@@ -7,6 +7,7 @@ import {
   Archive, Users, Truck, Receipt, Wallet, Landmark, FileText, Settings,
   Store, History, ClipboardCheck, Moon, Sun, Plus, ArrowRight, CornerDownLeft
 } from 'lucide-react';
+import { formatCurrency } from '../lib/formatters';
 
 interface PaletteItem {
   id: string;
@@ -270,7 +271,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         subtitle: `Customer • Phone: ${c.phone || 'No phone'}${c.city ? ' • ' + c.city : ''}`,
         category: 'Customers',
         icon: Users,
-        badge: bal !== 0 ? `Rs ${Math.abs(bal).toLocaleString()} ${bal > 0 ? 'Receivable' : 'Advance'}` : 'Clear',
+        badge: bal !== 0 ? `${formatCurrency(Math.abs(bal))} ${bal > 0 ? 'Receivable' : 'Advance'}` : 'Clear',
         badgeColor: bal > 0 ? 'rose' : bal < 0 ? 'lime' : 'slate',
         action: () => {
           openTab({ id: 'customers', path: `/customers?id=${c.id}` });
@@ -290,7 +291,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         subtitle: `Supplier / Farmer • ${s.phone || 'No phone'}${s.city || s.village ? ' • ' + (s.village || s.city) : ''}`,
         category: 'Suppliers',
         icon: Truck,
-        badge: bal !== 0 ? `Rs ${Math.abs(bal).toLocaleString()} ${bal > 0 ? 'Payable' : 'Advance'}` : 'Clear',
+        badge: bal !== 0 ? `${formatCurrency(Math.abs(bal))} ${bal > 0 ? 'Payable' : 'Advance'}` : 'Clear',
         badgeColor: bal > 0 ? 'amber' : bal < 0 ? 'blue' : 'slate',
         action: () => {
           openTab({ id: 'suppliers', path: `/suppliers?id=${s.id}` });
@@ -306,7 +307,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       items.push({
         id: `prod-${p.id}`,
         title: p.name || 'Product',
-        subtitle: `${(Array.isArray(p.category) ? p.category.join(', ') : p.category) || 'Product'} • Rs ${(p.price || 0).toLocaleString()} / ${p.unit || 'unit'}`,
+        subtitle: `${(Array.isArray(p.category) ? p.category.join(', ') : p.category) || 'Product'} • ${formatCurrency((p.price || 0))} / ${p.unit || 'unit'}`,
         category: 'Products',
         icon: Package,
         badge: `Rs ${p.price || 0}`,

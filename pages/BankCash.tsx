@@ -11,6 +11,7 @@ import {
   ChevronRight, ChevronLeft, Sparkles, Building2, Smartphone, Loader2, Archive, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { formatCurrency } from '../lib/formatters';
 
 // --- Framer Motion Fix ---
 const MotionDiv = motion.div as any;
@@ -97,14 +98,14 @@ const BankCash: React.FC = () => {
 
   // Forms
   const [transferData, setTransferData] = useState({
-    fromId: '', toId: '', amount: '', description: '', date: new Date().toISOString().split('T')[0]
+    fromId: '', toId: '', amount: '', description: '', date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' })
   });
 
   const [transactionData, setTransactionData] = useState({
     accountId: '', 
     amount: '', 
     description: '', 
-    date: new Date().toISOString().split('T')[0], 
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
     relatedAccountId: '' // Selected Contra Account ID
   });
 
@@ -158,7 +159,7 @@ const BankCash: React.FC = () => {
 
       list.push({
         id: tx.id,
-        date: tx.date || new Date().toISOString().split('T')[0],
+        date: tx.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
         type: tx.type as any,
         category: tx.category || tx.type,
         description: tx.description || tx.type,
@@ -172,6 +173,13 @@ const BankCash: React.FC = () => {
 
     // 2. Expenses (Only un-synced / local offline expenses not in bankTransactions)
     expenses.forEach(exp => {
+      if ((exp as any).status === 'Cancelled' || (exp as any).status === 'Returned') return;
+      if (exp.paymentStatus === 'Unpaid' || (exp as any).payment_status === 'Unpaid') return;
+      const actualPaid = exp.paymentStatus === 'Partial'
+        ? Number(exp.paidAmount || 0)
+        : Number(exp.paidAmount ?? (exp as any).paid_amount ?? exp.amount ?? 0);
+      if (actualPaid <= 0) return;
+
       const isAlreadyInBankTx = btxIds.has(`btx_${exp.id}`) || 
         btxRefIds.has(exp.id) || 
         bankTransactions.some(bt => (bt as any).related_expense_id === exp.id || bt.description?.includes(exp.id));
@@ -182,11 +190,11 @@ const BankCash: React.FC = () => {
           const acc = accounts.find(a => a.id === accId);
           list.push({
             id: `exp_${exp.id}`,
-            date: exp.date || new Date().toISOString().split('T')[0],
+            date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
             type: 'Expense',
             category: exp.category || 'Expense',
             description: `Expense: ${exp.description}${exp.vendor_name ? ` (${exp.vendor_name})` : ''}`,
-            amount: exp.amount || 0,
+            amount: actualPaid,
             accountId: accId,
             accountName: acc?.name || 'Account',
             sourceModule: 'Expense',
@@ -212,7 +220,7 @@ const BankCash: React.FC = () => {
               const acc = accounts.find(a => a.id === targetAccId);
               list.push({
                 id: `sale_${sale.id}`,
-                date: sale.date ? sale.date.split('T')[0] : new Date().toISOString().split('T')[0],
+                date: sale.date ? sale.date.split('T')[0] : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
                 type: 'Income',
                 category: isCash ? 'Cash Sale' : 'Online Sale',
                 description: `POS Sale #${sale.bill_number}${sale.customer_name ? ` (${sale.customer_name})` : ''}`,
@@ -231,6 +239,18 @@ const BankCash: React.FC = () => {
     // 4. Customer Payments (Only offline / un-synced not in bankTransactions)
     customerTransactions.forEach(ct => {
       if (ct.type === 'Payment' && ct.amount > 0) {
+        const modeLower = String(ct.mode || (ct as any).details?.mode || '').toLowerCase();
+        if (
+          modeLower.includes('bad debt') || 
+          modeLower.includes('waiver') || 
+          modeLower.includes('write-off') || 
+          modeLower.includes('discount') || 
+          modeLower.includes('opening balance') ||
+          ct.id.startsWith('ctx_op_')
+        ) {
+          return;
+        }
+
         const isAlreadyInBankTx = btxIds.has(`btx_${ct.id}`) || 
           btxIds.has(`btx_cust_${ct.id}`) || 
           btxRefIds.has(ct.id);
@@ -244,7 +264,7 @@ const BankCash: React.FC = () => {
             const acc = accounts.find(a => a.id === targetAccId);
             list.push({
               id: `cust_${ct.id}`,
-              date: ct.date || new Date().toISOString().split('T')[0],
+              date: ct.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
               type: 'Income',
               category: 'Customer Receipt',
               description: `Payment from: ${cust?.name || 'Customer'}${ct.note ? ` (${ct.note})` : ''}`,
@@ -262,6 +282,16 @@ const BankCash: React.FC = () => {
     // 5. Supplier Payments (Only offline / un-synced not in bankTransactions)
     supplierTransactions.forEach(st => {
       if ((st.type === 'Payment' || st.type === 'Advance') && st.amount > 0) {
+        const modeLower = String(st.mode || (st as any).details?.mode || '').toLowerCase();
+        if (
+          modeLower.includes('waiver') || 
+          modeLower.includes('discount') || 
+          modeLower.includes('opening balance') ||
+          st.id.startsWith('stx_op_')
+        ) {
+          return;
+        }
+
         const purchaseId = st.details?.purchase_id || (st.id.startsWith('stx_pur_') ? st.id.replace('stx_pur_', '') : null);
         const btxEquivalentId = st.id.replace(/^stx_/, 'btx_');
         const isAlreadyInBankTx = btxIds.has(btxEquivalentId) ||
@@ -278,7 +308,7 @@ const BankCash: React.FC = () => {
             const acc = accounts.find(a => a.id === targetAccId);
             list.push({
               id: `supp_${st.id}`,
-              date: st.date || new Date().toISOString().split('T')[0],
+              date: st.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
               type: 'Expense',
               category: 'Supplier Payment',
               description: `Payment to: ${supp?.name || 'Supplier'}${st.note ? ` (${st.note})` : ''}`,
@@ -556,7 +586,7 @@ const BankCash: React.FC = () => {
       accountId: selectedAccountId !== 'all' ? selectedAccountId : accounts[0]?.id || '',
       amount: '',
       description: '',
-      date: new Date().toISOString().split('T')[0],
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
       relatedAccountId: defaultContraId
     });
     setIsTransactionOpen(true);
@@ -608,7 +638,7 @@ const BankCash: React.FC = () => {
         accountId: '', 
         amount: '', 
         description: '', 
-        date: new Date().toISOString().split('T')[0], 
+        date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
         relatedAccountId: '' 
       });
     } catch (err: any) {
@@ -632,7 +662,7 @@ const BankCash: React.FC = () => {
     const sourceAccount = accounts.find(a => a.id === transferData.fromId);
     if (sourceAccount && sourceAccount.balance < transferAmount) {
       const confirmOverdraft = window.confirm(
-        `Warning: Source account "${sourceAccount.name}" has balance Rs ${sourceAccount.balance.toLocaleString()}, which is less than transfer amount Rs ${transferAmount.toLocaleString()}.\n\nProceed with transfer (account will go negative)?`
+        `Warning: Source account "${sourceAccount.name}" has balance ${formatCurrency(sourceAccount.balance)}, which is less than transfer amount ${formatCurrency(transferAmount)}.\n\nProceed with transfer (account will go negative)?`
       );
       if (!confirmOverdraft) return;
     }
@@ -643,7 +673,7 @@ const BankCash: React.FC = () => {
       if (!ok) return;
       showToast("Funds transferred successfully", "success");
       setIsTransferOpen(false);
-      setTransferData({ fromId: '', toId: '', amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+      setTransferData({ fromId: '', toId: '', amount: '', description: '', date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }) });
     } catch (err: any) {
       showToast("Error transferring funds: " + (err?.message || "Failed"), "error");
     } finally {
@@ -707,7 +737,7 @@ const BankCash: React.FC = () => {
     const assessment = getDeleteAssessment('account', acc.id);
     
     if (assessment.balance !== 0) {
-      showToast(`Cannot delete "${acc.name}": Account currently has a balance of Rs ${acc.balance.toLocaleString()}. You must transfer all funds to another account first!`, "error");
+      showToast(`Cannot delete "${acc.name}": Account currently has a balance of ${formatCurrency(acc.balance)}. You must transfer all funds to another account first!`, "error");
       return;
     }
 
@@ -840,7 +870,7 @@ const BankCash: React.FC = () => {
                               selectedAccountId === 'all' ? 'text-lime-100' : 'text-slate-400'
                            }`}>Consolidated Total</p>
                            <h4 className="text-sm sm:text-base font-bold font-mono tracking-tight truncate">
-                              Rs {totalConsolidatedBalance.toLocaleString()}
+                              {formatCurrency(totalConsolidatedBalance)}
                            </h4>
                         </div>
                      </div>
@@ -907,7 +937,7 @@ const BankCash: React.FC = () => {
                         {/* Balance & Entries */}
                         <div className="text-right shrink-0">
                            <span className={`block text-xs font-black font-mono ${acc.balance < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-                              Rs {acc.balance.toLocaleString()}
+                              {formatCurrency(acc.balance)}
                            </span>
                            <span className="text-[10px] text-slate-400 font-medium">
                               {txCount} entries
@@ -1016,7 +1046,7 @@ const BankCash: React.FC = () => {
                <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 border border-slate-100 dark:border-slate-700/60">
                   <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-400 tracking-wider block">Current Balance</span>
                   <span className={`text-base sm:text-lg font-black font-mono block mt-0.5 ${stats.balance < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>
-                     Rs {stats.balance.toLocaleString()}
+                     {formatCurrency(stats.balance)}
                   </span>
                </div>
 
@@ -1027,7 +1057,7 @@ const BankCash: React.FC = () => {
                      <ArrowDownLeft size={13} className="text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <span className="text-sm sm:text-base font-bold font-mono text-emerald-700 dark:text-emerald-300 block mt-0.5">
-                     + Rs {stats.inflow.toLocaleString()}
+                     + {formatCurrency(stats.inflow)}
                   </span>
                </div>
 
@@ -1038,7 +1068,7 @@ const BankCash: React.FC = () => {
                      <ArrowUpRight size={13} className="text-rose-600 dark:text-rose-400" />
                   </div>
                   <span className="text-sm sm:text-base font-bold font-mono text-rose-700 dark:text-rose-300 block mt-0.5">
-                     - Rs {stats.outflow.toLocaleString()}
+                     - {formatCurrency(stats.outflow)}
                   </span>
                </div>
             </div>
@@ -1048,7 +1078,7 @@ const BankCash: React.FC = () => {
                <div className="flex items-start gap-2 rounded-xl bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900 px-3 py-2">
                   <Clock3 size={13} className="text-violet-500 shrink-0 mt-0.5" />
                   <p className="text-[11px] font-bold text-violet-700 dark:text-violet-300 leading-relaxed">
-                     Cash in Transit: Rs {(cashInTransit?.amount || 0).toLocaleString()} ({cashInTransit?.count || 0} remittance{(cashInTransit?.count || 0) > 1 ? 's' : ''} pending receive) — shift close par drawer se nikal chuki, kisi account men nahi.
+                     Cash in Transit: {formatCurrency((cashInTransit?.amount || 0))} ({cashInTransit?.count || 0} remittance{(cashInTransit?.count || 0) > 1 ? 's' : ''} pending receive) — shift close par drawer se nikal chuki, kisi account men nahi.
                      Head receive karte hi is page ke accounts men aayegi. Total cash = accounts + in-transit.
                   </p>
                </div>
@@ -1186,7 +1216,7 @@ const BankCash: React.FC = () => {
                                  </div>
                               </td>
                               <td className={`px-4 py-3 text-right font-black font-mono text-xs whitespace-nowrap ${isCredit ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                 {isCredit ? '+' : '-'} Rs {tx.amount.toLocaleString()}
+                                 {isCredit ? '+' : '-'} {formatCurrency(tx.amount)}
                               </td>
                               {selectedAccountId === 'all' && (
                                  <td className="px-4 py-3 text-right text-xs font-bold text-slate-600 truncate max-w-[120px]">
@@ -1246,7 +1276,7 @@ const BankCash: React.FC = () => {
                            </div>
                            <div className="text-right shrink-0">
                               <span className={`text-xs font-black font-mono ${isCredit ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                 {isCredit ? '+' : '-'} Rs {tx.amount.toLocaleString()}
+                                 {isCredit ? '+' : '-'} {formatCurrency(tx.amount)}
                               </span>
                            </div>
                         </div>
@@ -1345,7 +1375,7 @@ const BankCash: React.FC = () => {
                          value={transactionData.accountId} onChange={e => setTransactionData({...transactionData, accountId: e.target.value})}
                        >
                           <option value="">Select Account...</option>
-                          {accounts.map(a => <option key={a.id} value={a.id}>{a.name} (Rs {a.balance.toLocaleString()})</option>)}
+                          {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.balance)})</option>)}
                        </select>
                     </div>
 
@@ -1457,14 +1487,14 @@ const BankCash: React.FC = () => {
                           <label className={labelClass}>Source (Transfer From)</label>
                           <select className={inputClass} value={transferData.fromId} onChange={e => setTransferData({...transferData, fromId: e.target.value})}>
                              <option value="">Select Source Account...</option>
-                             {accounts.map(a => <option key={a.id} value={a.id}>{a.name} (Rs {a.balance.toLocaleString()})</option>)}
+                             {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.balance)})</option>)}
                           </select>
                        </div>
                        <div>
                           <label className={labelClass}>Destination (Transfer To)</label>
                           <select className={inputClass} value={transferData.toId} onChange={e => setTransferData({...transferData, toId: e.target.value})}>
                              <option value="">Select Destination Account...</option>
-                             {accounts.map(a => <option key={a.id} value={a.id}>{a.name} (Rs {a.balance.toLocaleString()})</option>)}
+                             {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({formatCurrency(a.balance)})</option>)}
                           </select>
                        </div>
                     </div>
@@ -1695,7 +1725,7 @@ const BankCash: React.FC = () => {
 
                     <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-2xl flex items-center justify-between text-xs">
                        <span className="text-indigo-900 font-medium">Current Balance:</span>
-                       <span className="font-bold text-slate-900 font-mono">Rs {editingAccount.balance.toLocaleString()}</span>
+                       <span className="font-bold text-slate-900 font-mono">{formatCurrency(editingAccount.balance)}</span>
                     </div>
 
                     <button 

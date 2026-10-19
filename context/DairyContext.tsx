@@ -5,7 +5,9 @@ import { db, generateUUID, generateInvoiceNumber, LocalOrder, LocalOrderItem, Lo
 import { actionLock } from '../lib/actionLock';
 import { loadRead, withDeadline } from '../lib/loadRequest';
 import { saleItemSnapshot } from '../lib/saleSnapshot';
+import { averageCostAfterIntake, saleLineStock, stockOnHandBase } from '../lib/sellUnits';
 import { syncService } from '../lib/syncService';
+import { getOperatorSession, hasStoredOperatorSession, operatorSignIn, operatorSignOut, sessionOperatorId, type OperatorLoginRequest } from '../lib/operatorAuth';
 import { isPermanentSyncError } from '../lib/syncErrors';
 import { currentEpoch, emptyBases, mapCatalogCache, noteLocalWrite, projectLedger, readUnsyncedWork, toCustomer, toPosBill } from '../lib/unsyncedProjection';
 import {
@@ -14,9 +16,9 @@ import {
   procureMilkIntake, recordSupplierPaymentEffects, recordExpenseEffects
 } from '../lib/atomic';
 import { useToast } from './ToastContext';
-import { normalizeTransactionTimestamp, formatTransactionTime } from '../lib/formatters';
-import { netPurchaseReturnRefunds, proportionalRefund, salePaidAmount, splitRefund } from '../lib/moneyFlow';
-import { buildStandardUnitGroups } from '../lib/unitConversion';
+import { normalizeTransactionTimestamp, formatTransactionTime, getTodayLocalDate } from '../lib/formatters';
+import { isSpotSupplierPayment, netPurchaseReturnRefunds, proportionalRefund, salePaidAmount, splitRefund } from '../lib/moneyFlow';
+import { buildStandardUnitGroups, convertQuantity } from '../lib/unitConversion';
 import { 
   PriorityLevel, MilkType, Shift, StockType, AllocationStatus, ProductionStage, DestinationType, 
   RateType, PurchaseType, AdjustmentReason, ProductSource, ItemType, EmployeeRole, AttendanceStatus, 
@@ -275,9 +277,10 @@ interface DairyContextType {
   dailySupplyEntries: DailySupplyEntry[];
 
   addPurchase: (entry: any) => Promise<boolean>;
-  returnPurchase: (purchaseId: string, returnQty?: number, reason?: string) => Promise<boolean>;
+  /** refundAs 'khata': supplier keeps the money and lowers the payable instead of refunding cash. */
+  returnPurchase: (purchaseId: string, returnQty?: number, reason?: string, refundAs?: 'cash' | 'khata') => Promise<boolean>;
   deletePurchase: (id: string) => Promise<boolean>;
-  returnMaterialPurchase: (purchaseId: string, returnQty?: number, reason?: string) => Promise<boolean>;
+  returnMaterialPurchase: (purchaseId: string, returnQty?: number, reason?: string, refundAs?: 'cash' | 'khata') => Promise<boolean>;
   deleteMaterialPurchase: (id: string) => Promise<boolean>;
   addBulkMaterialPurchase: (data: any) => Promise<boolean>;
   
@@ -304,7 +307,8 @@ interface DairyContextType {
   updateBatchStage: (batchId: string, newStage: ProductionStage, logMessage?: string, outputData?: { variants: { variantId: string, count: number }[], looseQty: number }) => Promise<boolean>;
   cancelBatch: (batchId: string, reason: string) => Promise<boolean>;
 
-  addSale: (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number) => Promise<boolean>;
+  /** Resolves to the saved bill number, or false when nothing was queued. */
+  addSale: (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number) => Promise<string | false>;
   processSalesReturn: (saleId: string, returnReason: string, refundAccountId?: string, returnAction?: 'refund' | 'replace', restockOption?: 'restock' | 'scrap_spoilage', returnedItemsList?: Array<{ itemId?: string; name: string; qty: number; price: number; variantId?: string; unit?: string }>, refundPaymentMode?: 'Cash' | 'Online', correctOriginalSaleMode?: boolean) => Promise<boolean>;
   updateSalePaymentMode: (saleId: string, newPaymentMode: 'Cash' | 'Online', targetAccountId?: string) => Promise<boolean>;
   recordDailySupply: (entries: any[]) => Promise<boolean>;
@@ -320,6 +324,7 @@ interface DairyContextType {
   recordSupplierPayment: (supplierId: string, amount: number, date: string, mode: string, type: any, note?: string, accountId?: string) => Promise<boolean>;
 
   addExpense: (expense: Omit<ExpenseEntry, 'id'>) => Promise<boolean>;
+  updateExpense: (id: string, updates: Partial<ExpenseEntry>) => Promise<boolean>;
   deleteExpense: (id: string) => Promise<boolean>;
   addRecurringExpense: (expense: Omit<RecurringExpense, 'id'>) => Promise<boolean>;
   deleteRecurringExpense: (id: string) => Promise<boolean>;
@@ -501,6 +506,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [hasLoadedData, setHasLoadedData] = useState(false);
   const [dataLoadError, setDataLoadError] = useState<string | null>(null);
   const sessionReady = useRef(false);
+  // True while the workspace load was skipped because nobody is signed in yet.
+  const awaitingLogin = useRef(false);
   const initialFetchStarted = useRef(false);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const ledgerBases = useRef(emptyBases());
@@ -510,6 +517,33 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setSessionError(null);
     if (!sessionReady.current && !currentUser) setIsBooting(true);
 
+    const lockTerminal = () => {
+      setCurrentUser(null);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('mooco_active_user_id');
+        localStorage.removeItem('mooco_active_user_data');
+      }
+      setIsUserSwitcherOpen(true);
+    };
+
+    const storeUsers = (list: AppUser[]) => {
+      setUsers(list);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('mooco_cached_users', JSON.stringify(list)); } catch (_) {}
+      }
+    };
+
+    const readSavedUser = (): AppUser | null => {
+      if (typeof window === 'undefined') return null;
+      try {
+        const raw = localStorage.getItem('mooco_active_user_data');
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && parsed.id ? parsed : null;
+      } catch (_) {
+        return null;
+      }
+    };
+
     const attemptFetch = async (timeoutMs: number) => {
       return await Promise.allSettled([
         loadRead(supabase.from('app_roles').select('*'), timeoutMs),
@@ -518,6 +552,33 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
 
     try {
+      // The database only answers an operator session minted by the operator-login Edge Function.
+      const session = await getOperatorSession();
+      const sessionUserId = sessionOperatorId(session);
+
+      if (!session) {
+        // Offline with a saved session: keep working on the cached operator; the token refreshes
+        // (and queued work syncs) once the device is back online.
+        const savedUser = readSavedUser();
+        if (hasStoredOperatorSession() && savedUser) {
+          setCurrentUser(savedUser);
+          sessionReady.current = true;
+          console.info('[Session restore] Offline: operator kept from the saved session');
+          return;
+        }
+
+        // Signed out: the login tiles are the only thing readable before a PIN.
+        try {
+          const { data } = await loadRead(supabase.rpc('app_login_directory'), 20000);
+          if (Array.isArray(data)) storeUsers((data as any[]).map(mapRpcUser));
+        } catch (_) {
+          // Offline login screen falls back to the cached tiles and the username form.
+        }
+        lockTerminal();
+        sessionReady.current = true;
+        return;
+      }
+
       // First attempt with 20s timeout to survive high mobile network latency
       let [rolesRes, usersRes] = await attemptFetch(20000);
 
@@ -546,39 +607,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      if (usersRes.status === 'fulfilled' && usersRes.value.data) {
+      if (usersRes.status === 'fulfilled' && usersRes.value.data && !usersRes.value.error) {
         const dbUsers: AppUser[] = (usersRes.value.data as any[]).map(mapRpcUser);
-        setUsers(dbUsers);
-        if (typeof window !== 'undefined') {
-          try { localStorage.setItem('mooco_cached_users', JSON.stringify(dbUsers)); } catch (_) {}
-        }
+        storeUsers(dbUsers);
 
-        // Restore the previously signed-in user (device "remember me").
-        const savedUserId = typeof window !== 'undefined' ? localStorage.getItem('mooco_active_user_id') : null;
-        let matched = dbUsers.find(u => u.id === savedUserId && u.is_active);
-
-        // If no user was saved yet on this browser, auto-select the Super Admin
-        if (!matched && !savedUserId && dbUsers.length > 0) {
-          const defaultAdmin = dbUsers.find(u => u.role_id === 'role_super_admin' && u.is_active) || dbUsers[0];
-          if (defaultAdmin) {
-            matched = defaultAdmin;
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('mooco_active_user_id', defaultAdmin.id);
-            }
-          }
-        }
-
+        // The signed-in operator is whoever the session belongs to — never a guess from the list.
+        const matched = dbUsers.find(u => u.id === sessionUserId && u.is_active);
         if (matched) {
           setCurrentUser(matched);
           if (typeof window !== 'undefined') {
+            localStorage.setItem('mooco_active_user_id', matched.id);
             localStorage.setItem('mooco_active_user_data', JSON.stringify(matched));
           }
-        } else if (typeof window !== 'undefined') {
-          localStorage.removeItem('mooco_active_user_id');
-          localStorage.removeItem('mooco_active_user_data');
-          setCurrentUser(null);
-          // Saved session is no longer valid — lock the terminal.
-          setIsUserSwitcherOpen(true);
+        } else {
+          // Operator deactivated or deleted since the session was issued — lock the terminal.
+          await operatorSignOut();
+          lockTerminal();
         }
 
         sessionReady.current = true;
@@ -586,44 +630,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
 
-      // If server could not be reached, use cached/offline user data if available
-      const savedUserRaw = typeof window !== 'undefined' ? localStorage.getItem('mooco_active_user_data') : null;
-      if (savedUserRaw) {
-        try {
-          const cachedUser = JSON.parse(savedUserRaw);
-          if (cachedUser && cachedUser.id) {
-            setCurrentUser(cachedUser);
-            sessionReady.current = true;
-            setSessionError(null);
-            console.info('[Session restore] Active operator session preserved from local cache');
-            return;
-          }
-        } catch (_) {}
-      }
-
-      const cachedUsersRaw = typeof window !== 'undefined' ? localStorage.getItem('mooco_cached_users') : null;
-      if (cachedUsersRaw) {
-        try {
-          const cachedUsers: AppUser[] = JSON.parse(cachedUsersRaw);
-          if (cachedUsers && cachedUsers.length > 0) {
-            setUsers(cachedUsers);
-            const savedUserId = typeof window !== 'undefined' ? localStorage.getItem('mooco_active_user_id') : null;
-            const matched = cachedUsers.find(u => u.id === savedUserId && u.is_active) ||
-                            cachedUsers.find(u => u.role_id === 'role_super_admin' && u.is_active) ||
-                            cachedUsers[0];
-            if (matched) {
-              setCurrentUser(matched);
-              if (typeof window !== 'undefined') {
-                localStorage.setItem('mooco_active_user_id', matched.id);
-                localStorage.setItem('mooco_active_user_data', JSON.stringify(matched));
-              }
-              sessionReady.current = true;
-              setSessionError(null);
-              console.info('[Session restore] Operator restored from cached users directory');
-              return;
-            }
-          }
-        } catch (_) {}
+      // Server could not be reached: keep the cached operator if it is the session's operator.
+      const savedUser = readSavedUser();
+      if (savedUser && (!sessionUserId || savedUser.id === sessionUserId)) {
+        setCurrentUser(savedUser);
+        sessionReady.current = true;
+        setSessionError(null);
+        console.info('[Session restore] Active operator session preserved from local cache');
+        return;
       }
 
       // If genuinely no network AND no cached operator exists
@@ -743,6 +757,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setDataLoadError(null);
       // Start access checks immediately, independently of business history/cache reads.
       const operatorRequest = restoreOperator();
+      // Signed out (and no saved session to resume offline): the database would refuse every read,
+      // so keep the cached figures and load once the operator logs in.
+      if (!hasStoredOperatorSession()) {
+        awaitingLogin.current = true;
+        await operatorRequest;
+        setIsDataLoading(false);
+        return;
+      }
+      awaitingLogin.current = false;
       try {
         const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
         const fullSalesPromise = fetchFullTable('sales', 'date');
@@ -752,35 +775,35 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           supabase.from('customers').select('*'),
           supabase.from('items').select('*').order('sort_order', { ascending: true, nullsFirst: false }).order('name', { ascending: true }),
           supabase.from('sales').select('*').gte('date', businessDate).order('date', { ascending: false }).limit(300),
-          supabase.from('purchases').select('*').order('date', { ascending: false }),
-          supabase.from('material_purchases').select('*').order('date', { ascending: false }),
-          supabase.from('allocations').select('*').order('date', { ascending: false }),
-          supabase.from('production_batches').select('*').order('start_date', { ascending: false }),
-          supabase.from('daily_supply').select('*').order('date', { ascending: false }),
+          fetchFullTable('purchases', 'date'),
+          fetchFullTable('material_purchases', 'date'),
+          fetchFullTable('allocations', 'date'),
+          fetchFullTable('production_batches', 'start_date'),
+          fetchFullTable('daily_supply', 'date'),
           supabase.from('retail_closings').select('*').order('date', { ascending: false }),
-          supabase.from('expenses').select('*').order('date', { ascending: false }),
+          fetchFullTable('expenses', 'date'),
           supabase.from('recurring_expenses').select('*'),
           supabase.from('expense_vendors').select('*'),
           supabase.from('financial_accounts').select('*'),
           supabase.from('bank_transactions').select('*').order('date', { ascending: false }),
           supabase.from('manual_accounts').select('*'),
-          supabase.from('journal_entries').select('*').order('date', { ascending: false }),
-          supabase.from('inventory_logs').select('*').order('date', { ascending: false }),
-          supabase.from('customer_transactions').select('*').order('date', { ascending: false }),
-          supabase.from('supplier_transactions').select('*').order('date', { ascending: false }),
+          // Paged: PostgREST returns at most 1000 rows per request, which silently cut long histories.
+          fetchFullTable('journal_entries', 'date'),
+          fetchFullTable('inventory_logs', 'date'),
+          fetchFullTable('customer_transactions', 'date'),
+          fetchFullTable('supplier_transactions', 'date'),
           supabase.from('app_settings').select('*').eq('id', 'global_settings').single(),
-          supabase.from('expense_vendor_transactions').select('*'),
+          fetchFullTable('expense_vendor_transactions', 'date'),
           null,
           null,
           supabase.from('business_days').select('*').order('business_date', { ascending: false }),
           supabase.from('cash_drawers').select('*').order('name'),
-          supabase.from('cash_shifts').select('*').order('started_at', { ascending: false }),
+          fetchFullTable('cash_shifts', 'started_at'),
           supabase.from('drawer_handovers').select('*').order('declared_at', { ascending: false }),
           supabase.from('cash_remittances').select('*').order('declared_at', { ascending: false }),
           supabase.from('cash_variances').select('*').order('created_at', { ascending: false }),
-          supabase.from('shift_cash_events').select('*').order('occurred_at', { ascending: false }),
-          supabase.from('day_closings').select('*')
-        ].map(query => query ? loadRead(query, 35000) : Promise.resolve({ data: null, error: null })));
+          fetchFullTable('shift_cash_events', 'occurred_at'),
+        ].map(query => query ? loadRead(query as any, 35000) : Promise.resolve({ data: null, error: null } as any)));
         const failedReads = results.filter(result => result.status === 'rejected' || result.value.error);
         if (failedReads.length) {
           console.warn('[Workspace load] Failed reads', JSON.stringify(results.flatMap((result, index) => {
@@ -963,7 +986,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             return { 
               id: i.id, name: i.name || 'Unknown', category: Array.isArray(i.category) ? i.category : [i.category || 'Uncategorized'], 
               item_type: (parsedTypes.length > 0 ? parsedTypes : ['Sale product']) as any, 
-              unit: i.unit || 'units', cost_price: roundCurrency(i.cost_price || 0), selling_price: roundCurrency(i.selling_price || 0), 
+              unit: i.unit || 'units', cost_price: Math.round((Number(i.cost_price) || 0) * 10000) / 10000, // per-g / per-ml costs need more than 2 decimals
+              selling_price: roundCurrency(i.selling_price || 0), 
               isActive: i.is_active, isSystem: i.is_system, source: i.source || 'Both', reorder_level: i.reorder_level || 10,
               description: i.description || '',
               recipe: i.recipe || [], variants: i.variants || [],
@@ -1034,6 +1058,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             ...s, 
             paid_amount: s.paid_amount !== undefined ? roundCurrency(s.paid_amount) : (s.details?.paid_amount !== undefined ? roundCurrency(s.details.paid_amount) : roundCurrency(s.total)),
             due_amount: s.due_amount !== undefined ? roundCurrency(s.due_amount) : roundCurrency(s.details?.due_amount || 0),
+            // Returns are stored inside details; screens read them from the bill itself.
+            returned_items: s.returned_items || s.details?.returned_items || undefined,
             total: roundCurrency(s.total || 0),
             items: (s.items || []).map((it: any) => ({
               ...it,
@@ -1239,12 +1265,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (jeRes.status === 'fulfilled' && jeRes.value.data) setJournalEntries(jeRes.value.data.map((j: any) => ({ id: j.id, date: j.date, totalAmount: j.total_amount, createdAt: j.created_at, ...j.details })));
         if (ilRes.status === 'fulfilled' && ilRes.value.data) setInventoryLogs(ilRes.value.data);
         if (ctRes.status === 'fulfilled' && ctRes.value.data) {
-          const serverCustomerTx = ctRes.value.data.map((ct: any) => ({ id: ct.id, customer_id: ct.customer_id, date: ct.date, type: ct.type, amount: ct.amount || 0, mode: ct.mode || ct.details?.mode, note: ct.note || ct.details?.note, ...ct.details }));
+          // Keep `details` itself too: statements read details.account_id / details.source.
+          const serverCustomerTx = ctRes.value.data.map((ct: any) => ({ id: ct.id, customer_id: ct.customer_id, date: ct.date, type: ct.type, amount: ct.amount || 0, mode: ct.mode || ct.details?.mode, note: ct.note || ct.details?.note, ...ct.details, details: ct.details || {}, shift_session_id: ct.shift_session_id ?? ct.details?.shift_session_id, business_day_id: ct.business_day_id ?? ct.details?.business_day_id }));
           ledgerBases.current.customerTransactions = serverCustomerTx;
           setCustomerTransactions(serverCustomerTx);
         }
         if (stRes.status === 'fulfilled' && stRes.value.data) {
-          const serverSupplierTx = stRes.value.data.map((st: any) => ({ id: st.id, supplier_id: st.supplier_id, date: st.date, type: st.type, amount: st.amount || 0, mode: st.mode || st.details?.mode, note: st.note || st.details?.note, ...st.details }));
+          // Keep `details` itself too: the supplier statement links returns and refunds through
+          // details.purchase_id / details.cash_refund; without it every return looked unlinked.
+          const serverSupplierTx = stRes.value.data.map((st: any) => ({ id: st.id, supplier_id: st.supplier_id, date: st.date, type: st.type, amount: st.amount || 0, mode: st.mode || st.details?.mode, note: st.note || st.details?.note, ...st.details, details: st.details || {} }));
           const serverStxIds = new Set(serverSupplierTx.map((s: any) => s.id));
           const unmergedStx = pendingSupplierTx.filter(s => !serverStxIds.has(s.id));
           ledgerBases.current.supplierTransactions = serverSupplierTx;
@@ -1400,8 +1429,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               payment_mode: o.payment_mode,
               status: o.status,
               items: o.items,
-              paid_amount: o.details?.paid_amount || o.total,
-              due_amount: o.details?.due_amount || 0
+              // A credit bill with nothing paid has paid_amount 0, which must not fall back to the total.
+              paid_amount: o.paid_amount ?? o.details?.paid_amount ?? (String(o.payment_mode || '').toLowerCase() === 'credit' ? 0 : o.total),
+              due_amount: o.due_amount ?? o.details?.due_amount ?? 0,
+              details: o.details,
+              business_day_id: o.business_day_id,
+              shift_session_id: o.shift_session_id,
+              drawer_id: o.drawer_id
             })));
           }
           if (!ledgerBases.current.items) {
@@ -1483,13 +1517,45 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   useEffect(() => {
     // StrictMode replays effects; do not send a second full startup batch.
-    const onLedgerSynced = () => { void fetchData(); };
+    // Synced bills are already in local state (optimistic update), so the post-sync reload is only a
+    // reconciliation. A full reload re-downloads every table, so coalesce it to one per 10 minutes.
+    const LEDGER_RECONCILE_MS = 10 * 60 * 1000;
+    let lastReconcileAt = Date.now();
+    let reconcileTimer: number | undefined;
+    const onLedgerSynced = () => {
+      if (reconcileTimer !== undefined) return;
+      const wait = Math.max(0, lastReconcileAt + LEDGER_RECONCILE_MS - Date.now());
+      reconcileTimer = window.setTimeout(() => {
+        reconcileTimer = undefined;
+        lastReconcileAt = Date.now();
+        void fetchData();
+      }, wait);
+    };
     window.addEventListener('mooco-ledger-synced', onLedgerSynced);
     if (!initialFetchStarted.current) {
       initialFetchStarted.current = true;
       void fetchData();
     }
-    return () => window.removeEventListener('mooco-ledger-synced', onLedgerSynced);
+    return () => {
+      window.removeEventListener('mooco-ledger-synced', onLedgerSynced);
+      if (reconcileTimer !== undefined) window.clearTimeout(reconcileTimer);
+    };
+  }, []);
+
+  // The refresh token was revoked or expired for good (or another tab logged out): lock the
+  // terminal instead of letting every request fail with "Login zaroori hai".
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange(event => {
+      if (event !== 'SIGNED_OUT') return;
+      setCurrentUser(null);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('mooco_active_user_id');
+        localStorage.removeItem('mooco_active_user_data');
+      }
+      awaitingLogin.current = true;
+      setIsUserSwitcherOpen(true);
+    });
+    return () => data.subscription.unsubscribe();
   }, []);
 
   // Real-time Cross-Tab & Device Shift Synchronization via BroadcastChannel & Storage Event
@@ -1532,7 +1598,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return;
     }
     const currentBizDate = getBusinessDate();
-    // Prioritize active shift matching current user and today's business date
+    // Prioritize active shift matching current user and today's business date,
+    // then fallback to ANY active/closing shift for this user/admin,
+    // then fallback to any active shift on the system.
     const active = shiftSessions.find(shift =>
       (shift.user_id === currentUser.id || currentUser.role_id === 'role_super_admin') &&
       Boolean(shift.drawer_id) &&
@@ -1542,6 +1610,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       Boolean(shift.drawer_id) &&
       ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status) &&
       (!shift.business_date || shift.business_date === currentBizDate)
+    ) || shiftSessions.find(shift =>
+      (shift.user_id === currentUser.id || currentUser.role_id === 'role_super_admin') &&
+      Boolean(shift.drawer_id) &&
+      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status)
+    ) || shiftSessions.find(shift =>
+      Boolean(shift.drawer_id) &&
+      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status)
     ) || null;
 
     setActiveShiftSession(active);
@@ -1663,49 +1738,99 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const reconcileAllLedgers = async (): Promise<boolean> => {
     const result = await actionLock.runExclusive('reconcile_all_ledgers', async () => {
       try {
-        const { data: allCusts } = await supabase.from('customers').select('id, name, balance');
-        const { data: allSales } = await supabase.from('sales').select('customer_id, total, details, status').not('customer_id', 'is', null);
-        const { data: allPayments } = await supabase.from('customer_transactions').select('customer_id, amount, type, details');
+        const { data: allCusts } = await supabase.from('customers').select('id, name, balance, data');
+        const { data: allSales } = await supabase.from('sales').select('id, customer_id, total, details, status').not('customer_id', 'is', null);
+        const { data: allPayments } = await supabase.from('customer_transactions').select('id, customer_id, amount, type, details');
+        const { data: allSupply } = await supabase.from('daily_supply').select('id, customer_id, total_amount, details').not('customer_id', 'is', null);
 
         if (allCusts && allSales && allPayments) {
+          const saleIds = new Set(allSales.map(s => `ctx_${s.id}`));
+          const supplyIds = new Set((allSupply || []).map(ds => `ctx_ds_${ds.id}`));
           for (const cust of allCusts) {
             const custSalesDue = allSales
-              .filter(s => s.customer_id === cust.id && s.status !== 'Returned')
-              .reduce((sum, s) => sum + (s.details?.due_amount || 0), 0);
-            
+              .filter(s => s.customer_id === cust.id && s.status !== 'Returned' && s.status !== 'Cancelled')
+              .reduce((sum, s) => sum + (Number(s.details?.due_amount) || 0), 0);
+
+            const custSupplyDue = (allSupply || [])
+              .filter(ds => ds.customer_id === cust.id && !['Pending', 'Cancelled'].includes(ds.details?.status || ''))
+              .reduce((sum, ds) => {
+                const total = Number(ds.total_amount || 0);
+                const paid = Number(ds.details?.payment_received || 0);
+                return sum + Math.max(0, total - paid);
+              }, 0);
+
             const custPayments = allPayments
-              .filter(p => p.customer_id === cust.id && p.type === 'Payment')
-              .reduce((sum, p) => sum + (p.amount || 0), 0);
+              .filter(p => p.customer_id === cust.id && (p.type === 'Payment' || p.type === 'Credit' || p.type === 'Return'))
+              .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
             const custDebits = allPayments
-              .filter(p => p.customer_id === cust.id && (p.type === 'Debit' || (p.type === 'Charge' && (!p.details?.note || !p.details.note.includes('Sale #')))))
-              .reduce((sum, p) => sum + (p.amount || 0), 0);
+              .filter(p => p.customer_id === cust.id && (
+                p.type === 'Debit' ||
+                (p.type === 'Charge' && !saleIds.has(p.id) && !supplyIds.has(p.id) && (!p.details?.note || !String(p.details.note).startsWith('Sale #')))
+              ))
+              .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
-            const expectedBalance = roundCurrency(custSalesDue + custDebits - custPayments);
-            if (Math.abs((cust.balance || 0) - expectedBalance) > 1 && expectedBalance >= 0) {
+            const hasOpTx = allPayments.some(p => p.customer_id === cust.id && (p.id === `ctx_op_${cust.id}` || p.details?.mode === 'Opening Balance'));
+            const opBal = !hasOpTx ? Number((cust as any).data?.opening_balance || 0) : 0;
+
+            const hasAnyActivity = allSales.some(s => s.customer_id === cust.id) ||
+              allPayments.some(p => p.customer_id === cust.id) ||
+              (allSupply || []).some(ds => ds.customer_id === cust.id);
+            if (!hasAnyActivity && opBal === 0) continue;
+
+            const expectedBalance = roundCurrency(opBal + custSalesDue + custSupplyDue + custDebits - custPayments);
+            if (Math.abs((Number(cust.balance) || 0) - expectedBalance) > 1) {
               console.log(`[Ledger Heal] Customer ${cust.name} balance adjusted: ${cust.balance} -> ${expectedBalance}`);
               await supabase.from('customers').update({ balance: expectedBalance }).eq('id', cust.id);
             }
           }
         }
 
-        // 2. Reconcile Supplier Balances from purchases & supplier_transactions
-        const { data: allSupps } = await supabase.from('suppliers').select('id, name, balance');
-        const { data: allPurchases } = await supabase.from('purchases').select('supplier_id, total_amount, details, status');
-        const { data: allSuppPayments } = await supabase.from('supplier_transactions').select('supplier_id, amount, type');
+        // 2. Reconcile Supplier Balances from purchases, material_purchases & supplier_transactions
+        const { data: allSupps } = await supabase.from('suppliers').select('id, name, balance, data');
+        const { data: allPurchases } = await supabase.from('purchases').select('id, supplier_id, total_amount, details, status');
+        const { data: allMatPurchases } = await supabase.from('material_purchases').select('id, supplier_id, total_amount, details, status');
+        const { data: allSuppPayments } = await supabase.from('supplier_transactions').select('id, supplier_id, amount, type, details');
 
         if (allSupps && allPurchases && allSuppPayments) {
           for (const supp of allSupps) {
             const suppPurchasesDue = allPurchases
-              .filter(p => p.supplier_id === supp.id && p.status !== 'Returned')
-              .reduce((sum, p) => sum + (p.details?.due_amount !== undefined ? Number(p.details.due_amount) : Number(p.total_amount || 0)), 0);
-            
+              .filter(p => p.supplier_id === supp.id && p.status !== 'Returned' && p.status !== 'Cancelled')
+              .reduce((sum, p) => {
+                const paid = p.details?.paid_amount !== undefined ? Number(p.details.paid_amount) : 0;
+                const due = p.details?.due_amount !== undefined ? Number(p.details.due_amount) : Math.max(0, Number(p.total_amount || 0) - paid);
+                return sum + due;
+              }, 0);
+
+            const suppMaterialsDue = (allMatPurchases || [])
+              .filter(mp => mp.supplier_id === supp.id && mp.status !== 'Returned' && mp.status !== 'Cancelled')
+              .reduce((sum, mp) => {
+                const paid = mp.details?.paid_amount !== undefined ? Number(mp.details.paid_amount) : 0;
+                const due = mp.details?.due_amount !== undefined ? Number(mp.details.due_amount) : Math.max(0, Number(mp.total_amount || 0) - paid);
+                return sum + due;
+              }, 0);
+
+            // Exclude spot payments (stx_pur_ / stx_mp_) because due_amount on the purchase already deducted paid_amount
             const suppPayments = allSuppPayments
-              .filter(p => p.supplier_id === supp.id && (p.type === 'Payment' || p.type === 'Debit'))
+              .filter(p => p.supplier_id === supp.id && (p.type === 'Payment' || p.type === 'Advance' || p.type === 'Debit') && !isSpotSupplierPayment(p))
               .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
-            const expectedSuppBalance = roundCurrency(Math.max(0, suppPurchasesDue - suppPayments));
-            if (Math.abs((Number(supp.balance) || 0) - expectedSuppBalance) > 1) {
+            const suppCharges = allSuppPayments
+              .filter(p => p.supplier_id === supp.id && (p.type === 'Charge' || p.type === 'Supply'))
+              .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+            const hasSuppActivity = allPurchases.some(p => p.supplier_id === supp.id) ||
+              (allMatPurchases || []).some(mp => mp.supplier_id === supp.id) ||
+              allSuppPayments.some(p => p.supplier_id === supp.id);
+            const suppOpBal = Number((supp as any).data?.opening_balance || 0);
+            if (!hasSuppActivity && suppOpBal === 0) continue;
+
+            // Only auto-adjust if opening_balance is tracked in data or if there is no unrecorded opening balance
+            if ((supp as any).data?.opening_balance === undefined && Number(supp.balance || 0) > 0 && !hasSuppActivity) continue;
+            const effectiveOpBal = (supp as any).data?.opening_balance !== undefined ? suppOpBal : 0;
+
+            const expectedSuppBalance = roundCurrency(effectiveOpBal + suppPurchasesDue + suppMaterialsDue + suppCharges - suppPayments);
+            if ((supp as any).data?.opening_balance !== undefined && Math.abs((Number(supp.balance) || 0) - expectedSuppBalance) > 1) {
               console.log(`[Ledger Heal] Supplier ${supp.name} balance adjusted: ${supp.balance} -> ${expectedSuppBalance}`);
               await supabase.from('suppliers').update({ balance: expectedSuppBalance }).eq('id', supp.id);
             }
@@ -1771,12 +1896,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const rawPaid = entry.paid_amount !== undefined 
           ? entry.paid_amount 
           : (paid_amount_arg !== undefined ? paid_amount_arg : 0);
-        const paid_amount = roundCurrency(Math.max(0, Number(rawPaid) || 0));
-
-        const rawDue = entry.due_amount !== undefined 
-          ? entry.due_amount 
-          : (due_amount_arg !== undefined ? due_amount_arg : Math.max(0, total_amount - paid_amount));
-        const due_amount = roundCurrency(Math.max(0, Number(rawDue) || 0));
+        const requestedPaid = roundCurrency(Math.max(0, Number(rawPaid) || 0));
+        // Paying more than the bill would take the extra out of the drawer with no supplier advance recorded.
+        if (requestedPaid > total_amount + 0.01) {
+          showToast(`Paid (Rs ${requestedPaid.toLocaleString()}) bill (Rs ${total_amount.toLocaleString()}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`, 'warning');
+          return false;
+        }
+        const paid_amount = roundCurrency(Math.min(requestedPaid, total_amount));
+        // Due always follows the bill, so paid + due can never exceed the bill total.
+        const due_amount = roundCurrency(Math.max(0, total_amount - paid_amount));
 
         const payment_mode = entry.payment_mode || payment_mode_arg || (paid_amount > 0 ? 'Cash' : undefined);
         const account_id = entry.account_id || account_id_arg;
@@ -1935,7 +2063,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return lockResult !== null ? lockResult : false;
   };
 
-  const addSale = async (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number): Promise<boolean> => {
+  const addSale = async (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number): Promise<string | false> => {
     try {
       const currentBusinessDate = getBusinessDate();
       if (businessDays.some(day => day.business_date === currentBusinessDate && day.status === 'Closed')) {
@@ -1971,8 +2099,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         }
       } else if (isShiftStale) {
-        showToast("Shift active nahi hai ya purani date ki hai! Sale karne se pehle active shift start karein.", "warning");
-        return false;
+        // If a shift was left unclosed overnight, automatically roll it over to today's business day
+        const staleActiveShift = (shiftToUse && shiftToUse.status === 'Active' && Boolean(shiftToUse.drawer_id) ? shiftToUse : null)
+          || shiftSessions.find(s =>
+            (s.user_id === (currentUser?.id || shiftToUse?.user_id) || currentUser?.role_id === 'role_super_admin') &&
+            Boolean(s.drawer_id) &&
+            ['Pending Acceptance', 'Active', 'Closing'].includes(s.status)
+          )
+          || shiftSessions.find(s =>
+            Boolean(s.drawer_id) &&
+            ['Pending Acceptance', 'Active', 'Closing'].includes(s.status)
+          );
+
+        if (staleActiveShift) {
+          const rolledShift = await rolloverStaleShift(staleActiveShift);
+          shiftToUse = rolledShift || staleActiveShift;
+        } else {
+          showToast("Shift active nahi hai! Sale karne se pehle active shift start karein.", "warning");
+          return false;
+        }
       }
 
       if (!shiftToUse || shiftToUse.status !== 'Active') {
@@ -1980,11 +2125,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return false;
       }
 
+      const emptyLine = cart.find((line: any) => !(Number(line.qty) > 0));
+      if (emptyLine) {
+        showToast(`"${emptyLine.name}" ki qty 0 hai. Qty likhein ya line hata dein.`, "warning");
+        return false;
+      }
+
       const saleId = generateUUID();
       const roundedSubtotal = roundCurrency(subtotal);
       const roundedDiscount = roundCurrency(discount);
       const roundedTotal = roundCurrency(total);
-      const actualPaid = roundCurrency(paidAmount !== undefined ? Math.max(0, paidAmount) : (paymentMode === 'Credit' ? 0 : roundedTotal));
+      // Money kept on the bill never exceeds its total; anything over is change handed back (cash_given / change_return).
+      const actualPaid = roundCurrency(Math.min(roundedTotal, paidAmount !== undefined ? Math.max(0, paidAmount) : (paymentMode === 'Credit' ? 0 : roundedTotal)));
       const dueAmount = roundCurrency(customer.id ? Math.max(0, roundedTotal - actualPaid) : 0);
       const receivedToPost = roundCurrency(Math.min(actualPaid, roundedTotal));
       const invoiceNumber = generateInvoiceNumber(settings.sales.invoicePrefix || 'INV-');
@@ -2001,6 +2153,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           : (shiftToUse?.account_id || shiftToUse?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || null);
       }
 
+      const snapshotCart = cart.map((line: any) => {
+        const catalogItem = items.find(i => i.id === (line.itemId || line.id) || i.name === line.name);
+        const baseCost = Number(line.cost_price || catalogItem?.cost_price || 0);
+        const vId = line.variantId;
+        const variant = vId && catalogItem ? (catalogItem.variants || []).find(v => v.id === vId) : undefined;
+        const factor = variant ? (Number(variant.quantity_in_base_unit) || 1) : (Number(line.stockDeduction) || 1);
+        // 4 decimals: a per-gram or per-ml cost rounded to paisa would turn into 0 or drift several percent.
+        const unitCost = Math.round((vId && vId !== 'loose' ? baseCost * factor : baseCost) * 10000) / 10000;
+        return { ...line, cost_price: unitCost > 0 ? unitCost : undefined };
+      });
+
       const saleData = {
         id: saleId,
         bill_number: invoiceNumber,
@@ -2014,7 +2177,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         due_amount: dueAmount,
         payment_mode: paymentMode,
         status: 'Completed' as const,
-        items: saleItemSnapshot(cart),
+        items: saleItemSnapshot(snapshotCart),
         business_day_id: shiftToUse.business_day_id,
         shift_session_id: shiftToUse.id,
         drawer_id: shiftToUse.drawer_id,
@@ -2041,8 +2204,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         sync_status: 'pending',
         created_at: saleDate
       };
-      await db.orders.put(orderRecord);
-      noteLocalWrite();
 
       const orderItems: LocalOrderItem[] = cart.map((item: any) => ({
         id: generateUUID(),
@@ -2057,10 +2218,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         sync_status: 'pending',
         created_at: saleDate
       }));
-      if (orderItems.length > 0) {
-        await db.order_items.bulkPut(orderItems);
-      }
+      // Bill and its lines are queued together, so the sync never sees a bill without lines.
+      await db.transaction('rw', db.orders, db.order_items, async () => {
+        await db.orders.put(orderRecord);
+        if (orderItems.length > 0) await db.order_items.bulkPut(orderItems);
+      });
+      noteLocalWrite();
 
+      // From here the bill is queued and WILL sync. A UI-state hiccup below must not report
+      // 'Sale Failed', or the cashier punches the same bill again.
+      try {
       // 2. Optimistic Update Local UI States (Immediate 0ms response)
       setSales(prev => [saleData, ...prev]);
 
@@ -2131,11 +2298,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setAccounts(prev => prev.map(a => a.id === receiptAccountId ? { ...a, balance: (a.balance || 0) + receivedToPost } : a));
       }
 
+      } catch (uiErr) {
+        console.warn('[POS] Sale queued; local display update failed:', uiErr);
+      }
+
       // 3. Trigger Non-blocking Background Sync
       syncService.notifyPendingChange().catch(err => console.warn('[POS Sync] Background sync notice:', err));
 
-      showToast("Sale Recorded Successfully", "success");
-      return true;
+      return invoiceNumber;
     } catch (err: any) {
       console.error(err);
       showToast("Sale Failed: " + getErrorMessage(err), "error");
@@ -2156,7 +2326,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const id = `item_${generateUUID()}`;
-      const { item_type, isActive, isSystem, category, sort_order, ...rest } = item;
+      const { item_type, isActive, isSystem, category, sort_order, stock: _stock, variant_stocks: _variantStocks, ...rest } = item as any;
       const dbItem = {
         id,
         type: item_type,
@@ -2192,7 +2362,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      const { item_type, isActive, isSystem, category, sort_order, ...rest } = updates;
+      // Stock only moves through adjust_item_stock. A catalog form holds a copy taken when it opened,
+      // so writing it back would erase every sale made since then.
+      const { item_type, isActive, isSystem, category, sort_order, stock: _stock, variant_stocks: _variantStocks, ...rest } = updates;
+      const current = items.find(i => i.id === id);
+      if (current && rest.unit !== undefined && String(rest.unit).trim() !== String(current.unit || '').trim()) {
+        const looseStock = Number((inventory.find(inv => inv.item_id === id)?.quantity) ?? (current as any).stock ?? 0);
+        const packedStock = Object.values(current.variant_stocks || {}).some(v => Math.abs(Number(v) || 0) > 0.0001);
+        if (Math.abs(looseStock) > 0.0001 || packedStock) {
+          showToast(`"${current.name}" ka stock abhi ${current.unit} mein hai. Base unit badalne se pehle stock 0 karein, warna purana stock naye unit mein ghalat parha jayega.`, "warning");
+          return false;
+        }
+      }
       const dbUpdates: any = { ...rest };
       if (item_type !== undefined) dbUpdates.type = item_type;
       if (isActive !== undefined) dbUpdates.is_active = isActive;
@@ -2263,7 +2444,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const allocateBulkMilk = async (itemsList: { allocationId: string, quantity: number }[], destination: string, details: any) => {
     const lockResult = await actionLock.runExclusive(`allocate_bulk_${destination}`, async () => {
       try {
-        const updatedAllocations = [...allocations]; 
+        const updatedAllocations = [...allocations];
+
+        // Milk that is not in the pool cannot be allocated: it would appear in counter stock from nowhere.
+        for (const item of itemsList) {
+          const pool = allocations.find(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
+          if (!pool) continue;
+          const left = pool.remaining_quantity !== null && pool.remaining_quantity !== undefined
+            ? Number(pool.remaining_quantity)
+            : Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0);
+          if (roundQuantity(Number(item.quantity) || 0) > roundQuantity(Math.max(0, left)) + 0.001) {
+            showToast(`Sirf ${roundQuantity(Math.max(0, left))} L doodh baqi hai, ${roundQuantity(Number(item.quantity) || 0)} L allocate nahi ho sakta.`, 'error');
+            return false;
+          }
+        }
 
         for (const item of itemsList) {
           const index = updatedAllocations.findIndex(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
@@ -2328,21 +2522,29 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
           if (destination === DestinationType.RETAIL) {
               const typeLower = (allocRecord.milk_type || 'Mixed').toLowerCase();
-              const itemDef = items.find(i => {
-                  const nameLower = i.name.toLowerCase();
-                  return nameLower.includes(typeLower) && nameLower.includes('milk');
-              }) || items.find(i => i.name.toLowerCase().includes('milk'));
+              // Counter milk is the litre-based system item for this milk type, never "Milk Cake" or a kg product.
+              const isLitreItem = (i: ItemDefinition) => ['l', 'ltr', 'liter', 'liters', 'litre', 'litres'].includes(String(i.unit || '').trim().toLowerCase());
+              const itemDef = items.find(i => i.id === `item_${typeLower}_milk`)
+                || items.find(i => isLitreItem(i) && i.name.toLowerCase().includes(typeLower) && i.name.toLowerCase().includes('milk'))
+                || items.find(i => i.id === 'item_mixed_milk')
+                || items.find(i => isLitreItem(i) && /milk/i.test(i.name) && !/(powder|shake|flavou?red|condensed|cake)/i.test(i.name));
 
               if (itemDef) {
-                  const { data: currItem } = await supabase.from('items').select('stock, cost_price').eq('id', itemDef.id).single();
-                  const currentStock = currItem ? currItem.stock : 0;
+                  const { data: currItem } = await supabase.from('items').select('stock, cost_price, variant_stocks, variants').eq('id', itemDef.id).single();
+                  const currentStock = currItem ? (Number(currItem.stock) || 0) : 0;
+                  const currentCost = currItem ? (Number(currItem.cost_price) || Number(itemDef.cost_price) || 0) : (Number(itemDef.cost_price) || 0);
                   const newStock = roundQuantity(currentStock + item.quantity);
-                  const incomingRate = allocRecord.average_rate || details?.rate || itemDef.cost_price;
+                  const incomingRate = Number(allocRecord.average_rate || details?.rate || currentCost) || 0;
+                  const weightedCost = averageCostAfterIntake(stockOnHandBase(currentStock, currItem?.variant_stocks, currItem?.variants), currentCost, item.quantity, item.quantity * incomingRate);
 
-                  await supabase.from('items').update({ 
-                    stock: newStock,
-                    cost_price: incomingRate || itemDef.cost_price 
-                  }).eq('id', itemDef.id);
+                  // Add the litres as a delta so a counter sale syncing meanwhile is not overwritten.
+                  const { error: counterStockError } = await adjustItemStock(itemDef.id, roundQuantity(item.quantity));
+                  if (counterStockError) throw counterStockError;
+                  if ((weightedCost || currentCost) > 0) {
+                    await supabase.from('items').update({ cost_price: weightedCost || currentCost }).eq('id', itemDef.id);
+                  }
+
+                  setItems(prev => prev.map(i => i.id === itemDef.id ? { ...i, stock: newStock, cost_price: weightedCost || currentCost } : i));
 
                   // Unified Stock Parity Update across items and inventory
                   syncItemAndInventoryStock(itemDef.id, newStock);
@@ -2478,9 +2680,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               const targetId = itemDef.id;
               const { data: currItem } = await supabase.from('items').select('stock, name').eq('id', targetId).single();
 
-              const currentStock = currItem ? roundQuantity(currItem.stock || 0) : roundQuantity(itemDef.cost_price || 0);
+              const currentStock = currItem ? roundQuantity(currItem.stock || 0) : roundQuantity((itemDef as any).stock || 0);
               const deductQty = roundQuantity(item.quantity || 0);
-              const newStock = roundQuantity(Math.max(0, currentStock - deductQty));
+              const newStock = roundQuantity(currentStock - deductQty);
 
               const { error: allocStockError } = await adjustItemStock(targetId, -deductQty);
               if (allocStockError) throw allocStockError;
@@ -2543,6 +2745,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
         }
 
+        // Completed stock is already on the shelf and may be sold; cancelling would return the milk a second time.
+        if (newStage === ProductionStage.CANCELLED && (batch.status === ProductionStage.COMPLETED || dbBatch?.status === ProductionStage.COMPLETED)) {
+          showToast("Completed batch cancel nahi ho sakta. Stock adjustment se correction karein.", "warning");
+          return false;
+        }
+
         const newLogs = [...(batch.logs || []), { stage: newStage, message: logMessage || `Moved to ${newStage}`, timestamp: new Date().toISOString() }];
         const updatePayload: any = { status: newStage, logs: newLogs };
 
@@ -2566,7 +2774,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
             // 3. Total actual production output in base units (e.g. 11.5 kg = 0.5kg loose + 11kg packaged)
             let actualTotalOutput = roundQuantity(looseQty + variantBaseKg);
-            if (actualTotalOutput <= 0) {
+            // An entered output of zero is a real result (spoilt batch); only a missing entry falls back to the estimate.
+            if (actualTotalOutput <= 0 && !outputData) {
                actualTotalOutput = roundQuantity(batch.quantity_output_estimated || (batch.quantity_input ? batch.quantity_input * 0.85 : 0));
             }
 
@@ -2577,24 +2786,35 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const recipeInputs = (costProduct?.recipe || []).map(ingredient => {
               const material = items.find(i => i.id === ingredient.item_id);
               const scale = costProduct?.recipe_base_quantity ? (batch.quantity_input || 0) / costProduct.recipe_base_quantity : 0;
-              return { item_id: ingredient.item_id, name: ingredient.item_name, quantity: roundQuantity(ingredient.quantity * scale), unit: ingredient.unit, unit_cost: material?.cost_price || 0 };
+              // Recipe amounts may be written in g/ml while the material is stocked in kg/L: deduct in the stock unit.
+              const recipeQty = (Number(ingredient.quantity) || 0) * scale;
+              const stockUnit = material?.unit || ingredient.unit;
+              const inStockUnit = ingredient.unit && stockUnit ? convertQuantity(recipeQty, ingredient.unit, stockUnit, settings.inventory?.customUnits || []) : recipeQty;
+              return { item_id: ingredient.item_id, name: material?.name || ingredient.item_name, quantity: roundQuantity(inStockUnit ?? recipeQty), unit: stockUnit, unit_cost: material?.cost_price || 0 };
             });
             const packagingInputs = variantsList.flatMap(v => {
               const variant = costProduct?.variants?.find(def => def.id === v.variantId);
               const material = items.find(i => i.id === variant?.packaging_item_id);
               return variant?.packaging_item_id ? [{ item_id: variant.packaging_item_id, name: material?.name || variant.packaging_item_name, quantity: roundQuantity((Number(v.count) || 0) * (variant.packaging_qty || 0)), unit: material?.unit, unit_cost: material?.cost_price || 0 }] : [];
             });
+
+            const milkCostTotal = roundCurrency((batch.quantity_input || 0) * (batch.input_cost_per_unit || batch.details?.input_cost_per_unit || 0));
+            const ingredientsCostTotal = roundCurrency(recipeInputs.reduce((s, r) => s + (r.quantity * (r.unit_cost || 0)), 0));
+            const packagingCostTotal = roundCurrency(packagingInputs.reduce((s, p) => s + (p.quantity * (p.unit_cost || 0)), 0));
+            const totalBatchCost = roundCurrency(milkCostTotal + ingredientsCostTotal + packagingCostTotal);
+            const producedUnitCost = actualTotalOutput > 0 ? roundCurrency(totalBatchCost / actualTotalOutput) : (costProduct?.cost_price || 180);
+
             updatePayload.details = {
               ...(batch.details || {}),
               output_breakdown: { loose_qty: hasVariants ? looseQty : actualTotalOutput, variants: variantsList },
               cost_snapshot: {
                 saved_at: updatePayload.completed_date,
-                milk_cost: (batch.quantity_input || 0) * (batch.input_cost_per_unit || batch.details?.input_cost_per_unit || 0),
+                milk_cost: milkCostTotal,
                 ingredients: recipeInputs,
                 packaging: packagingInputs,
-                // Existing production does not post these consumptions to stock.
-                // Preserve that fact so the profit report requests reconciliation.
-                materials_posted: ![...recipeInputs, ...packagingInputs].some(input => input.quantity > 0),
+                recipe_inputs: recipeInputs,
+                packaging_inputs: packagingInputs,
+                materials_posted: true,
                 external_conversion_cost: 0
               }
             };
@@ -2606,14 +2826,54 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const { data: existingLog } = await supabase.from('inventory_logs').select('id').eq('id', deterministicLogId).maybeSingle();
             
             if (!existingLog) {
+                // Deduct consumed recipe ingredients and packaging materials from inventory
+                const allMaterialInputs = [...recipeInputs, ...packagingInputs].filter(inp => inp.item_id && inp.quantity > 0);
+                const matTotalsById = new Map<string, { item_id: string; name: string; quantity: number }>();
+                for (const inp of allMaterialInputs) {
+                  const prev = matTotalsById.get(inp.item_id);
+                  if (prev) {
+                    prev.quantity = roundQuantity(prev.quantity + inp.quantity);
+                  } else {
+                    matTotalsById.set(inp.item_id, { item_id: inp.item_id, name: inp.name, quantity: roundQuantity(inp.quantity) });
+                  }
+                }
+                for (const mat of matTotalsById.values()) {
+                  const { data: matRow } = await supabase.from('items').select('stock, name').eq('id', mat.item_id).maybeSingle();
+                  if (matRow) {
+                    const oldMatStock = Number(matRow.stock) || 0;
+                    const newMatStock = roundQuantity(oldMatStock - mat.quantity);
+                    await adjustItemStock(mat.item_id, -mat.quantity);
+                    setInventory(prev => prev.map(i => i.item_id === mat.item_id ? { ...i, quantity: newMatStock } : i));
+                    setItems(prev => prev.map(i => i.id === mat.item_id ? { ...i, stock: newMatStock } : i));
+                    await supabase.from('inventory_logs').insert([{
+                      id: `log_prod_mat_${batch.id}_${mat.item_id}`,
+                      date: updatePayload.completed_date,
+                      item_id: mat.item_id,
+                      item_name: matRow.name || mat.name,
+                      old_quantity: oldMatStock,
+                      new_quantity: newMatStock,
+                      difference: -mat.quantity,
+                      reason: 'Production Usage',
+                      notes: `Consumed in Batch #${batch.batch_number} (${batch.product_name})`
+                    }]);
+                  }
+                }
+
                 // STOCK UPDATE in Inventory & Items
                 const batchProdName = (batch.product_name || '').trim().toLowerCase();
                 let item = items.find(i => i.name.trim().toLowerCase() === batchProdName) 
                         || items.find(i => i.name.toLowerCase().includes(batchProdName) || batchProdName.includes(i.name.toLowerCase()));
 
                 if (item) {
-                    const { data: currentItem } = await supabase.from('items').select('stock, variant_stocks').eq('id', item.id).single();
+                    const { data: currentItem } = await supabase.from('items').select('stock, variant_stocks, cost_price').eq('id', item.id).single();
                     const currentStock = currentItem ? (currentItem.stock || 0) : 0;
+                    const currentCostPrice = currentItem ? (Number(currentItem.cost_price) || Number(item.cost_price) || 0) : (Number(item.cost_price) || 0);
+
+                    // Same averaging pool as purchases: loose + packed piles, negatives count as zero.
+                    const existingTotalBase = stockOnHandBase(currentStock, currentItem?.variant_stocks, item?.variants);
+                    const newWacCost = (actualTotalOutput > 0 && totalBatchCost > 0)
+                      ? averageCostAfterIntake(existingTotalBase, currentCostPrice, actualTotalOutput, totalBatchCost)
+                      : currentCostPrice;
 
                     // Loose stock is updated with ONLY the loose quantity produced (if item has variants, loose stock only gets looseQty)
                     const looseToAdd = hasVariants ? looseQty : actualTotalOutput;
@@ -2631,6 +2891,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
                     const { error: prodStockError } = await adjustItemStock(item.id, looseToAdd, variantDeltas);
                     if (prodStockError) throw prodStockError;
+                    if (newWacCost > 0) {
+                      await supabase.from('items').update({ cost_price: newWacCost }).eq('id', item.id);
+                    }
                     const newVariantStocks = currentItem?.variant_stocks ? { ...currentItem.variant_stocks } : {};
                     Object.entries(variantDeltas).forEach(([vId, qty]) => {
                       newVariantStocks[vId] = roundQuantity((newVariantStocks[vId] || 0) + qty);
@@ -2638,7 +2901,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     
                     // Optimistic Stock Update for both inventory and items
                     setInventory(prev => prev.map(i => i.item_id === item!.id ? { ...i, quantity: newLooseStock, variant_stocks: newVariantStocks } : i));
-                    setItems(prev => prev.map(i => i.id === item!.id ? { ...i, stock: newLooseStock, variant_stocks: newVariantStocks } : i));
+                    setItems(prev => prev.map(i => i.id === item!.id ? { ...i, stock: newLooseStock, variant_stocks: newVariantStocks, cost_price: newWacCost || i.cost_price } : i));
 
                     const variantLogSummary = hasVariants
                       ? ` [Packaged: ${variantsList.map(v => `${v.count}x ${v.variant_name}`).join(', ')}]`
@@ -2654,7 +2917,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                         new_quantity: newLooseStock, 
                         difference: looseToAdd,
                         reason: 'Production', 
-                        notes: logNote.trim()
+                        notes: logNote.trim(),
+                        details: { loose_delta: looseToAdd, variant_deltas: variantDeltas, batch_id: batch.id }
                     }]);
                 } else {
                     // Auto-create item in items master if it doesn't exist yet
@@ -2671,8 +2935,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                         category: 'Dairy products',
                         type: ['Sale product', 'Dairy products'],
                         stock: hasVariants ? looseQty : actualTotalOutput,
-                        cost_price: 180,
-                        selling_price: 240,
+                        cost_price: producedUnitCost > 0 ? producedUnitCost : 180,
+                        selling_price: producedUnitCost > 0 ? roundCurrency(producedUnitCost * 1.25) : 240,
                         unit: 'kg',
                         is_active: true,
                         is_system: false,
@@ -2797,7 +3061,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return updateBatchStage(id, ProductionStage.CANCELLED, `Cancelled: ${reason}`);
   };
   
-  const returnPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Milk Return to Supplier'): Promise<boolean> => {
+  // True when an account is the till of the shift that is open right now.
+  const isActiveDrawerAccount = (accountId?: string | null) => {
+    if (!accountId || activeShiftSession?.status !== 'Active') return false;
+    return accountId === activeShiftSession.account_id
+      || accountId === activeShiftSession.drawer_id
+      || accountId === resolveDrawerAccountId(activeShiftSession.drawer_id);
+  };
+
+  const returnPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Milk Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
     try {
       const purchase = purchases.find(p => p.id === purchaseId);
       if (!purchase) {
@@ -2816,16 +3088,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         : totalPurchaseQty;
       
       const isFullReturn = actualReturnQty >= totalPurchaseQty;
-      const returnAmount = Math.round(actualReturnQty * (purchase.rate || 0));
+      const returnAmount = roundCurrency(actualReturnQty * (purchase.rate || 0));
       const remainingAcceptedQty = Number((totalPurchaseQty - actualReturnQty).toFixed(3));
-      const remainingAcceptedAmount = Math.round(remainingAcceptedQty * (purchase.rate || 0));
+      const remainingAcceptedAmount = roundCurrency(remainingAcceptedQty * (purchase.rate || 0));
 
       // 1. Check allocation status: Is enough unallocated milk available to return?
       const alloc = allocations.find(a => a.purchase_id === purchaseId || a.id === `alloc_${purchaseId}`);
       if (alloc) {
         const remainingUnallocated = alloc.remaining_quantity !== null && alloc.remaining_quantity !== undefined 
           ? alloc.remaining_quantity 
-          : alloc.original_quantity;
+          : (alloc.status === AllocationStatus.FULLY_ALLOCATED ? 0 : alloc.original_quantity);
         
         if (remainingUnallocated < actualReturnQty) {
           showToast(`Cannot return ${actualReturnQty} L: Only ${remainingUnallocated} L remains unallocated. (${alloc.allocated_quantity || 0} L was already allocated to processing).`, "error");
@@ -2833,22 +3105,24 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      const returnDate = new Date().toISOString().split('T')[0];
+      const returnDate = getTodayLocalDate();
       const returnTimestamp = new Date().toISOString();
 
       if (isFullReturn) {
         // Full Return
+        const prevPurDetails = ((purchase as any).details || {}) as any;
         const { error: purErr } = await supabase.from('purchases').update({
           status: 'Returned',
           return_reason: reason,
           returned_at: returnTimestamp,
           details: {
-            ...((purchase as any).details || {}),
+            ...prevPurDetails,
             returned: true,
-            returned_quantity: totalPurchaseQty,
+            returned_quantity: (Number(prevPurDetails.returned_quantity) || 0) + actualReturnQty,
             return_reason: reason,
             returned_at: returnTimestamp,
-            original_quantity: totalPurchaseQty
+            original_quantity: prevPurDetails.original_intake_quantity || prevPurDetails.original_quantity || totalPurchaseQty,
+            original_intake_quantity: prevPurDetails.original_intake_quantity || prevPurDetails.original_quantity || totalPurchaseQty
           }
         }).eq('id', purchaseId);
 
@@ -2872,7 +3146,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const origPaidForRemainder = Number(purchase.paid_amount || prevDetails.paid_amount || 0);
         const billBeforeReturn = Number(purchase.total_amount || 0) || (totalPurchaseQty * (purchase.rate || 0));
         const paidRatioForRemainder = billBeforeReturn > 0 ? origPaidForRemainder / billBeforeReturn : 0;
-        const cashAlreadyRefunded = roundCurrency(Math.min(origPaidForRemainder, returnAmount * paidRatioForRemainder));
+        const cashAlreadyRefunded = refundAs === 'khata' || !((purchase as any).details?.account_id || (purchase as any).account_id)
+          ? 0
+          : roundCurrency(Math.min(origPaidForRemainder, returnAmount * paidRatioForRemainder));
         const remainingPaid = roundCurrency(Math.max(0, origPaidForRemainder - cashAlreadyRefunded));
         const updatedDetails = {
           ...prevDetails,
@@ -2932,33 +3208,35 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const totalAmount = Number(purchase.total_amount || 0) || (totalPurchaseQty * (purchase.rate || 0));
       
       let cashRefundAmount = 0;
-      if (origPaidAmount > 0 && paymentAccountId) {
+      if (refundAs !== 'khata' && origPaidAmount > 0 && paymentAccountId) {
         const paidRatio = totalAmount > 0 ? (origPaidAmount / totalAmount) : 0;
         cashRefundAmount = roundCurrency(Math.min(origPaidAmount, returnAmount * paidRatio));
-        
+
         if (cashRefundAmount > 0) {
+          // A failed refund must stop here: continuing would lower the khata by less than the return.
           const { error: accRefundErr } = await adjustAccountBalance(paymentAccountId, cashRefundAmount);
-          if (!accRefundErr) {
-            setAccounts(prev => prev.map(a => a.id === paymentAccountId ? { ...a, balance: (a.balance || 0) + cashRefundAmount } : a));
-            
-            const btxRefundId = `btx_purret_${generateUUID()}`;
-            const btxRecord = {
-              id: btxRefundId,
-              account_id: paymentAccountId,
-              amount: cashRefundAmount,
-              date: returnTimestamp,
-              type: 'Income',
-              category: 'Purchase Return',
-              description: `Milk Return Cash Refund: ${suppliers.find(s => s.id === purchase.supplier_id)?.name || 'Gwala'} (${actualReturnQty}L)`,
-              reference_id: purchase.id,
-              business_day_id: activeShiftSession?.business_day_id,
-              shift_session_id: activeShiftSession?.id,
-              drawer_id: activeShiftSession?.drawer_id,
-              cashier_id: activeShiftSession?.user_id
-            };
-            await supabase.from('bank_transactions').insert([btxRecord]);
-            setBankTransactions(prev => [btxRecord as any, ...prev]);
-          }
+          if (accRefundErr) throw accRefundErr;
+          setAccounts(prev => prev.map(a => a.id === paymentAccountId ? { ...a, balance: (a.balance || 0) + cashRefundAmount } : a));
+
+          // Only cash received into the open drawer belongs to this shift's count.
+          const intoActiveDrawer = isActiveDrawerAccount(paymentAccountId);
+          const btxRecord = {
+            id: `btx_purret_${generateUUID()}`,
+            account_id: paymentAccountId,
+            amount: cashRefundAmount,
+            date: returnTimestamp,
+            type: 'Income',
+            category: 'Purchase Return',
+            description: `Milk Return Cash Refund: ${suppliers.find(s => s.id === purchase.supplier_id)?.name || 'Gwala'} (${actualReturnQty}L)`,
+            reference_id: purchase.id,
+            business_day_id: activeShiftSession?.business_day_id,
+            shift_session_id: intoActiveDrawer ? activeShiftSession?.id : null,
+            drawer_id: intoActiveDrawer ? activeShiftSession?.drawer_id : null,
+            cashier_id: activeShiftSession?.user_id
+          };
+          const { error: refundBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
+          if (refundBtxError) throw refundBtxError;
+          setBankTransactions(prev => [btxRecord as any, ...prev]);
         }
       }
 
@@ -2974,7 +3252,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       if (supplier) {
         // Log in supplier_transactions
-        await supabase.from('supplier_transactions').insert([{
+        const { error: milkReturnTxError } = await supabase.from('supplier_transactions').insert([{
           id: `stx_ret_${generateUUID()}`,
           supplier_id: supplier.id,
           date: returnTimestamp,
@@ -2987,6 +3265,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             account_id: paymentAccountId
           }
         }]);
+        if (milkReturnTxError) throw milkReturnTxError;
       }
 
       // 3. Log in inventory_logs
@@ -3018,7 +3297,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const returnMaterialPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Material Return to Supplier'): Promise<boolean> => {
+  const returnMaterialPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Material Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
     try {
       const mp = materialPurchases.find(p => p.id === purchaseId);
       if (!mp) {
@@ -3037,9 +3316,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         : totalPurchaseQty;
       
       const isFullReturn = actualReturnQty >= totalPurchaseQty;
-      const returnAmount = Math.round(actualReturnQty * (mp.rate || 0));
+      const returnAmount = roundCurrency(actualReturnQty * (mp.rate || 0));
       const remainingAcceptedQty = Number((totalPurchaseQty - actualReturnQty).toFixed(3));
-      const remainingAcceptedAmount = Math.round(remainingAcceptedQty * (mp.rate || 0));
+      const remainingAcceptedAmount = roundCurrency(remainingAcceptedQty * (mp.rate || 0));
 
       const returnTimestamp = new Date().toISOString();
       const prevDetails = ((mp as any).details || {}) as any;
@@ -3047,7 +3326,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const paymentAccountId = prevDetails.account_id || (mp as any).account_id;
       const totalAmount = Number(mp.total_amount || 0) || (totalPurchaseQty * (mp.rate || 0));
       const paidRatio = totalAmount > 0 ? (origPaidAmount / totalAmount) : 0;
-      const cashRefundAmount = origPaidAmount > 0 && paymentAccountId
+      // 'khata': the supplier keeps the money and lowers what we owe (or it becomes our advance).
+      const cashRefundAmount = refundAs !== 'khata' && origPaidAmount > 0 && paymentAccountId
         ? roundCurrency(Math.min(origPaidAmount, returnAmount * paidRatio))
         : 0;
       const remainingPaid = roundCurrency(Math.max(0, origPaidAmount - cashRefundAmount));
@@ -3064,11 +3344,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           returned: true,
           return_reason: reason,
           returned_at: returnTimestamp,
-          returned_quantity: totalPurchaseQty,
+          returned_quantity: (Number(prevDetails.returned_quantity) || 0) + actualReturnQty,
+          original_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
+          original_intake_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
           original_paid_amount: prevDetails.original_paid_amount ?? origPaidAmount,
           paid_amount: remainingPaid,
           account_id: paymentAccountId,
-          cash_refund: cashRefundAmount
+          cash_refund: roundCurrency((Number(prevDetails.cash_refund) || 0) + cashRefundAmount)
         };
         const { error: mpErr } = await supabase.from('material_purchases').update({
           status: 'Returned',
@@ -3088,7 +3370,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ...prevDetails,
           partial_returned: true,
           returned_quantity: (Number(prevDetails.returned_quantity) || 0) + actualReturnQty,
+          original_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
+          original_intake_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
           return_reason: reason,
+          base_quantity: roundQuantity(remainingAcceptedQty * (Number(prevDetails.conversion_factor) || 1)),
           returned_at: returnTimestamp,
           original_paid_amount: prevDetails.original_paid_amount ?? origPaidAmount,
           paid_amount: remainingPaid,
@@ -3118,10 +3403,30 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (itemDef) {
         const returnConversion = Number(prevDetails.conversion_factor) || 1;
         const actualReturnBaseQty = roundQuantity(actualReturnQty * returnConversion);
-        const newStock = roundQuantity(Math.max(0, (itemDef.stock || 0) - actualReturnBaseQty));
-        const { error: mpStockError } = await adjustItemStock(itemDef.id, -actualReturnBaseQty);
+        // Goods leave the pile they were stocked into: ready-made packs go back as packs.
+        const packId: string | undefined = prevDetails.variant_id && (itemDef.variants || []).some(v => v.id === prevDetails.variant_id) ? prevDetails.variant_id : undefined;
+        const invRow = inventory.find(inv => inv.item_id === itemDef.id);
+        const oldLoose = roundQuantity(invRow?.quantity ?? (itemDef as any).stock ?? 0);
+        const oldPack = packId ? roundQuantity((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0) : 0;
+        const { error: mpStockError } = packId
+          ? await adjustItemStock(itemDef.id, 0, { [packId]: -actualReturnQty })
+          : await adjustItemStock(itemDef.id, -actualReturnBaseQty);
         if (mpStockError) throw mpStockError;
-        setInventory(prev => prev.map(inv => inv.item_id === itemDef.id ? { ...inv, quantity: newStock } : inv));
+        setInventory(prev => prev.map(inv => inv.item_id !== itemDef.id ? inv : packId
+          ? { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) - actualReturnQty) } }
+          : { ...inv, quantity: roundQuantity((inv.quantity || 0) - actualReturnBaseQty) }));
+
+        // Take the returned goods out of the average at the rate they came in at.
+        const onHandBase = stockOnHandBase(oldLoose, invRow?.variant_stocks || itemDef.variant_stocks, itemDef.variants);
+        const returnedBaseRate = returnConversion > 0 ? (Number(mp.rate) || 0) / returnConversion : 0;
+        const leftBase = onHandBase - actualReturnBaseQty;
+        if (leftBase > 0.0005 && returnedBaseRate > 0 && Number(itemDef.cost_price) > 0) {
+          const revisedCost = Math.round(((onHandBase * Number(itemDef.cost_price) - actualReturnBaseQty * returnedBaseRate) / leftBase) * 10000) / 10000;
+          if (revisedCost > 0) {
+            await supabase.from('items').update({ cost_price: revisedCost }).eq('id', itemDef.id);
+            setItems(prev => prev.map(i => i.id === itemDef.id ? { ...i, cost_price: revisedCost } : i));
+          }
+        }
 
         // Log in inventory_logs
         await supabase.from('inventory_logs').insert([{
@@ -3129,39 +3434,44 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           date: returnTimestamp,
           item_id: itemDef.id,
           item_name: itemDef.name,
-          old_quantity: itemDef.stock || 0,
-          new_quantity: newStock,
-          difference: -actualReturnBaseQty,
+          old_quantity: packId ? oldPack : oldLoose,
+          new_quantity: packId ? roundQuantity(oldPack - actualReturnQty) : roundQuantity(oldLoose - actualReturnBaseQty),
+          difference: packId ? 0 : -actualReturnBaseQty,
           reason: AdjustmentReason.SUPPLY_RETURN,
-          notes: `${isFullReturn ? 'Full' : 'Partial'} Material Return to Supplier: ${actualReturnQty} ${mp.unit} (${reason})`
+          notes: `${isFullReturn ? 'Full' : 'Partial'} Material Return to Supplier: ${actualReturnQty} ${mp.unit} (${reason})`,
+          details: packId
+            ? { variant_id: packId, variant_delta: -actualReturnQty, loose_delta: 0, purchase_id: mp.id }
+            : { loose_delta: -actualReturnBaseQty, purchase_id: mp.id }
         }]);
       }
 
       // 3. Financial Reversal:
       // If material purchase was paid (spot cash/bank), refund the paid amount back to the financial account
       if (cashRefundAmount > 0 && paymentAccountId) {
+          // A failed refund must stop here: continuing would lower the khata by less than the return.
           const { error: accRefundErr } = await adjustAccountBalance(paymentAccountId, cashRefundAmount);
-          if (!accRefundErr) {
-            setAccounts(prev => prev.map(a => a.id === paymentAccountId ? { ...a, balance: (a.balance || 0) + cashRefundAmount } : a));
+          if (accRefundErr) throw accRefundErr;
+          setAccounts(prev => prev.map(a => a.id === paymentAccountId ? { ...a, balance: (a.balance || 0) + cashRefundAmount } : a));
 
-            const btxRefundId = `btx_mpret_${generateUUID()}`;
-            const btxRecord = {
-              id: btxRefundId,
-              account_id: paymentAccountId,
-              amount: cashRefundAmount,
-              date: returnTimestamp,
-              type: 'Income',
-              category: 'Purchase Return',
-              description: `Material Return Cash Refund: ${mp.item_name} (${actualReturnQty} ${mp.unit})`,
-              reference_id: mp.id,
-              business_day_id: activeShiftSession?.business_day_id,
-              shift_session_id: activeShiftSession?.id,
-              drawer_id: activeShiftSession?.drawer_id,
-              cashier_id: activeShiftSession?.user_id
-            };
-            await supabase.from('bank_transactions').insert([btxRecord]);
-            setBankTransactions(prev => [btxRecord as any, ...prev]);
-          }
+          // Only cash received into the open drawer belongs to this shift's count.
+          const intoActiveDrawer = isActiveDrawerAccount(paymentAccountId);
+          const btxRecord = {
+            id: `btx_mpret_${generateUUID()}`,
+            account_id: paymentAccountId,
+            amount: cashRefundAmount,
+            date: returnTimestamp,
+            type: 'Income',
+            category: 'Purchase Return',
+            description: `Material Return Cash Refund: ${mp.item_name} (${actualReturnQty} ${mp.unit})`,
+            reference_id: mp.id,
+            business_day_id: activeShiftSession?.business_day_id,
+            shift_session_id: intoActiveDrawer ? activeShiftSession?.id : null,
+            drawer_id: intoActiveDrawer ? activeShiftSession?.drawer_id : null,
+            cashier_id: activeShiftSession?.user_id
+          };
+          const { error: mpRefundBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
+          if (mpRefundBtxError) throw mpRefundBtxError;
+          setBankTransactions(prev => [btxRecord as any, ...prev]);
       }
 
       // Reverse supplier pending balance by remaining credit portion
@@ -3178,7 +3488,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       if (mp.supplier_id) {
         const supplier = suppliers.find(s => s.id === mp.supplier_id);
-        await supabase.from('supplier_transactions').insert([{
+        const { error: mpReturnTxError } = await supabase.from('supplier_transactions').insert([{
           id: `stx_mpret_${generateUUID()}`,
           supplier_id: supplier ? supplier.id : mp.supplier_id,
           date: returnTimestamp,
@@ -3191,6 +3501,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             account_id: paymentAccountId
           }
         }]);
+        if (mpReturnTxError) throw mpReturnTxError;
       }
 
       showToast(
@@ -3216,7 +3527,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       try {
           const { supplier_id, date, items: cartItems, purchase_type, paid_amount, payment_mode, account_id } = data;
           const totalBill = roundCurrency(cartItems.reduce((sum: number, item: any) => sum + (Number(item.quantity) || 0) * (Number(item.rate) || 0), 0));
-          const effectivePaid = roundCurrency(paid_amount !== undefined ? paid_amount : (!supplier_id ? totalBill : 0));
+          const requestedPaid = roundCurrency(paid_amount !== undefined ? Math.max(0, Number(paid_amount) || 0) : (!supplier_id ? totalBill : 0));
+          if (requestedPaid > totalBill + 0.01) {
+            throw new Error(`Paid (Rs ${requestedPaid.toLocaleString()}) bill (Rs ${totalBill.toLocaleString()}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`);
+          }
+          const effectivePaid = roundCurrency(Math.min(requestedPaid, totalBill));
 
           let resolvedTargetAccId: string | undefined = undefined;
           if (effectivePaid > 0) {
@@ -3238,6 +3553,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const share = totalBill > 0 ? roundCurrency((lineTotal / totalBill) * effectivePaid) : 0;
             paidRemaining = roundCurrency(paidRemaining - share);
             return share;
+          });
+
+          // A purchase line bought in a ready-made pack unit (not a dozen/tray view of loose stock).
+          const packVariants: (ItemVariant | undefined)[] = cartItems.map((item: any) => {
+            const def = items.find(i => i.id === item.item_id);
+            const unitName = String(item.unit || '').trim().toLowerCase();
+            if (!def || !unitName || unitName === String(def.unit || '').trim().toLowerCase()) return undefined;
+            return (def.variants || []).find(v => v.isActive !== false && v.deduct_from_base !== true && String(v.name || '').trim().toLowerCase() === unitName);
           });
 
           const createdMaterialIds: string[] = [];
@@ -3274,36 +3597,69 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     account_id: linePaid > 0 ? resolvedTargetAccId : undefined,
                     conversion_factor: Number(item.conversion_factor) || 1,
                     base_quantity: roundQuantity((Number(item.quantity) || 0) * (Number(item.conversion_factor) || 1)),
-                    base_unit: item.base_unit || item.unit
+                    base_unit: item.base_unit || item.unit,
+                    variant_id: packVariants[index]?.id,
+                    stocked_as: packVariants[index] ? 'packs' : 'loose'
                   }
               };
 
               const { paid_amount: _linePaid, due_amount: _lineDue, ...materialRow } = mpEntry;
-              await supabase.from('material_purchases').insert([materialRow]);
+              // Read the item first: if it cannot be read, nothing for this line is written yet, and a
+              // failed read must never be treated as "0 stock, 0 cost" (that overwrote the average cost).
+              const { data: currItem, error: currItemError } = await supabase.from('items').select('stock, cost_price, variant_stocks, variants').eq('id', item.item_id).single();
+              if (currItemError || !currItem) throw new Error(`${item.item_name}: item ka stock nahi parha ja saka. Bill save nahi hua.`);
+
+              const { error: mpInsertError } = await supabase.from('material_purchases').insert([materialRow]);
+              if (mpInsertError) throw mpInsertError;
               setMaterialPurchases(prev => [mpEntry as any, ...prev]);
 
-              const { data: currItem } = await supabase.from('items').select('stock').eq('id', item.item_id).single();
-              const currentStock = currItem ? roundQuantity(currItem.stock) : 0;
+              const currentStock = roundQuantity(currItem.stock);
+              const currentCostPrice = Number(currItem.cost_price) || 0;
               const conversion = Number(item.conversion_factor) || 1;
               const stockIncrease = roundQuantity((Number(item.quantity) || 0) * conversion);
-              const newStock = roundQuantity(currentStock + stockIncrease);
+              // Cost is averaged over everything on hand (loose + packed piles), the same pool production uses.
+              const onHandBase = stockOnHandBase(currentStock, currItem?.variant_stocks, currItem?.variants);
+              const newWacCost = averageCostAfterIntake(onHandBase, currentCostPrice, stockIncrease, lineTotal);
+              const packVariantId: string | undefined = packVariants[index]?.id;
+              const packQty = roundQuantity(Number(item.quantity) || 0);
+              const currentPackStock = packVariantId ? roundQuantity(Number(currItem?.variant_stocks?.[packVariantId]) || 0) : 0;
+              const newStock = packVariantId ? currentStock : roundQuantity(currentStock + stockIncrease);
 
-              const { error: mpInStockError } = await adjustItemStock(item.item_id, stockIncrease);
+              // A ready-made pack (e.g. Rusk 500g) is stocked as packs, because that is the pile the POS sells from.
+              const { error: mpInStockError } = packVariantId
+                ? await adjustItemStock(item.item_id, 0, { [packVariantId]: packQty })
+                : await adjustItemStock(item.item_id, stockIncrease);
               if (mpInStockError) throw mpInStockError;
-              setInventory(prev => prev.map(i => i.item_id === item.item_id ? { ...i, quantity: newStock } : i));
+              if (newWacCost > 0) {
+                await supabase.from('items').update({ cost_price: newWacCost }).eq('id', item.item_id);
+              }
+              setInventory(prev => prev.map(i => i.item_id !== item.item_id ? i : packVariantId
+                ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packVariantId]: roundQuantity(currentPackStock + packQty) } }
+                : { ...i, quantity: newStock }));
+              setItems(prev => prev.map(i => i.id !== item.item_id ? i : {
+                ...i,
+                ...(packVariantId
+                  ? { variant_stocks: { ...(i.variant_stocks || {}), [packVariantId]: roundQuantity(currentPackStock + packQty) } }
+                  : { stock: newStock }),
+                cost_price: newWacCost || i.cost_price
+              }));
 
+              const unitNote = conversion !== 1 ? ` (${item.quantity} ${item.unit} = ${stockIncrease} base units${packVariantId ? ', stocked as packs' : ''})` : '';
               await supabase.from('inventory_logs').insert([{
                   id: `log_purch_${generateUUID()}`,
                   date: new Date().toISOString(),
                   item_id: item.item_id, 
                   item_name: item.item_name, 
-                  old_quantity: currentStock,
-                  new_quantity: newStock, 
-                  difference: stockIncrease, 
+                  old_quantity: packVariantId ? currentPackStock : currentStock,
+                  new_quantity: packVariantId ? roundQuantity(currentPackStock + packQty) : newStock, 
+                  difference: packVariantId ? 0 : stockIncrease, 
                   reason: 'Purchase', 
                   notes: supplier_id 
-                    ? `Vendor: ${supplier_id}${conversion > 1 ? ` (${item.quantity} ${item.unit} = ${stockIncrease} base units)` : ''}`
-                    : `Spot Cash Purchase${conversion > 1 ? ` (${item.quantity} ${item.unit} = ${stockIncrease} base units)` : ''}`
+                    ? `Vendor: ${supplier_id}${unitNote}`
+                    : `Spot Cash Purchase${unitNote}`,
+                  details: packVariantId
+                    ? { variant_id: packVariantId, variant_delta: packQty, loose_delta: 0, purchase_id: materialId }
+                    : { loose_delta: stockIncrease, purchase_id: materialId }
               }]);
           }
 
@@ -3311,13 +3667,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const unpaid = roundCurrency(Math.max(0, totalBill - effectivePaid));
 
           if (supplier_id && unpaid > 0) {
-              const { data: sup } = await supabase.from('suppliers').select('balance').eq('id', supplier_id).single();
-              if (sup) {
-                  const newBal = roundCurrency((sup.balance || 0) + unpaid);
-                  setSuppliers(prev => prev.map(s => s.id === supplier_id ? { ...s, pending_balance: newBal, balance: newBal } : s));
-                  const { error: supUnpaidError } = await adjustSupplierBalance(supplier_id, unpaid);
-                  if (supUnpaidError) throw supUnpaidError;
-              }
+              const { data: newSupplierBalance, error: supUnpaidError } = await adjustSupplierBalance(supplier_id, unpaid);
+              if (supUnpaidError) throw supUnpaidError;
+              const newBal = roundCurrency(Number(newSupplierBalance ?? 0));
+              setSuppliers(prev => prev.map(s => s.id === supplier_id ? { ...s, pending_balance: newBal, balance: newBal } : s));
           }
 
           if (effectivePaid > 0 && resolvedTargetAccId) {
@@ -3348,27 +3701,36 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 drawer_id: activeDrawerId,
                 cashier_id: activeShiftSession?.user_id
               };
-              await supabase.from('bank_transactions').insert([btxRecord]);
+              const { error: mpBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
+              if (mpBtxError) throw mpBtxError;
               setBankTransactions(prev => [btxRecord as any, ...prev]);
             }
           }
 
-          // If payment was made on the spot for a linked supplier, record payment in supplier_transactions
+          // If payment was made on the spot for a linked supplier, record payment in supplier_transactions.
+          // supplier_transactions keeps mode/note/account in `details` (the table has no such columns,
+          // so the old top-level insert was rejected). purchase_ids links the one bill payment to every
+          // line, so the statement does not invent a second spot payment per line.
           if (supplier_id && effectivePaid > 0) {
             const stxId = `stx_mp_${generateUUID()}`;
             const normalizedMpDate = normalizeTransactionTimestamp(date);
-            const stxRecord = {
+            const stxDetails = {
+              mode: payment_mode || 'Cash',
+              note: `Spot Payment for Material Purchase (${cartItems.map((i: any) => `${i.quantity} ${i.unit || ''} ${i.item_name}`).join(', ')})`,
+              account_id: resolvedTargetAccId,
+              purchase_ids: createdMaterialIds,
+              line_paid: Object.fromEntries(createdMaterialIds.map((id, index) => [id, linePaids[index]]))
+            };
+            const { error: stxError } = await supabase.from('supplier_transactions').insert([{
               id: stxId,
               supplier_id,
               date: normalizedMpDate,
               type: 'Payment',
               amount: effectivePaid,
-              mode: payment_mode || 'Cash',
-              note: `Spot Payment for Material Purchase (${cartItems.map((i: any) => `${i.quantity} ${i.unit || ''} ${i.item_name}`).join(', ')})`,
-              account_id: resolvedTargetAccId
-            };
-            await supabase.from('supplier_transactions').insert([stxRecord]);
-            setSupplierTransactions(prev => [stxRecord as any, ...prev]);
+              details: stxDetails
+            }]);
+            if (stxError) throw stxError;
+            setSupplierTransactions(prev => [{ id: stxId, supplier_id, date: normalizedMpDate, type: 'Payment', amount: effectivePaid, ...stxDetails, details: stxDetails } as any, ...prev]);
           }
 
           fetchData();
@@ -3390,6 +3752,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     accountId?: string
   ) => { 
       try {
+        if (date && isDayLocked(date)) {
+          showToast('Ye din band (locked) hai. Payment aaj ki tareekh par darj karein.', 'error');
+          return false;
+        }
+        if (!(Number(amount) > 0)) {
+          showToast('Amount 0 se zyada honi chahiye.', 'warning');
+          return false;
+        }
         const supplier = suppliers.find(s => s.id === supplierId);
         if (supplier) {
             const isCashMode = !mode || mode.toLowerCase().includes('cash');
@@ -3489,7 +3859,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
          phone,
          balance: pending_balance || 0,
          is_active: isActive !== undefined ? isActive : true,
-         data: extraData
+         data: { ...extraData, opening_balance: pending_balance || 0 }
       };
       const { error } = await supabase.from('suppliers').insert([dbSupplier]);
       if (error) {
@@ -3507,14 +3877,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const updateSupplier = async (id: string, u: Partial<Supplier>) => {
     try {
-      // Optimistic local state update so UI updates immediately
-      setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...u } : s));
+      // The balance is a running ledger total moved only by delta RPCs; a profile edit never writes it.
+      const { name, phone, pending_balance: _balance, balance: _rawBalance, isActive, ...extraData } = u as any;
+      setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...extraData, ...(name !== undefined ? { name } : {}), ...(phone !== undefined ? { phone } : {}), ...(isActive !== undefined ? { isActive } : {}) } : s));
 
-      const { name, phone, pending_balance, isActive, ...extraData } = u;
       const dbUpdates: any = {};
       if (name !== undefined) dbUpdates.name = name;
-      if (phone !== undefined) dbUpdates.phone = phone !== undefined ? (phone || '') : undefined;
-      if (pending_balance !== undefined) dbUpdates.balance = pending_balance;
+      if (phone !== undefined) dbUpdates.phone = phone || '';
       if (isActive !== undefined) dbUpdates.is_active = isActive;
       
       if (Object.keys(extraData).length > 0) {
@@ -3576,43 +3945,35 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deleteSupplierTransaction = async (id: string): Promise<boolean> => {
     try {
       const tx = supplierTransactions.find(t => t.id === id);
-      if (tx) {
-        const supp = suppliers.find(s => s.id === tx.supplier_id);
-        if (supp) {
-          // If deleted transaction was a Payment/Advance, supplier balance increases back
-          const balanceReversal = (tx.type === 'Payment' || tx.type === 'Advance') ? tx.amount : -tx.amount;
-          const newBalance = (supp.pending_balance || 0) + balanceReversal;
-          const { error: suppRevError } = await adjustSupplierBalance(tx.supplier_id, balanceReversal);
-          if (suppRevError) throw suppRevError;
-          setSuppliers(prev => prev.map(s => s.id === tx.supplier_id ? { ...s, pending_balance: newBalance } : s));
-        }
-
-        // If it was a Payment/Advance, refund the money back to the financial account
-        if (tx.type === 'Payment' || tx.type === 'Advance') {
-          const isCashMode = !tx.mode || tx.mode.toLowerCase().includes('cash');
-          const sourceAccountId = tx.account_id || (
-            isCashMode
-              ? (settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id)
-              : (settings.financial?.defaultDigitalAccountId || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id)
-          );
-
-          if (sourceAccountId) {
-            const acc = accounts.find(a => a.id === sourceAccountId);
-            if (acc) {
-              const { error: accRevError } = await adjustAccountBalance(sourceAccountId, tx.amount);
-              if (accRevError) throw accRevError;
-            }
-            await supabase.from('bank_transactions').delete().eq('reference_id', id);
-          }
-        }
+      if (tx && tx.date && isDayLocked(tx.date)) {
+        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        return false;
       }
 
-      await supabase.from('supplier_transactions').delete().eq('id', id);
+      // Supplier balance, the paying account and the bank row are reversed together on the server, and
+      // only into the account the money actually left (a waiver/discount touches no account).
+      const { data: result, error: delError } = await supabase.rpc('delete_supplier_transaction_effects', { p_tx_id: id });
+      if (delError) throw delError;
+
+      if (tx) {
+        const reversedAccountId = (result as any)?.account_id as string | undefined;
+        setSuppliers(prev => prev.map(s => {
+          if (s.id !== tx.supplier_id) return s;
+          const next = roundCurrency((s.pending_balance || 0) + Number(tx.amount || 0));
+          return { ...s, pending_balance: next, balance: next };
+        }));
+        if (reversedAccountId) {
+          setAccounts(prev => prev.map(a => a.id === reversedAccountId ? { ...a, balance: roundCurrency((a.balance || 0) + Number(tx.amount || 0)) } : a));
+        }
+      }
+      setBankTransactions(prev => prev.filter(b => b.reference_id !== id && b.id !== `btx_${id}`));
       setSupplierTransactions(prev => prev.filter(t => t.id !== id));
       fetchData();
       return true;
     } catch (e) {
       console.error("deleteSupplierTransaction error:", e);
+      showToast('Entry delete nahi hui: ' + getErrorMessage(e), 'error');
+      fetchData();
       return false;
     }
   };
@@ -3625,36 +3986,39 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { data: currentItem, error } = await supabase.from('items').select('*').eq('id', invItem.item_id).single();
         if (error || !currentItem) return false;
 
-        let diff = 0;
-        let oldQty = 0;
-        let updatePayload = {};
-        let logItemName = invItem.name;
-
-        if (variantId && variantId !== 'loose') {
-            const variantStocks = currentItem.variant_stocks || {};
-            oldQty = variantStocks[variantId] || 0;
-            diff = newQty - oldQty;
-            const newVariantStocks = { ...variantStocks, [variantId]: newQty };
-            updatePayload = { variant_stocks: newVariantStocks };
-            
-            // Optimistic Update
-            setInventory(prev => prev.map(i => i.item_id === invItem.item_id ? { ...i, variant_stocks: newVariantStocks } : i));
-        } else {
-            oldQty = currentItem.stock;
-            diff = newQty - oldQty;
-            updatePayload = { stock: newQty };
-            
-            // Optimistic Update
-            setInventory(prev => prev.map(i => i.item_id === invItem.item_id ? { ...i, quantity: newQty } : i));
+        const variantDef = variantId && variantId !== 'loose' ? (currentItem.variants || []).find((v: any) => v.id === variantId) : undefined;
+        if (variantId && variantId !== 'loose' && variantDef?.deduct_from_base === true) {
+          showToast(`${variantDef.name} main stock ka hissa hai, iska alag count nahi hota. ${currentItem.unit || 'base unit'} mein loose stock count karein.`, "warning");
+          return false;
         }
+        const isPack = Boolean(variantId && variantId !== 'loose');
+        const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
+        const oldQty = isPack ? roundQuantity(Number((currentItem.variant_stocks || {})[variantId]) || 0) : oldLoose;
+        const diff = roundQuantity((Number(newQty) || 0) - oldQty);
+        if (diff === 0) return true;
 
-        const { error: updateError } = await supabase.from('items').update(updatePayload).eq('id', invItem.item_id);
+        // Move by the difference so a sale syncing at the same moment is not overwritten.
+        const { error: updateError } = isPack
+          ? await adjustItemStock(invItem.item_id, 0, { [variantId]: diff })
+          : await adjustItemStock(invItem.item_id, diff);
         if (updateError) throw updateError;
 
+        setInventory(prev => prev.map(i => i.item_id !== invItem.item_id ? i : isPack
+          ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [variantId]: roundQuantity((i.variant_stocks?.[variantId] || 0) + diff) } }
+          : { ...i, quantity: roundQuantity((i.quantity || 0) + diff) }));
+
+        const auditNote = isPack
+          ? `Variant Audit: ${variantDef?.name || variantId} ${oldQty} → ${roundQuantity(oldQty + diff)} packs`
+          : 'Loose Stock Audit';
+        // Loose columns stay loose; a pack count change rides in details so reports post it to the pack pile.
         await supabase.from('inventory_logs').insert([{ 
             id: `log_${generateUUID()}`, date: new Date().toISOString(), item_id: invItem.item_id, 
-            item_name: logItemName, old_quantity: oldQty, new_quantity: newQty, difference: diff, 
-            reason, notes: notes || (variantId !== 'loose' ? 'Variant Audit' : 'Loose Stock Audit')
+            item_name: invItem.name,
+            old_quantity: oldLoose,
+            new_quantity: isPack ? oldLoose : roundQuantity(oldLoose + diff),
+            difference: isPack ? 0 : diff, 
+            reason, notes: notes ? `${notes} (${auditNote})` : auditNote,
+            details: isPack ? { variant_id: variantId, variant_delta: diff, loose_delta: 0 } : { loose_delta: diff }
         }]);
         
         fetchData();
@@ -3683,8 +4047,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         showToast("This sale has already been fully returned", "warning");
         return false;
       }
+      if (await isSaleUnsynced(sale.id)) {
+        showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad return karein.', 'error');
+        return false;
+      }
 
-      const returnDate = new Date().toISOString().split('T')[0];
+      // The bill was really paid online: fix its mode first, so the refund leaves the right account.
+      if (correctOriginalSaleMode && sale.payment_mode === 'Cash') {
+        const corrected = await updateSalePaymentMode(sale.id, 'Online');
+        if (!corrected) return false;
+      }
+
       const returnTimestamp = new Date().toISOString();
       const isReplacement = returnAction === 'replace';
       const isSpoiledScrap = restockOption === 'scrap_spoilage' || returnReason.toLowerCase().includes('spoil') || returnReason.toLowerCase().includes('defect') || returnReason.toLowerCase().includes('kharab');
@@ -3704,16 +4077,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const calculatedRefundAmount = isReplacement ? 0 : proportionalRefund(sale, itemsToReturn);
       const refundSplit = splitRefund(sale, calculatedRefundAmount);
 
-      // Check if this is a partial return or full return
-      const totalOriginalQty = (sale.items || []).reduce((sum, it) => sum + (it.qty || 0), 0);
-      const previouslyReturnedQty = ((sale as any).returned_items || []).reduce((sum: number, it: any) => sum + (it.qty || 0), 0);
-      const currentReturningQty = itemsToReturn.reduce((sum, it) => sum + (it.qty || 0), 0);
-      const isFullReturn = (previouslyReturnedQty + currentReturningQty) >= totalOriginalQty;
+      // Full return = every sold line came back. Lines are compared one by one in their own sold unit,
+      // so 6 pcs back from a 1 Dozen bill never count as the dozen. A replacement is not a return.
+      const existingReturnedItems: any[] = (sale as any).returned_items || (sale as any).details?.returned_items || [];
+      const lineKey = (it: any) => `${it.itemId || it.id || it.name}|${it.variantId || ''}`;
+      const soldByLine = new Map<string, number>();
+      (sale.items || []).forEach((it: any) => soldByLine.set(lineKey(it), (soldByLine.get(lineKey(it)) || 0) + (Number(it.qty) || 0)));
+      const backByLine = new Map<string, number>();
+      [...existingReturnedItems.filter(it => it.action !== 'replace'), ...(isReplacement ? [] : itemsToReturn)]
+        .forEach((it: any) => backByLine.set(lineKey(it), (backByLine.get(lineKey(it)) || 0) + (Number(it.qty) || 0)));
+      const isFullReturn = soldByLine.size > 0 && [...soldByLine.entries()].every(([key, sold]) => (backByLine.get(key) || 0) >= sold - 0.0005);
 
-      const newStatus = isFullReturn ? 'Returned' : 'Partially Returned';
+      // A replacement on its own leaves the bill as it was: nothing came back as money or stock.
+      const anyRefunded = [...backByLine.values()].some(q => q > 0);
+      const newStatus = isFullReturn ? 'Returned' : (anyRefunded ? 'Partially Returned' : (sale.status || 'Completed'));
       const accumulatedRefundAmount = ((sale.refund_amount || 0) + calculatedRefundAmount);
 
-      const existingReturnedItems = (sale as any).returned_items || [];
       const updatedReturnedItems = [
         ...existingReturnedItems,
         ...itemsToReturn.map(it => ({
@@ -3725,103 +4104,101 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }))
       ];
 
-      // 1. Update sale record status in DB & local state
-      const saleUpdatePayload: any = {
-        status: newStatus,
-        return_reason: `${returnReason} (${isReplacement ? 'Replacement' : (isSpoiledScrap ? 'Spoiled' : 'Restocked')})`,
-        returned_at: returnTimestamp,
-        refund_amount: accumulatedRefundAmount,
-        details: {
-          ...((sale as any).details || {}),
-          return_type: returnAction,
-          restock_action: restockOption,
-          returned_items: updatedReturnedItems
-        }
-      };
+      const returnReasonText = `${returnReason} (${isReplacement ? 'Replacement' : (isSpoiledScrap ? 'Spoiled' : 'Restocked')})`;
+      const newReturnedItems = itemsToReturn.map(it => ({
+        ...it,
+        returnDate: returnTimestamp,
+        reason: returnReason,
+        action: returnAction,
+        restock: restockOption
+      }));
 
-      const { error: saleErr } = await supabase.from('sales').update(saleUpdatePayload).eq('id', saleId);
-      if (saleErr) throw saleErr;
+      // Everything below is collected first and applied by process_sales_return in ONE locked server
+      // transaction (bill, stock, logs, khata, refund, drawer event). Local state follows on success.
+      const stockMoves: Array<{ item_id: string; variant_id: string | null; delta: number }> = [];
+      const inventoryLogRows: any[] = [];
+      const localStockMoves: Array<() => void> = [];
 
-      setSales(prev => prev.map(s => s.id === saleId ? {
-        ...s,
-        status: newStatus as any,
-        return_reason: saleUpdatePayload.return_reason,
-        returned_at: returnTimestamp,
-        refund_amount: accumulatedRefundAmount,
-        return_type: returnAction,
-        restock_action: restockOption,
-        returned_items: updatedReturnedItems
-      } : s));
-
-      // 2. Inventory Handling for Returned Items
+      // 1-2. Inventory Handling for Returned Items
+      // Each line goes back to the pile it left, sized as it was sold: the bill's own snapshot wins over today's catalog.
       for (const item of itemsToReturn) {
         const itemId = item.itemId;
-        const qty = item.qty || 1;
+        const qty = Number(item.qty) || 0;
+        if (qty <= 0) continue;
         const variantId = item.variantId;
         const itemDef = items.find(i => i.id === itemId || i.name.toLowerCase() === item.name.toLowerCase());
 
         if (itemDef) {
-          const returnVariant = variantId ? (itemDef.variants || []).find(v => v.id === variantId) : undefined;
-          const returnFromBase = !returnVariant || returnVariant.deduct_from_base === true;
-          const returnQty = returnFromBase ? roundQuantity(qty * (Number(returnVariant?.quantity_in_base_unit) || 1)) : qty;
-          if (isReplacement) {
-            // Option B: Exchange / Replacement -> Deduct fresh stock
-            const currentStock = roundQuantity(itemDef.stock || 0);
-            const newStock = roundQuantity(Math.max(0, currentStock - returnQty));
-            const { error: repStockError } = await adjustItemStock(itemDef.id, -returnQty);
-            if (repStockError) throw repStockError;
-            setInventory(prev => prev.map(inv => inv.item_id === itemDef.id ? { ...inv, quantity: newStock } : inv));
+          const soldLine: any = (sale.items || []).find((l: any) => (l.itemId || l.id) === itemDef.id && (l.variantId || undefined) === (variantId || undefined)) || {};
+          const given: any = item;
+          const move = saleLineStock({
+            qty,
+            variantId,
+            isLoose: given.isLoose ?? soldLine.isLoose,
+            stockDeduction: given.stockDeduction ?? soldLine.stockDeduction,
+            deductFromBase: given.deductFromBase ?? soldLine.deductFromBase
+          }, itemDef);
+          const returnFromBase = move.fromBase;
+          const packId = move.variantId;
+          const returnQty = move.stockQty;
+          const invRow = inventory.find(inv => inv.item_id === itemDef.id);
+          const currentStock = roundQuantity(invRow?.quantity ?? (itemDef as any).stock ?? 0);
+          const currentVarStock = packId ? roundQuantity((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0) : 0;
+          const packDetails = (delta: number) => packId ? { variant_id: packId, variant_delta: delta, loose_delta: 0 } : { loose_delta: delta };
+          const applyLocal = (delta: number) => setInventory(prev => prev.map(inv => {
+            if (inv.item_id !== itemDef.id) return inv;
+            if (packId) return { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) + delta) } };
+            return { ...inv, quantity: roundQuantity((inv.quantity || 0) + delta) };
+          }));
+          const lineLabel = packId ? `${qty} x ${item.name}` : `${returnQty} ${itemDef.unit || ''}`.trim();
 
-            await supabase.from('inventory_logs').insert([{
+          if (isReplacement) {
+            // Option B: Exchange / Replacement -> the fresh unit leaves the same pile the sale used
+            stockMoves.push({ item_id: itemDef.id, variant_id: packId || null, delta: -returnQty });
+            localStockMoves.push(() => applyLocal(-returnQty));
+
+            inventoryLogRows.push(...[{
               id: `log_rep_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
-              item_name: item.name || itemDef.name,
-              old_quantity: currentStock,
-              new_quantity: newStock,
-              difference: -returnQty,
+              item_name: itemDef.name,
+              old_quantity: packId ? currentVarStock : currentStock,
+              new_quantity: roundQuantity((packId ? currentVarStock : currentStock) - returnQty),
+              difference: packId ? 0 : -returnQty,
               reason: AdjustmentReason.SPOILAGE,
-              notes: `Customer Replacement: ${qty} ${itemDef.unit || 'L'} spoiled milk returned and fresh milk issued for Invoice #${sale.bill_number}`
+              notes: `Customer Replacement: ${lineLabel} spoiled item returned and a fresh one issued for Invoice #${sale.bill_number}`,
+              details: packDetails(-returnQty)
             }]);
           } else if (isSpoiledScrap) {
-            // Option A-1: Spoiled / Defective Milk Discarded (log only)
-            await supabase.from('inventory_logs').insert([{
+            // Option A-1: Spoiled / Defective item discarded (log only, stock already left at sale)
+            inventoryLogRows.push(...[{
               id: `log_spoil_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
-              item_name: item.name || itemDef.name,
-              old_quantity: itemDef.stock || 0,
-              new_quantity: itemDef.stock || 0,
+              item_name: itemDef.name,
+              old_quantity: currentStock,
+              new_quantity: currentStock,
               difference: 0,
               reason: AdjustmentReason.SPOILAGE,
-              notes: `Customer Return (Scrapped Spoilage): ${qty} ${itemDef.unit || 'L'} from #${sale.bill_number} discarded`
+              notes: `Customer Return (Scrapped Spoilage): ${lineLabel} from #${sale.bill_number} discarded`,
+              details: { ...packDetails(0), scrapped_qty: returnQty }
             }]);
           } else {
-            // Option A-2: Good Item Restocked to Inventory
-            if (variantId && variantId !== 'loose' && !returnFromBase && itemDef.variant_stocks) {
-              const currentVarStock = roundQuantity(itemDef.variant_stocks[variantId] || 0);
-              const newVarStock = roundQuantity(currentVarStock + qty);
-              const { error: retVarError } = await adjustItemStock(itemDef.id, 0, { [variantId]: qty });
-              if (retVarError) throw retVarError;
-              setInventory(prev => prev.map(inv => inv.item_id === itemDef.id ? { ...inv, variant_stocks: { ...inv.variant_stocks, [variantId]: newVarStock } } : inv));
-            } else {
-              const currentStock = roundQuantity(itemDef.stock || 0);
-              const newStock = roundQuantity(currentStock + returnQty);
-              const { error: retStockError } = await adjustItemStock(itemDef.id, returnQty);
-              if (retStockError) throw retStockError;
-              setInventory(prev => prev.map(inv => inv.item_id === itemDef.id ? { ...inv, quantity: newStock } : inv));
-            }
+            // Option A-2: Good item restocked to the pile it came from
+            stockMoves.push({ item_id: itemDef.id, variant_id: packId || null, delta: returnQty });
+            localStockMoves.push(() => applyLocal(returnQty));
 
-            await supabase.from('inventory_logs').insert([{
+            inventoryLogRows.push(...[{
               id: `log_ret_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
-              item_name: item.name || itemDef.name,
-              old_quantity: itemDef.stock || 0,
-              new_quantity: returnFromBase ? roundQuantity((itemDef.stock || 0) + returnQty) : (itemDef.stock || 0),
-              difference: returnFromBase ? returnQty : qty,
+              item_name: itemDef.name,
+              old_quantity: packId ? currentVarStock : currentStock,
+              new_quantity: roundQuantity((packId ? currentVarStock : currentStock) + returnQty),
+              difference: packId ? 0 : returnQty,
               reason: AdjustmentReason.SALES_RETURN,
-              notes: `Returned to counter stock from Invoice #${sale.bill_number}: ${qty}x ${item.name} (${returnReason})`
+              notes: `Returned to counter stock from Invoice #${sale.bill_number}: ${lineLabel} (${returnReason})`,
+              details: packDetails(returnQty)
             }]);
           }
         }
@@ -3829,100 +4206,119 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       // 3. Financial reversal. Khata absorbs the unpaid part; only money that
       // was collected leaves the drawer or bank that received it.
+      const itemsLabel = itemsToReturn.map(i => `${i.qty}x ${i.name}`).join(', ');
+      const activeShift = activeShiftSession?.status === 'Active' ? activeShiftSession : null;
+      let khataPart: any = null;
+      let cashPart: any = null;
+      let refundTargetAccountId: string | null = null;
+
       if (!isReplacement && calculatedRefundAmount > 0) {
         if (refundSplit.khata > 0 && sale.customer_id) {
-          const cust = customers.find(c => c.id === sale.customer_id);
-          if (cust) {
-            const newBal = roundCurrency((cust.balance || 0) - refundSplit.khata);
-            const { error: custRefundErr } = await adjustCustomerBalance(cust.id, -refundSplit.khata);
-            if (custRefundErr) throw custRefundErr;
-            setCustomers(prev => prev.map(c => c.id === sale.customer_id ? { ...c, balance: newBal } : c));
-
-            await supabase.from('customer_transactions').insert([{
-              id: `ctx_ret_${generateUUID()}`,
-              customer_id: sale.customer_id,
-              date: returnDate,
-              type: 'Return',
-              amount: refundSplit.khata,
-              details: {
-                mode: 'Credit',
-                note: `Return (${itemsToReturn.map(i => `${i.qty}x ${i.name}`).join(', ')}) for Invoice #${sale.bill_number}: ${returnReason}`
-              }
-            }]);
-          }
+          khataPart = {
+            amount: refundSplit.khata,
+            tx_id: `ctx_ret_${generateUUID()}`,
+            details: {
+              mode: 'Credit',
+              note: `Return (${itemsLabel}) for Invoice #${sale.bill_number}: ${returnReason}`,
+              sale_id: sale.id
+            }
+          };
         }
 
         if (refundSplit.cash > 0) {
-          const effectiveRefundMode = refundPaymentMode || (String(sale.payment_mode || '').toLowerCase() === 'online' ? 'Online' : 'Cash');
+          const saleMode = correctOriginalSaleMode ? 'Online' : String(sale.payment_mode || '');
+          const effectiveRefundMode = refundPaymentMode || (saleMode.toLowerCase() === 'online' ? 'Online' : 'Cash');
           const isOnlineRefund = effectiveRefundMode === 'Online';
-          const drawerAccountId = resolveDrawerAccountId(sale.drawer_id) || sale.drawer_id;
+          // Cash physically leaves the drawer that is open now, so the refund comes out of that drawer's account.
+          const activeDrawerAccountId = activeShift ? (activeShift.account_id || resolveDrawerAccountId(activeShift.drawer_id) || activeShift.drawer_id) : null;
+          if (!isOnlineRefund && !refundAccountId && !activeDrawerAccountId) {
+            showToast('Cash refund ke liye pehle shift start karein, taake refund drawer se nikle.', 'warning');
+            return false;
+          }
           const targetAccId = refundAccountId || (
             isOnlineRefund
               ? (settings.financial?.defaultDigitalAccountId || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id)
-              : (drawerAccountId || activeShiftSession?.account_id || resolveDrawerAccountId(activeShiftSession?.drawer_id) || activeShiftSession?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id)
+              : activeDrawerAccountId
           );
-
-          if (targetAccId && accounts.some(a => a.id === targetAccId)) {
-            const refundNote = `Sales Refund (${effectiveRefundMode}) for #${sale.bill_number} (${itemsToReturn.map(i => `${i.qty}x ${i.name}`).join(', ')})`;
-            const { error: refundAccError } = await adjustAccountBalance(targetAccId, -refundSplit.cash);
-            if (refundAccError) throw refundAccError;
-            setAccounts(prev => prev.map(a => a.id === targetAccId ? { ...a, balance: roundCurrency((a.balance || 0) - refundSplit.cash) } : a));
-            await supabase.from('bank_transactions').insert([{
-              id: `btx_ret_${generateUUID()}`,
-              account_id: targetAccId,
-              amount: refundSplit.cash,
-              date: returnDate,
-              type: 'Expense',
-              category: isOnlineRefund ? 'Online Sales Return' : 'Sales Return',
-              description: refundNote,
-              reference_id: sale.id,
-              business_day_id: activeShiftSession?.business_day_id,
-              shift_session_id: activeShiftSession?.id,
-              drawer_id: isOnlineRefund ? null : activeShiftSession?.drawer_id,
-              cashier_id: activeShiftSession?.user_id
-            }]);
-            if (!isOnlineRefund && activeShiftSession?.business_day_id && activeShiftSession.drawer_id) {
-              await supabase.from('shift_cash_events').insert([{
-                id: `sce_refund_${generateUUID()}`,
-                business_day_id: activeShiftSession.business_day_id,
-                shift_id: activeShiftSession.id,
-                drawer_id: activeShiftSession.drawer_id,
-                event_type: 'Cash Refund',
-                direction: 'Out',
-                amount: refundSplit.cash,
-                payment_mode: 'Cash',
-                source_type: 'sales_return',
-                source_id: `${sale.id}_${generateUUID().slice(0, 8)}`,
-                description: `Refund for invoice ${sale.bill_number}`,
-                occurred_at: returnTimestamp,
-                created_by: currentUser?.id
-              }]);
-            }
+          if (!targetAccId || !accounts.some(a => a.id === targetAccId)) {
+            showToast('Refund ka account nahi mila. Account select karein.', 'error');
+            return false;
           }
-        }
-
-        // Optional: Correct original sale payment mode from Cash to Online if marked during return
-        if (correctOriginalSaleMode && sale.payment_mode === 'Cash') {
-          const updatedDetails = {
-            ...((sale as any).details || {}),
-            previous_payment_mode: 'Cash',
-            payment_mode: 'Online',
-            corrected_during_return: true,
-            corrected_at: returnTimestamp
+          refundTargetAccountId = targetAccId;
+          const fromActiveDrawer = !!activeShift && !isOnlineRefund && targetAccId === activeDrawerAccountId;
+          cashPart = {
+            amount: refundSplit.cash,
+            account_id: targetAccId,
+            btx_id: `btx_ret_${generateUUID()}`,
+            category: isOnlineRefund ? 'Online Sales Return' : 'Sales Return',
+            description: `Sales Refund (${effectiveRefundMode}) for #${sale.bill_number} (${itemsLabel})`,
+            drawer_id: fromActiveDrawer ? activeShift!.drawer_id : null,
+            // Only cash taken out of the open drawer is a drawer event; head cash or bank is not.
+            event: fromActiveDrawer && activeShift!.business_day_id ? {
+              id: `sce_refund_${generateUUID()}`,
+              business_day_id: activeShift!.business_day_id,
+              shift_id: activeShift!.id,
+              drawer_id: activeShift!.drawer_id,
+              source_id: `${sale.id}_${generateUUID().slice(0, 8)}`,
+              description: `Refund for invoice ${sale.bill_number}`,
+              created_by: currentUser?.id
+            } : null
           };
-          await supabase.from('sales').update({
-            payment_mode: 'Online',
-            details: updatedDetails
-          }).eq('id', sale.id);
-
-          setSales(prev => prev.map(s => s.id === sale.id ? { ...s, payment_mode: 'Online', details: updatedDetails } : s));
         }
       }
 
+      const { error: returnError } = await supabase.rpc('process_sales_return', {
+        p_sale_id: saleId,
+        p_return_id: generateUUID(),
+        p_payload: {
+          status: newStatus,
+          return_reason: returnReasonText,
+          return_type: returnAction,
+          restock_action: restockOption,
+          refund_amount: calculatedRefundAmount,
+          returned_items: newReturnedItems,
+          stock_moves: stockMoves,
+          logs: inventoryLogRows,
+          khata: khataPart,
+          cash: cashPart,
+          business_day_id: activeShift?.business_day_id || null,
+          shift_session_id: activeShift?.id || null,
+          drawer_id: activeShift?.drawer_id || null,
+          cashier_id: currentUser?.id || activeShift?.user_id || null
+        }
+      });
+      if (returnError) throw returnError;
+
+      // Server committed everything; mirror it locally until the refresh lands.
+      setSales(prev => prev.map(s => s.id === saleId ? {
+        ...s,
+        status: newStatus as any,
+        return_reason: returnReasonText,
+        returned_at: returnTimestamp,
+        refund_amount: accumulatedRefundAmount,
+        return_type: returnAction,
+        restock_action: restockOption,
+        returned_items: updatedReturnedItems
+      } : s));
+      localStockMoves.forEach(apply => apply());
+      if (khataPart) {
+        setCustomers(prev => prev.map(c => c.id === sale.customer_id ? { ...c, balance: roundCurrency((c.balance || 0) - khataPart.amount) } : c));
+      }
+      if (cashPart && refundTargetAccountId) {
+        setAccounts(prev => prev.map(a => a.id === refundTargetAccountId ? { ...a, balance: roundCurrency((a.balance || 0) - cashPart.amount) } : a));
+      }
+
+      const refundMessage = cashPart && khataPart
+        ? `Rs ${cashPart.amount.toLocaleString()} wapas diye, Rs ${khataPart.amount.toLocaleString()} khaate se kam hue`
+        : cashPart
+          ? `Rs ${cashPart.amount.toLocaleString()} refund diya gaya`
+          : khataPart
+            ? `Rs ${khataPart.amount.toLocaleString()} customer ke khaate se kam hue (cash nahi diya)`
+            : 'Koi raqam wapas nahi hui';
       showToast(
-        isReplacement 
-          ? `Replacement processed for ${itemsToReturn.length} item(s) on #${sale.bill_number}!` 
-          : `Refund of Rs ${calculatedRefundAmount.toLocaleString()} processed for ${itemsToReturn.length} item(s)!`,
+        isReplacement
+          ? `Replacement processed for ${itemsToReturn.length} item(s) on #${sale.bill_number}!`
+          : `Return ho gaya: ${refundMessage}.`,
         "success"
       );
 
@@ -3931,6 +4327,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (err: any) {
       console.error("processSalesReturn error:", err);
       showToast(`Failed to process return: ${err?.message || 'Error'}`, "error");
+      return false;
+    }
+  };
+
+  // A bill still in the local outbox has no server row (or its effects are still retrying), so
+  // editing it now would be overwritten when the sync lands.
+  const isSaleUnsynced = async (saleId: string): Promise<boolean> => {
+    try {
+      const order = await db.orders.get(saleId);
+      return !!order && order.sync_status !== 'synced';
+    } catch {
       return false;
     }
   };
@@ -3955,13 +4362,33 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
         }
 
+        if (!canPerform('sales_history', 'edit')) {
+          showToast('Aap ko bill ka payment mode badalne ki ijazat nahi hai.', 'error');
+          return false;
+        }
+        if (sale.status === 'Returned' || sale.status === 'Partially Returned' || Number(sale.refund_amount || 0) > 0) {
+          showToast('Returned bill ka payment mode nahi badla ja sakta.', 'error');
+          return false;
+        }
+        if (await isSaleUnsynced(sale.id)) {
+          showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad mode badlein.', 'error');
+          return false;
+        }
+        const saleShift = sale.shift_session_id ? shiftSessions.find(s => s.id === sale.shift_session_id) : undefined;
+        if ((sale.date && isDayLocked(sale.date)) || (saleShift && saleShift.status !== 'Active' && saleShift.status !== 'Closing')) {
+          showToast('Ye bill band shift / band din ka hai. Drawer ka hisaab ho chuka hai, is liye mode nahi badla ja sakta.', 'error');
+          return false;
+        }
+
         const paidAmount = roundCurrency(salePaidAmount(sale));
 
         // 1. Resolve Accounts involved
         let oldAccountId: string | null = null;
         let newAccountId: string | null = targetAccountId || null;
 
-        const existingBtx = bankTransactions.find(b => b.reference_id === sale.id || b.id === `btx_${sale.id}`);
+        // Only the bill's own receipt row; refund rows (btx_ret_*) also carry reference_id = sale.id.
+        const existingBtx = bankTransactions.find(b => b.id === `btx_${sale.id}`)
+          || bankTransactions.find(b => b.reference_id === sale.id && b.type === 'Income' && !String(b.id).startsWith('btx_ret'));
         if (existingBtx && existingBtx.account_id) {
           oldAccountId = existingBtx.account_id;
         } else if (oldPaymentMode === 'Cash') {
@@ -3978,99 +4405,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         }
 
-        // 2. Financial Re-balancing (if paidAmount > 0 and accounts are known)
-        if (paidAmount > 0 && oldAccountId && newAccountId && oldAccountId !== newAccountId) {
-          await adjustAccountBalance(oldAccountId, -paidAmount);
-          await adjustAccountBalance(newAccountId, paidAmount);
-
-          setAccounts(prev => prev.map(acc => {
-            if (acc.id === oldAccountId) return { ...acc, balance: roundCurrency((acc.balance || 0) - paidAmount) };
-            if (acc.id === newAccountId) return { ...acc, balance: roundCurrency((acc.balance || 0) + paidAmount) };
-            return acc;
-          }));
-        }
-
-        // 3. Update or Insert Bank Transaction
-        const btxId = `btx_${sale.id}`;
+        // 2-5. Move the money, the bill's receipt row, the drawer audit event and the bill itself in one
+        // server transaction (change_sale_payment_mode).
         const newCategory = newPaymentMode === 'Online' ? 'Online Sale' : 'POS Sale';
         const newDescription = `POS ${newPaymentMode} Sale #${sale.bill_number}`;
-
-        if (paidAmount > 0 && newAccountId) {
-          if (existingBtx) {
-            await supabase.from('bank_transactions').update({
-              account_id: newAccountId,
-              category: newCategory,
-              description: newDescription
-            }).eq('id', existingBtx.id);
-
-            setBankTransactions(prev => prev.map(b => b.id === existingBtx.id ? {
-              ...b,
-              account_id: newAccountId!,
-              category: newCategory,
-              description: newDescription
-            } : b));
-          } else {
-            const newBtx = {
-              id: btxId,
-              account_id: newAccountId,
-              amount: paidAmount,
-              date: sale.date || new Date().toISOString(),
-              type: 'Income',
-              category: newCategory,
-              description: newDescription,
-              reference_id: sale.id,
-              business_day_id: sale.business_day_id || activeShiftSession?.business_day_id,
-              shift_session_id: sale.shift_session_id || activeShiftSession?.id,
-              drawer_id: newPaymentMode === 'Cash' ? (sale.drawer_id || activeShiftSession?.drawer_id) : null,
-              cashier_id: sale.cashier_id || activeShiftSession?.user_id
-            };
-            await supabase.from('bank_transactions').insert([newBtx]);
-            setBankTransactions(prev => [newBtx as any, ...prev]);
-          }
-        }
-
-        // 4. Update Shift Cash Events (Drawer correction)
         const effectiveDayId = sale.business_day_id || activeShiftSession?.business_day_id;
         const effectiveShiftId = sale.shift_session_id || activeShiftSession?.id;
         const effectiveDrawerId = sale.drawer_id || activeShiftSession?.drawer_id;
 
-        if (paidAmount > 0 && effectiveDayId && effectiveDrawerId) {
-          if (oldPaymentMode === 'Cash' && newPaymentMode === 'Online') {
-            await supabase.from('shift_cash_events').insert([{
-              id: `sce_corr_${generateUUID()}`,
-              business_day_id: effectiveDayId,
-              shift_id: effectiveShiftId,
-              drawer_id: effectiveDrawerId,
-              event_type: 'Payment Mode Correction',
-              direction: 'Out',
-              amount: paidAmount,
-              payment_mode: 'Cash',
-              source_type: 'payment_correction',
-              source_id: sale.id,
-              description: `Correction: Invoice #${sale.bill_number} changed from Cash to Online`,
-              occurred_at: new Date().toISOString(),
-              created_by: currentUser?.id
-            }]);
-          } else if (oldPaymentMode === 'Online' && newPaymentMode === 'Cash') {
-            await supabase.from('shift_cash_events').insert([{
-              id: `sce_corr_${generateUUID()}`,
-              business_day_id: effectiveDayId,
-              shift_id: effectiveShiftId,
-              drawer_id: effectiveDrawerId,
-              event_type: 'Payment Mode Correction',
-              direction: 'In',
-              amount: paidAmount,
-              payment_mode: 'Cash',
-              source_type: 'payment_correction',
-              source_id: sale.id,
-              description: `Correction: Invoice #${sale.bill_number} changed from Online to Cash`,
-              occurred_at: new Date().toISOString(),
-              created_by: currentUser?.id
-            }]);
-          }
-        }
-
-        // 5. Update Sale in Supabase
         const updatedDetails = {
           ...((sale as any).details || {}),
           previous_payment_mode: oldPaymentMode,
@@ -4079,12 +4421,43 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           account_id: newAccountId
         };
 
-        const { error: saleUpError } = await supabase.from('sales').update({
-          payment_mode: newPaymentMode,
-          details: updatedDetails
-        }).eq('id', sale.id);
+        const correctionEvent = paidAmount > 0 && effectiveDayId && effectiveDrawerId ? {
+          id: `sce_corr_${generateUUID()}`,
+          business_day_id: effectiveDayId,
+          shift_id: effectiveShiftId,
+          drawer_id: effectiveDrawerId,
+          direction: oldPaymentMode === 'Cash' ? 'Out' : 'In',
+          description: `Correction: Invoice #${sale.bill_number} changed from ${oldPaymentMode} to ${newPaymentMode}`,
+          created_by: currentUser?.id
+        } : null;
 
-        if (saleUpError) throw saleUpError;
+        const { error: modeError } = await supabase.rpc('change_sale_payment_mode', {
+          p_sale_id: sale.id,
+          p_new_mode: newPaymentMode,
+          p_old_account_id: oldAccountId,
+          p_new_account_id: newAccountId,
+          p_amount: paidAmount,
+          p_btx_id: existingBtx?.id || null,
+          p_btx: {
+            category: newCategory,
+            description: newDescription,
+            business_day_id: effectiveDayId,
+            shift_session_id: effectiveShiftId,
+            drawer_id: newPaymentMode === 'Cash' ? effectiveDrawerId : null,
+            cashier_id: sale.cashier_id || activeShiftSession?.user_id
+          },
+          p_event: correctionEvent,
+          p_details: updatedDetails
+        });
+        if (modeError) throw modeError;
+
+        if (paidAmount > 0 && oldAccountId && newAccountId && oldAccountId !== newAccountId) {
+          setAccounts(prev => prev.map(acc => {
+            if (acc.id === oldAccountId) return { ...acc, balance: roundCurrency((acc.balance || 0) - paidAmount) };
+            if (acc.id === newAccountId) return { ...acc, balance: roundCurrency((acc.balance || 0) + paidAmount) };
+            return acc;
+          }));
+        }
 
         // 6. Update local Dexie Order
         try {
@@ -4139,6 +4512,40 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           });
           const { error } = await supabase.from('daily_supply').insert(dbEntries);
           if (error) throw error;
+
+          // Update customer balances, financial accounts, and milk allocations for completed supply entries
+          for (const entry of dbEntries) {
+              const det = entry.details || {};
+              if (det.status === 'Cancelled' || det.status === 'Pending') continue;
+              const totalAmt = roundCurrency(Number(entry.total_amount) || 0);
+              const paidAmt = roundCurrency(Number(det.payment_received ?? 0));
+              const dueAmt = roundCurrency(Number(det.balance_due ?? Math.max(0, totalAmt - paidAmt)));
+
+              if (entry.customer_id && dueAmt > 0) {
+                  await adjustCustomerBalance(entry.customer_id, dueAmt);
+              }
+              if (paidAmt > 0) {
+                  const targetAccId = activeShiftSession?.account_id || resolveDrawerAccountId(activeShiftSession?.drawer_id) || activeShiftSession?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash' && a.isActive !== false)?.id;
+                  if (targetAccId) {
+                      await adjustAccountBalance(targetAccId, paidAmt);
+                      await supabase.from('bank_transactions').insert([{
+                          id: `btx_ds_${entry.id}`,
+                          account_id: targetAccId,
+                          amount: paidAmt,
+                          date: normalizeTransactionTimestamp(entry.date),
+                          type: 'Income',
+                          category: 'Milk Supply',
+                          description: `Daily Supply Receipt (${det.customer_name || 'Customer'})`,
+                          reference_id: entry.id,
+                          business_day_id: activeShiftSession?.business_day_id,
+                          shift_session_id: activeShiftSession?.id,
+                          drawer_id: activeShiftSession?.drawer_id,
+                          cashier_id: activeShiftSession?.user_id
+                      }]);
+                  }
+              }
+          }
+
           fetchData();
           return true;
       } catch (e) { console.error(e); return false; }
@@ -4176,59 +4583,88 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               }
           }
 
-          // 2. Adjust Live Inventory for counted Loose & Variant stocks
+          // 2. Adjust Live Inventory for counted Loose & Variant stocks without double-logging explicit spoilage/wastage
           for (const item of (data.items || [])) {
               const itemDef = items.find(i => i.name.toLowerCase() === item.product_name.toLowerCase() || i.id === item.product_id);
               if (itemDef) {
                   const targetVariant = item.variant_id && item.variant_id !== 'loose' ? item.variant_id : 'loose';
-                  
-                  // Adjust physical inventory to the exact counted quantity
-                  await adjustStock(
-                      `inv_${itemDef.id}`, 
-                      roundQuantity(item.physical_qty), 
-                      'Stock Count Correction', 
-                      `Shift Closing (${shiftName}) on ${data.date}`, 
-                      targetVariant
-                  );
+                  const spoilageQty = roundQuantity(Number(item.spoilage_qty) || 0);
+                  const wastageQty = roundQuantity(Number(item.wastage_qty) || 0);
+                  const internalUseQty = roundQuantity(Number(item.internal_use_qty) || 0);
+                  const explicitLossTotal = roundQuantity(spoilageQty + wastageQty + internalUseQty);
+                  const physicalQty = roundQuantity(Number(item.physical_qty) || 0);
+
+                  const { data: currentItem } = await supabase.from('items').select('*').eq('id', itemDef.id).maybeSingle();
+                  if (currentItem) {
+                      const oldQty = targetVariant !== 'loose'
+                        ? roundQuantity((currentItem.variant_stocks || {})[targetVariant] || 0)
+                        : roundQuantity(currentItem.stock || 0);
+                      const totalDiff = roundQuantity(physicalQty - oldQty);
+                      // Update physical stock directly
+                      if (targetVariant !== 'loose') {
+                          const newVariantStocks = { ...(currentItem.variant_stocks || {}), [targetVariant]: physicalQty };
+                          await supabase.from('items').update({ variant_stocks: newVariantStocks }).eq('id', itemDef.id);
+                          setInventory(prev => prev.map(i => i.item_id === itemDef.id ? { ...i, variant_stocks: newVariantStocks } : i));
+                      } else {
+                          await supabase.from('items').update({ stock: physicalQty }).eq('id', itemDef.id);
+                          setInventory(prev => prev.map(i => i.item_id === itemDef.id ? { ...i, quantity: physicalQty } : i));
+                      }
+
+                      // Log only the residual unexplained count difference as Stock Count Correction so explicit spoilage/wastage is not double-counted
+                      const residualDiff = roundQuantity(totalDiff + explicitLossTotal);
+                      if (Math.abs(residualDiff) > 0.0001) {
+                          await supabase.from('inventory_logs').insert([{ 
+                              id: `log_cnt_${closingId}_${itemDef.id}_${targetVariant}`, 
+                              date: new Date().toISOString(), 
+                              item_id: itemDef.id, 
+                              item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
+                              old_quantity: oldQty, 
+                              new_quantity: roundQuantity(oldQty + residualDiff), 
+                              difference: residualDiff, 
+                              reason: 'Stock Count Correction', 
+                              notes: `Shift Closing (${shiftName}) on ${data.date}`
+                          }]);
+                      }
+                  }
 
                   // Log dedicated Loss/Wastage inventory entries for reporting
-                  if (item.spoilage_qty && item.spoilage_qty > 0) {
+                  if (spoilageQty > 0) {
                       await supabase.from('inventory_logs').insert([{ 
-                          id: `log_spoil_${closingId}_${itemDef.id}`, 
+                          id: `log_spoil_${closingId}_${itemDef.id}_${targetVariant}`, 
                           date: new Date().toISOString(), 
                           item_id: itemDef.id, 
                           item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
                           old_quantity: item.system_qty, 
                           new_quantity: item.physical_qty, 
-                          difference: -roundQuantity(item.spoilage_qty), 
+                          difference: -spoilageQty, 
                           reason: 'Spoilage / Wastage', 
                           notes: `Kharab/Sour Milk - Shift Closing (${shiftName}) on ${data.date}`
                       }]);
                   }
 
-                  if (item.wastage_qty && item.wastage_qty > 0) {
+                  if (wastageQty > 0) {
                       await supabase.from('inventory_logs').insert([{ 
-                          id: `log_waste_${closingId}_${itemDef.id}`, 
+                          id: `log_waste_${closingId}_${itemDef.id}_${targetVariant}`, 
                           date: new Date().toISOString(), 
                           item_id: itemDef.id, 
                           item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
                           old_quantity: item.system_qty, 
                           new_quantity: item.physical_qty, 
-                          difference: -roundQuantity(item.wastage_qty), 
+                          difference: -wastageQty, 
                           reason: 'Spoilage / Wastage', 
                           notes: `Boiling/Measurement Loss - Shift Closing (${shiftName}) on ${data.date}`
                       }]);
                   }
 
-                  if (item.internal_use_qty && item.internal_use_qty > 0) {
+                  if (internalUseQty > 0) {
                       await supabase.from('inventory_logs').insert([{ 
-                          id: `log_tea_${closingId}_${itemDef.id}`, 
+                          id: `log_tea_${closingId}_${itemDef.id}_${targetVariant}`, 
                           date: new Date().toISOString(), 
                           item_id: itemDef.id, 
                           item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
                           old_quantity: item.system_qty, 
                           new_quantity: item.physical_qty, 
-                          difference: -roundQuantity(item.internal_use_qty), 
+                          difference: -internalUseQty, 
                           reason: 'Internal Consumption', 
                           notes: `Staff Tea / Internal Usage - Shift Closing (${shiftName}) on ${data.date}`
                       }]);
@@ -4317,16 +4753,27 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const shiftLabel = data.shiftName || activeShiftSession?.shift_name || 'Counter Closing';
       const paymentMode = data.paymentMode || 'Cash';
 
-      const cart = validItems.map(item => ({
-        id: item.itemId,
-        itemId: item.itemId,
-        name: item.variantName ? `${item.name} (${item.variantName})` : item.name,
-        qty: roundQuantity(item.autoSaleQty),
-        price: roundCurrency(item.price),
-        total: roundCurrency(item.totalAmount || (item.autoSaleQty * item.price)),
-        variantId: item.variantId,
-        unit: item.unit || 'Unit'
-      }));
+      const cart = validItems.map(item => {
+        const itemDef = items.find(i => i.id === item.itemId || i.name.toLowerCase() === item.name.toLowerCase());
+        const variantDef = itemDef?.variants?.find(v => v.id === item.variantId);
+        const deductFromBase = !variantDef || variantDef.deduct_from_base === true;
+        const baseFactor = Number(variantDef?.quantity_in_base_unit) || 1;
+        // stockDeduction means base units in ONE sold unit everywhere (sync, projection, reports).
+        const stockDeduction = roundQuantity(baseFactor);
+
+        return {
+          id: item.itemId,
+          itemId: item.itemId,
+          name: item.variantName ? `${item.name} (${item.variantName})` : item.name,
+          qty: roundQuantity(item.autoSaleQty),
+          price: roundCurrency(item.price),
+          total: roundCurrency(item.totalAmount || (item.autoSaleQty * item.price)),
+          variantId: item.variantId,
+          unit: item.unit || 'Unit',
+          deductFromBase,
+          stockDeduction
+        };
+      });
 
       // Resolve receipt account
       let receiptAccountId: string | null = data.accountId || null;
@@ -4398,8 +4845,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         for (const line of cart) {
           const lineId = line.itemId || line.id;
           if (inv.item_id !== lineId && inv.name !== line.name) continue;
-          if (line.variantId) variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
-          else quantity = roundQuantity(quantity - line.qty);
+          if (line.variantId && !line.deductFromBase) {
+            variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
+          } else {
+            quantity = roundQuantity(quantity - (Number(line.qty) || 0) * (Number(line.stockDeduction) || 1));
+          }
         }
         return { ...inv, quantity, variant_stocks };
       }));
@@ -4410,8 +4860,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (item.id !== lineId && item.name !== line.name) continue;
           const variant_stocks = { ...(next.variant_stocks || {}) };
           let stock = roundQuantity(next.stock || 0);
-          if (line.variantId) variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
-          else stock = roundQuantity(stock - line.qty);
+          if (line.variantId && !line.deductFromBase) {
+            variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
+          } else {
+            stock = roundQuantity(stock - (Number(line.qty) || 0) * (Number(line.stockDeduction) || 1));
+          }
           next = { ...next, stock, variant_stocks };
         }
         return next;
@@ -4522,13 +4975,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const [days, drawers, shifts, handovers, remittances, variances, events, faRes, btxRes] = await Promise.all([
       supabase.from('business_days').select('*').order('business_date', { ascending: false }),
       supabase.from('cash_drawers').select('*').order('name'),
-      supabase.from('cash_shifts').select('*').order('started_at', { ascending: false }),
+      // Paged reads: a plain select stops at 1000 rows, which cut the bank history after every shift action.
+      fetchFullTable('cash_shifts', 'started_at'),
       supabase.from('drawer_handovers').select('*').order('declared_at', { ascending: false }),
       supabase.from('cash_remittances').select('*').order('declared_at', { ascending: false }),
       supabase.from('cash_variances').select('*').order('created_at', { ascending: false }),
-      supabase.from('shift_cash_events').select('*').order('occurred_at', { ascending: false }),
+      fetchFullTable('shift_cash_events', 'occurred_at'),
       supabase.from('financial_accounts').select('*'),
-      supabase.from('bank_transactions').select('*').order('date', { ascending: false })
+      fetchFullTable('bank_transactions', 'date')
     ]);
     if (days.data) setBusinessDays(days.data as BusinessDay[]);
     if (drawers.data) setCashDrawers(drawers.data as CashDrawer[]);
@@ -4551,13 +5005,68 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast('Please log in first.', 'warning');
       return false;
     }
+    const businessDate = getBusinessDate();
+    let effectiveHandoverId = data.handoverId || null;
+
     if (activeShiftSession) {
-      showToast('You already have an active shift.', 'warning');
-      return false;
+      if (activeShiftSession.business_date && activeShiftSession.business_date < businessDate) {
+        const totals = getShiftTotals(activeShiftSession.id);
+        const expectedCash = Math.max(0, roundCurrency(Number(totals.expectedCash || activeShiftSession.opening_counted || activeShiftSession.opening_float || 0)));
+        const autoHandoverId = `handover_${generateUUID()}`;
+        await supabase.rpc('cash_control_close_shift', {
+          p_shift_id: activeShiftSession.id,
+          p_expected_cash: expectedCash,
+          p_counted_cash: expectedCash,
+          p_leave_in_drawer: expectedCash,
+          p_remit_to_head: 0,
+          p_denominations: { closing: {}, leave_in_drawer: {}, remit_to_head: {} },
+          p_difference_reason: '',
+          p_notes: `Auto-closed overnight before starting ${businessDate} shift`,
+          p_totals: totals,
+          p_handover_id: autoHandoverId,
+          p_remittance_id: `remit_${generateUUID()}`
+        });
+        if (!effectiveHandoverId && expectedCash > 0 && activeShiftSession.drawer_id === data.drawerId) {
+          effectiveHandoverId = autoHandoverId;
+        }
+      } else {
+        showToast('You already have an active shift.', 'warning');
+        return false;
+      }
     }
-    if (shiftSessions.some(s => s.drawer_id === data.drawerId && ['Active', 'Closing', 'Pending Acceptance'].includes(s.status))) {
-      showToast('Another cashier’s shift is active on this drawer.', 'warning');
-      return false;
+
+    const conflictingShifts = shiftSessions.filter(
+      s => s.drawer_id === data.drawerId && s.id !== activeShiftSession?.id && ['Active', 'Closing', 'Pending Acceptance'].includes(s.status)
+    );
+    for (const conflictingShift of conflictingShifts) {
+      if (conflictingShift.business_date && conflictingShift.business_date < businessDate) {
+        const totals = getShiftTotals(conflictingShift.id);
+        const expectedCash = Math.max(0, roundCurrency(Number(totals.expectedCash || conflictingShift.opening_counted || conflictingShift.opening_float || 0)));
+        const autoHandoverId = `handover_${generateUUID()}`;
+        await supabase.rpc('cash_control_close_shift', {
+          p_shift_id: conflictingShift.id,
+          p_expected_cash: expectedCash,
+          p_counted_cash: expectedCash,
+          p_leave_in_drawer: expectedCash,
+          p_remit_to_head: 0,
+          p_denominations: { closing: {}, leave_in_drawer: {}, remit_to_head: {} },
+          p_difference_reason: '',
+          p_notes: `Auto-closed overnight before starting ${businessDate} shift`,
+          p_totals: totals,
+          p_handover_id: autoHandoverId,
+          p_remittance_id: `remit_${generateUUID()}`
+        });
+        if (!effectiveHandoverId && expectedCash > 0) {
+          effectiveHandoverId = autoHandoverId;
+        }
+      } else {
+        if (conflictingShift.user_id === currentUser.id || currentUser.role_id === 'role_super_admin' || currentRole?.name === 'Super Admin') {
+          showToast('Your shift is already active on this drawer.', 'warning');
+        } else {
+          showToast(`Another cashier’s shift (${conflictingShift.user_name || 'Cashier'}) is active on this drawer. Please close or hand it over first.`, 'warning');
+        }
+        return false;
+      }
     }
 
     // Shifts only run on Cash accounts explicitly enabled as drawers —
@@ -4582,7 +5091,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }]);
     }
 
-    const businessDate = getBusinessDate();
     const shiftId = `shift_${businessDate}_${generateUUID().slice(0, 12)}`;
     const { data: started, error } = await supabase.rpc('cash_control_start_shift', {
       p_shift_id: shiftId,
@@ -4594,7 +5102,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       p_role_name: currentRole?.name || 'Cashier',
       p_opening_counted: roundCurrency(data.openingCounted),
       p_denominations: data.denominations || {},
-      p_handover_id: data.handoverId || null
+      p_handover_id: effectiveHandoverId
     });
     if (error) {
       showToast(`Shift could not start: ${error.message}`, 'error');
@@ -4624,7 +5132,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return true;
   };
 
-  const getShiftTotals = (shiftId: string) => {
+  function getShiftTotals(shiftId: string) {
     const shift = shiftSessions.find(s => s.id === shiftId) || activeShiftSession;
     const drawerAccountId = resolveDrawerAccountId(shift?.drawer_id) || shift?.drawer_id;
 
@@ -4829,7 +5337,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       .filter(entry => entry.shift_session_id === shiftId && String(entry.payment_mode || '').toLowerCase().includes('cash') && Number(entry.payment_received || 0) > 0);
 
     const validRefundEvents = shiftCashEvents
-      .filter(e => e.shift_id === shiftId && e.direction === 'In' && !e.event_type.toLowerCase().includes('sale') && !e.event_type.toLowerCase().includes('collection') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction' && Number(e.amount || 0) > 0);
+      .filter(e => e.shift_id === shiftId && e.direction === 'In' && e.source_type !== 'payment_correction' && !e.event_type.toLowerCase().includes('sale') && !e.event_type.toLowerCase().includes('collection') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction' && Number(e.amount || 0) > 0);
 
     const collections_list = [
       ...validLedgerCollections.map(t => {
@@ -4926,25 +5434,56 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     // Refunds for sales originating in PRIOR shifts or external returns.
     // (Returns on this shift's cash sales are already net-zeroed in cashSales above to prevent double-deduction).
-    const thisShiftSaleIds = new Set(allShiftSales.map(s => s.id));
+    // Sale ids contain underscores (sale_*, co_sale_*), so match the refund source by prefix, not by split('_').
+    const isThisShiftSaleRefund = (sourceId?: string | null) => {
+      const source = String(sourceId || '');
+      return !!source && allShiftSales.some(s => source === s.id || source.startsWith(`${s.id}_`));
+    };
     const priorShiftCashRefunds = roundCurrency(shiftCashEvents
       .filter(e => {
         if (e.shift_id !== shiftId || e.direction !== 'Out' || !e.event_type.toLowerCase().includes('refund')) return false;
         if (e.source_type === 'expense_vendor_transaction' || e.event_type.toLowerCase().includes('vendor')) return false;
-        const saleId = e.source_id?.split('_')[0];
-        if (saleId && thisShiftSaleIds.has(saleId)) return false;
-        return true;
+        return !isThisShiftSaleRefund(e.source_id);
       })
       .reduce((sum, e) => sum + Number(e.amount || 0), 0));
 
+    // Owner deposits / withdrawals and account transfers made straight on the drawer account during
+    // this shift. System rows (float sync, remittance, over/short, opening balance, delivery API) are
+    // accounted for elsewhere.
+    const isInShiftWindow = (t: any) => t.shift_session_id === shiftId || (
+      !t.shift_session_id && shiftStartTime > 0 &&
+      new Date(t.created_at || t.date).getTime() >= shiftStartTime &&
+      new Date(t.created_at || t.date).getTime() <= shiftEndTime
+    );
+    const SYSTEM_DRAWER_CATEGORIES = ['Opening Float', 'Cash Remittance', 'Cash Over / Short', 'Opening Balance'];
+    const manualDrawerMoves = bankTransactions.filter((t: any) =>
+      !!drawerAccountId && t.account_id === drawerAccountId &&
+      ['Deposit', 'Withdrawal', 'Transfer_In', 'Transfer_Out'].includes(t.type) &&
+      !SYSTEM_DRAWER_CATEGORIES.includes(t.category) &&
+      !String(t.category || '').startsWith('Delivery') &&
+      !/^btx_(float|remit|var|op|api)_/.test(String(t.id || '')) &&
+      // Head's opening cash for the NEXT shift (addDrawerOpeningCash) is that shift's opening float.
+      !/^Opening Float/i.test(String(t.description || '')) &&
+      isInShiftWindow(t)
+    );
+    const manualDrawerIn = roundCurrency(manualDrawerMoves
+      .filter((t: any) => t.type === 'Deposit' || t.type === 'Transfer_In')
+      .reduce((sum, t: any) => sum + Number(t.amount || 0), 0));
+    const manualDrawerOut = roundCurrency(manualDrawerMoves
+      .filter((t: any) => t.type === 'Withdrawal' || t.type === 'Transfer_Out')
+      .reduce((sum, t: any) => sum + Number(t.amount || 0), 0));
+
+    // A payment-mode correction is an audit trail only: cashSales already follows the bill's current mode.
     const otherCashIn = roundCurrency(shiftCashEvents
-      .filter(e => e.shift_id === shiftId && e.direction === 'In' && !e.event_type.toLowerCase().includes('sale') && !e.event_type.toLowerCase().includes('collection') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction')
+      .filter(e => e.shift_id === shiftId && e.direction === 'In' && e.source_type !== 'payment_correction' && !e.event_type.toLowerCase().includes('sale') && !e.event_type.toLowerCase().includes('collection') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction')
       .reduce((sum, e) => sum + Number(e.amount || 0), 0)
-      + purchaseReturnNet.cashIn.reduce((sum, item) => sum + Number(item.amount || 0), 0));
+      + purchaseReturnNet.cashIn.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+      + manualDrawerIn);
 
     const otherCashOut = roundCurrency(shiftCashEvents
-      .filter(e => e.shift_id === shiftId && e.direction === 'Out' && !e.event_type.toLowerCase().includes('refund') && !e.event_type.toLowerCase().includes('expense') && !e.event_type.toLowerCase().includes('purchase') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction')
-      .reduce((sum, e) => sum + Number(e.amount || 0), 0));
+      .filter(e => e.shift_id === shiftId && e.direction === 'Out' && e.source_type !== 'payment_correction' && !e.event_type.toLowerCase().includes('refund') && !e.event_type.toLowerCase().includes('expense') && !e.event_type.toLowerCase().includes('purchase') && !e.event_type.toLowerCase().includes('vendor') && e.source_type !== 'expense_vendor_transaction')
+      .reduce((sum, e) => sum + Number(e.amount || 0), 0)
+      + manualDrawerOut);
 
     const expectedCash = roundCurrency(
       Number(shift?.opening_counted ?? shift?.opening_float ?? 0)
@@ -4975,7 +5514,118 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       cash_sales_list,
       all_bills_list
     };
-  };
+  }
+
+  const isRollingOverShiftRef = useRef(false);
+
+  async function rolloverStaleShift(staleShift: ShiftSession): Promise<ShiftSession | null> {
+    if (isRollingOverShiftRef.current) return null;
+    const currentBizDate = getBusinessDate();
+    if (!staleShift || staleShift.status !== 'Active' || !staleShift.business_date || staleShift.business_date >= currentBizDate) {
+      return staleShift;
+    }
+    if (businessDays.some(day => day.business_date === currentBizDate && day.status === 'Closed')) {
+      return null;
+    }
+
+    isRollingOverShiftRef.current = true;
+    try {
+      const totals = getShiftTotals(staleShift.id);
+      const expectedCash = Math.max(0, roundCurrency(Number(totals.expectedCash ?? staleShift.opening_counted ?? staleShift.opening_float ?? 0)));
+      const handoverId = `handover_${generateUUID()}`;
+      const remittanceId = `remit_${generateUUID()}`;
+
+      // 1. Close previous day's unclosed shift with full expected cash left in the drawer
+      const { error: closeErr } = await supabase.rpc('cash_control_close_shift', {
+        p_shift_id: staleShift.id,
+        p_expected_cash: expectedCash,
+        p_counted_cash: expectedCash,
+        p_leave_in_drawer: expectedCash,
+        p_remit_to_head: 0,
+        p_denominations: { closing: {}, leave_in_drawer: {}, remit_to_head: {} },
+        p_difference_reason: '',
+        p_notes: `Auto-closed overnight & carried forward to ${currentBizDate}`,
+        p_totals: totals,
+        p_handover_id: handoverId,
+        p_remittance_id: remittanceId
+      });
+
+      if (closeErr) {
+        console.warn('[ShiftRollover] Failed to close stale shift:', closeErr.message);
+        return null;
+      }
+
+      // 2. Automatically start today's shift on the same drawer with carried-forward float
+      const newShiftId = `shift_${currentBizDate}_${generateUUID().slice(0, 12)}`;
+      const { data: started, error: startErr } = await supabase.rpc('cash_control_start_shift', {
+        p_shift_id: newShiftId,
+        p_business_day_id: `bd_${currentBizDate}`,
+        p_business_date: currentBizDate,
+        p_drawer_id: staleShift.drawer_id,
+        p_user_id: currentUser?.id || staleShift.user_id,
+        p_user_name: currentUser?.name || staleShift.user_name || 'Cashier',
+        p_role_name: currentRole?.name || staleShift.role_name || 'Cashier',
+        p_opening_counted: expectedCash,
+        p_denominations: {},
+        p_handover_id: expectedCash > 0 ? handoverId : null
+      });
+
+      if (startErr) {
+        console.warn('[ShiftRollover] Closed stale shift but failed to start new shift:', startErr.message);
+        await refreshCashControl();
+        return null;
+      }
+
+      const startedRow = Array.isArray(started) ? started[0] : started;
+      if (!startedRow) {
+        await refreshCashControl();
+        return null;
+      }
+
+      const newShift = mapCashShift(startedRow);
+      setShiftSessions(prev => [
+        newShift,
+        ...prev.map(s => s.id === staleShift.id ? { ...s, status: 'Closed' as const, closed_at: new Date().toISOString() } : s)
+      ]);
+      setActiveShiftSession(newShift);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('mooco_active_shift_session', JSON.stringify(newShift));
+        if ('BroadcastChannel' in window) {
+          try {
+            const bc = new BroadcastChannel('mooco_shift_channel');
+            bc.postMessage({ type: 'SHIFT_STARTED', shiftId: newShift.id });
+            bc.close();
+          } catch {}
+        }
+      }
+
+      void refreshCashControl().catch(() => {});
+      showToast(`Pichli shift (${staleShift.business_date}) auto-close kar ke aaj ki shift (Rs ${expectedCash.toLocaleString()}) start kar di gayi hai.`, 'info');
+      return newShift;
+    } catch (err) {
+      console.warn('[ShiftRollover] Unexpected error:', err);
+      return null;
+    } finally {
+      isRollingOverShiftRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (!hasLoadedData || !currentUser || !activeShiftSession) return;
+    const checkAndRollover = () => {
+      const currentBizDate = getBusinessDate();
+      if (
+        activeShiftSession.status === 'Active' &&
+        activeShiftSession.business_date &&
+        activeShiftSession.business_date < currentBizDate
+      ) {
+        void rolloverStaleShift(activeShiftSession);
+      }
+    };
+    checkAndRollover();
+    const timer = window.setInterval(checkAndRollover, 60000);
+    return () => window.clearInterval(timer);
+  }, [hasLoadedData, currentUser?.id, activeShiftSession?.id, activeShiftSession?.business_date]);
 
   const closeCashierShift = async (data: {
     countedCash: number;
@@ -5274,7 +5924,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // balances and writes both Transfer_Out/Transfer_In ledger rows.
         const { error: transferError } = await transferBetweenAccounts(
           sourceAcc.id, drawerAccountId!, netCredit,
-          new Date().toISOString().split('T')[0],
+          new Date().toISOString(),
           `Opening Float → drawer (from ${sourceAcc.name})${note ? ` — ${note}` : ''}`
         );
         if (transferError) {
@@ -5593,7 +6243,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const openShiftSession = async (shiftName: string, openingFloat: number, accountId?: string): Promise<ShiftSession> => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayLocalDate();
     const shiftId = `shift_${today}_${shiftName.toLowerCase()}_${generateUUID().slice(0, 8)}`;
     const acc = accounts.find(a => a.id === accountId) || accounts.find(a => a.type === 'Cash') || accounts[0];
 
@@ -5768,7 +6418,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const isDayLocked = (dateStr: string): boolean => {
-    const d = dateStr.split('T')[0];
+    // A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
     return businessDays.some(day => day.business_date === d && day.status === 'Closed');
   };
 
@@ -5812,6 +6463,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       };
 
       // 1. Save locally to Dexie (Offline First)
+      const customerDataPayload = { ...extraData, opening_balance: initialBalance };
       const localCust: LocalCustomer = {
         id,
         name,
@@ -5821,7 +6473,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         type: type || 'Retail Counter',
         balance: initialBalance,
         is_active: isActive !== undefined ? isActive : true,
-        data: extraData,
+        data: customerDataPayload,
         sync_status: 'pending',
         created_at: createdDate
       };
@@ -5829,19 +6481,34 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       noteLocalWrite();
 
       // 2. Optimistic UI update (Instant)
-      setCustomers(prev => [...prev, newCustObj]);
+      setCustomers(prev => [...prev, { ...newCustObj, data: customerDataPayload }]);
 
       // If initial opening balance exists, log in customer_transactions
       if (initialBalance !== 0) {
-        setCustomerTransactions(prev => [{
+        const opTxRecord = {
           id: `ctx_op_${id}`,
           customer_id: id,
           date: createdDate.split('T')[0],
-          type: initialBalance > 0 ? 'Charge' : 'Payment',
+          type: (initialBalance > 0 ? 'Charge' : 'Payment') as any,
           amount: Math.abs(initialBalance),
           mode: 'Opening Balance',
           note: initialBalance > 0 ? 'Opening Balance (Initial Receivable)' : 'Opening Balance (Initial Advance/Credit)'
-        }, ...prev]);
+        };
+        setCustomerTransactions(prev => [opTxRecord as any, ...prev]);
+
+        supabase.from('customer_transactions').insert([{
+          id: opTxRecord.id,
+          customer_id: id,
+          date: opTxRecord.date,
+          type: opTxRecord.type,
+          amount: opTxRecord.amount,
+          details: {
+            mode: opTxRecord.mode,
+            note: opTxRecord.note
+          }
+        }]).then(({ error }) => {
+          if (error) console.warn('[Customer Opening Balance Insert Error]', error);
+        });
       }
 
       // 3. Trigger Non-blocking Background Sync
@@ -5932,6 +6599,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     accountId?: string
   ) => { 
       try {
+          if (date && isDayLocked(date)) {
+            showToast('Ye din band (locked) hai. Entry aaj ki tareekh par darj karein.', 'error');
+            return false;
+          }
           const cust = customers.find(c => c.id === customerId);
           if (cust) {
               const balanceDelta = type === 'Payment' ? -amount : amount;
@@ -6032,28 +6703,30 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deleteCustomerTransaction = async (id: string) => {
     try {
       const tx = customerTransactions.find(t => t.id === id);
-      let fallbackAccountId: string | null = null;
-      if (tx && tx.type === 'Payment') {
-        const isCashMode = !(tx as any).mode || (tx as any).mode.toLowerCase().includes('cash');
-        fallbackAccountId = (tx as any).account_id || (
-          isCashMode
-            ? (settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id)
-            : (settings.financial?.defaultDigitalAccountId || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id)
-        ) || null;
+      if (tx && tx.date && isDayLocked(tx.date)) {
+        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        return false;
+      }
+      const txShift = (tx as any)?.shift_session_id ? shiftSessions.find(s => s.id === (tx as any).shift_session_id) : undefined;
+      if (tx?.type === 'Payment' && txShift && txShift.status !== 'Active' && txShift.status !== 'Closing') {
+        showToast('Ye payment band shift ki hai, drawer ka hisaab ho chuka hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        return false;
       }
 
-      // Balance reversal (khata + account + linked bank tx) happens in ONE
-      // atomic Postgres transaction, keyed off the stored ledger row.
+      // Balance reversal (khata + account + linked bank tx) happens in ONE atomic Postgres
+      // transaction, keyed off the stored ledger row. No fallback account: money is only taken back
+      // from the account the payment actually went into (opening advances / write-offs had none).
       const { error: delError } = await supabase.rpc('delete_customer_transaction_effects', {
         p_tx_id: id,
-        p_fallback_account_id: fallbackAccountId
+        p_fallback_account_id: null
       });
       if (delError) throw delError;
 
       if (tx) {
         const cust = customers.find(c => c.id === tx.customer_id);
         if (cust) {
-          const balanceReversal = tx.type === 'Payment' ? tx.amount : -tx.amount;
+          // Payment and Return both lowered the khata when posted, so deleting them raises it back.
+          const balanceReversal = (tx.type === 'Payment' || (tx.type as string) === 'Return') ? tx.amount : -tx.amount;
           setCustomers(prev => prev.map(c => c.id === tx.customer_id ? { ...c, balance: roundCurrency(cust.balance + balanceReversal) } : c));
         }
       }
@@ -6200,8 +6873,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (acc) {
             const { error: expAccError } = await adjustAccountBalance(accountId, paid);
             if (expAccError) throw expAccError;
+            setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, balance: roundCurrency((a.balance || 0) + paid) } : a));
           }
-          await supabase.from('bank_transactions').delete().eq('related_expense_id', id);
+          await supabase.from('bank_transactions').delete().or(`related_expense_id.eq.${id},reference_id.eq.${id},id.eq.btx_${id}`);
+          setBankTransactions(prev => prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`));
         }
 
         // 2. Adjust vendor balance if unpaid portion was added
@@ -6230,6 +6905,107 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true; 
     } catch(e) {
       console.error("deleteExpense error:", e);
+      return false;
+    }
+  };
+
+  const updateExpense = async (id: string, updates: Partial<ExpenseEntry>): Promise<boolean> => {
+    try {
+      const exp = expenses.find(e => e.id === id);
+      if (!exp) return false;
+
+      const dayLocked = exp.date ? isDayLocked(exp.date) : false;
+      const shiftLocked = exp.shift_session_id ? shiftSessions.some(s => s.id === exp.shift_session_id && (s.status === 'Closed' || s.status === 'Force Closed')) : false;
+      if (dayLocked || shiftLocked) {
+        showToast('Closed Period Lock: This expense belongs to a closed shift or locked business day.', 'error');
+        return false;
+      }
+      // Moving an expense INTO a locked day would change that day's closed figures too.
+      if (updates.date && updates.date !== exp.date && isDayLocked(updates.date)) {
+        showToast('Closed Period Lock: Expense ko band (locked) din par nahi le ja sakte.', 'error');
+        return false;
+      }
+
+      // Revert previous financial impact
+      const oldPaid = exp.paidAmount !== undefined ? exp.paidAmount : exp.amount;
+      const oldAccountId = exp.account_id || (exp as any)?.details?.account_id;
+      if (oldAccountId && oldPaid > 0) {
+        await adjustAccountBalance(oldAccountId, oldPaid);
+        setAccounts(prev => prev.map(a => a.id === oldAccountId ? { ...a, balance: roundCurrency((a.balance || 0) + oldPaid) } : a));
+        await supabase.from('bank_transactions').delete().or(`related_expense_id.eq.${id},reference_id.eq.${id},id.eq.btx_${id}`);
+        setBankTransactions(prev => prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`));
+      }
+      if (exp.vendor_id) {
+        const unpaidOld = Math.max(0, (exp.amount || 0) - oldPaid);
+        await adjustExpenseVendorStats(exp.vendor_id, -unpaidOld, -(exp.amount || 0), -oldPaid);
+      }
+
+      // Calculate merged payload
+      const merged = { ...exp, ...updates };
+      const newTotal = Number(merged.amount) || 0;
+      const newPaid = merged.paymentStatus === 'Unpaid' 
+        ? 0 
+        : (merged.paymentStatus === 'Partial' ? (Number(merged.paidAmount) || 0) : (merged.paidAmount !== undefined ? Number(merged.paidAmount) : newTotal));
+      const newStatus = merged.paymentStatus || (newPaid >= newTotal ? 'Paid' : (newPaid > 0 ? 'Partial' : 'Unpaid'));
+      const newAccountId = merged.account_id || null;
+      const newDate = normalizeTransactionTimestamp(merged.date || new Date().toISOString());
+
+      if (newAccountId && newPaid > 0) {
+        await adjustAccountBalance(newAccountId, -newPaid);
+        setAccounts(prev => prev.map(a => a.id === newAccountId ? { ...a, balance: roundCurrency((a.balance || 0) - newPaid) } : a));
+        const btxRecord = {
+          id: `btx_${id}`,
+          account_id: newAccountId,
+          amount: newPaid,
+          date: newDate,
+          type: 'Expense',
+          category: merged.category || 'Expense',
+          description: `Expense: ${merged.description || ''}${merged.vendor_name ? ` (${merged.vendor_name})` : ''}`,
+          related_expense_id: id,
+          business_day_id: merged.business_day_id,
+          shift_session_id: merged.shift_session_id,
+          drawer_id: merged.drawer_id,
+          cashier_id: merged.cashier_id
+        };
+        await supabase.from('bank_transactions').insert([btxRecord]);
+        setBankTransactions(prev => [btxRecord as any, ...prev]);
+      }
+
+      if (merged.vendor_id) {
+        const unpaidNew = Math.max(0, newTotal - newPaid);
+        await adjustExpenseVendorStats(merged.vendor_id, unpaidNew, newTotal, newPaid);
+      }
+
+      const updatedExpense: ExpenseEntry = {
+        ...merged,
+        amount: newTotal,
+        paidAmount: newPaid,
+        paymentStatus: newStatus as any,
+        date: newDate
+      };
+
+      setExpenses(prev => prev.map(e => e.id === id ? updatedExpense : e));
+      const { error } = await supabase.from('expenses').update({
+        date: updatedExpense.date,
+        category: updatedExpense.category,
+        amount: updatedExpense.amount,
+        paid_amount: updatedExpense.paidAmount,
+        payment_status: updatedExpense.paymentStatus,
+        description: updatedExpense.description,
+        account_id: updatedExpense.account_id,
+        account_name: updatedExpense.account_name,
+        vendor_id: updatedExpense.vendor_id,
+        vendor_name: updatedExpense.vendor_name,
+        details: updatedExpense
+      }).eq('id', id);
+      if (error) throw error;
+
+      showToast("Expense updated successfully", "success");
+      fetchData();
+      return true;
+    } catch (err) {
+      console.error("updateExpense error:", err);
+      showToast("Failed to update expense: " + getErrorMessage(err), "error");
       return false;
     }
   };
@@ -6807,17 +7583,75 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const addJournalEntry = async (entry: any) => {
     try {
       const id = entry.id || `je_${generateUUID()}`;
-      const { date, totalAmount, ...extraDetails } = entry;
+      const { date, totalAmount, lines, ...extraDetails } = entry;
+      const entryLines: Array<{ account_id: string; debit: number; credit: number; description?: string }> = lines || extraDetails.lines || [];
+
+      // Validate double entry debit === credit
+      const totalDebit = roundCurrency(entryLines.reduce((s, l) => s + (Number(l.debit) || 0), 0));
+      const totalCredit = roundCurrency(entryLines.reduce((s, l) => s + (Number(l.credit) || 0), 0));
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        showToast(`Double-entry unbalance! Debit (Rs ${totalDebit}) != Credit (Rs ${totalCredit})`, "error");
+        return false;
+      }
+
+      // Every line must post somewhere; a line on an unknown account would leave the entry unbalanced.
+      const unknownLine = entryLines.find(l => !manualAccounts.some(m => m.id === l.account_id) && !accounts.some(a => a.id === l.account_id));
+      if (unknownLine) {
+        showToast('Journal mein sirf Chart of Accounts aur Bank/Cash accounts chun sakte hain. Customer/Supplier khata ke liye payment ya charge use karein.', 'error');
+        return false;
+      }
+
+      const entryDate = normalizeTransactionTimestamp(date || new Date().toISOString());
       const dbEntry = {
         id,
-        date,
-        total_amount: totalAmount || 0,
-        details: extraDetails
+        date: entryDate,
+        total_amount: totalDebit || totalAmount || 0,
+        details: { ...extraDetails, lines: entryLines }
       };
-      await supabase.from('journal_entries').insert([dbEntry]);
+      const { error: journalError } = await supabase.from('journal_entries').insert([dbEntry]);
+      if (journalError) throw journalError;
+
+      // Apply line balance updates to manual_accounts or financial_accounts
+      for (const [index, line] of entryLines.entries()) {
+        const netChange = (Number(line.debit) || 0) - (Number(line.credit) || 0);
+        if (netChange === 0) continue;
+
+        const manualAcc = manualAccounts.find(m => m.id === line.account_id);
+        if (manualAcc) {
+          const newBal = roundCurrency((manualAcc.balance || 0) + netChange);
+          await supabase.from('manual_accounts').update({ balance: newBal }).eq('id', manualAcc.id);
+          setManualAccounts(prev => prev.map(m => m.id === manualAcc.id ? { ...m, balance: newBal } : m));
+        } else {
+          const finAcc = accounts.find(a => a.id === line.account_id);
+          if (finAcc) {
+            const { error: journalAccError } = await adjustAccountBalance(finAcc.id, netChange);
+            if (journalAccError) throw journalAccError;
+            setAccounts(prev => prev.map(a => a.id === finAcc.id ? { ...a, balance: roundCurrency((a.balance || 0) + netChange) } : a));
+            // A cash/bank movement needs its own row, or the account statement no longer adds up to its balance.
+            const btx = {
+              id: `btx_${id}_${index}`,
+              account_id: finAcc.id,
+              amount: roundCurrency(Math.abs(netChange)),
+              date: entryDate,
+              type: netChange > 0 ? 'Deposit' : 'Withdrawal',
+              category: 'Journal Entry',
+              description: line.description || extraDetails.narration || extraDetails.reference || 'Journal Entry',
+              reference_id: id,
+              business_day_id: activeShiftSession?.business_day_id,
+              shift_session_id: isActiveDrawerAccount(finAcc.id) ? activeShiftSession?.id : null,
+              drawer_id: isActiveDrawerAccount(finAcc.id) ? activeShiftSession?.drawer_id : null,
+              cashier_id: currentUser?.id
+            };
+            const { error: journalBtxError } = await supabase.from('bank_transactions').insert([btx]);
+            if (journalBtxError) throw journalBtxError;
+            setBankTransactions(prev => [btx as any, ...prev]);
+          }
+        }
+      }
+
       fetchData();
       return true;
-    } catch(e) { return false; }
+    } catch(e) { console.error(e); return false; }
   };
 
   // =========================================================================
@@ -6893,7 +7727,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const name = item?.name || 'Product';
       const isSystem = item?.isSystem || ['item_buffalo_milk', 'item_cow_milk', 'item_mixed_milk'].includes(id) || ['Buffalo Milk', 'Cow Milk', 'Mixed Milk'].includes(name);
       const inv = inventory.find(i => i.item_id === id);
-      const stock = Number(inv?.quantity || (item as any)?.stock || 0);
+      // Ready-made packs are stock too: 0 kg loose with 40 jars on the shelf is not an empty item.
+      const stock = stockOnHandBase(Number(inv?.quantity ?? (item as any)?.stock ?? 0), inv?.variant_stocks || item?.variant_stocks, item?.variants);
       const salesCount = sales.filter(s => s.items?.some(it => it.itemId === id)).length;
       const purCount = materialPurchases.filter(m => m.item_id === id).length;
       const logCount = inventoryLogs.filter(l => l.item_id === id).length;
@@ -6907,7 +7742,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         blockingReasons.push(`Item is required as recipe ingredient for: ${recipesUsing.join(', ')}.`);
       }
       if (stock > 0) {
-        blockingReasons.push(`Item has ${stock} ${item?.unit || 'units'} in current stock (Valuation: Rs ${(stock * (item?.cost_price || item?.selling_price || 0)).toLocaleString()}).`);
+        blockingReasons.push(`Item has ${stock} ${item?.unit || 'units'} in current stock, packs included (Valuation at cost: Rs ${(stock * (item?.cost_price || 0)).toLocaleString()}).`);
       }
       if (hasHistory && recipesUsing.length === 0) {
         blockingReasons.push(`Item has ${salesCount} sales bills and ${purCount} material purchases in history.`);
@@ -7051,7 +7886,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           // Record write off expense to keep Balance Sheet in exact equilibrium
           await supabase.from('expenses').insert([{
             id: `exp_wo_${generateUUID()}`,
-            date: new Date().toISOString().split('T')[0],
+            date: getTodayLocalDate(),
             category: 'Bad Debt & Write-off',
             description: `Bad debt write-off for customer: ${cust.name}`,
             amount: bal,
@@ -7130,18 +7965,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (action === 'settle_discount') {
         const bal = Number(supp.pending_balance || 0);
         if (bal > 0) {
-          await supabase.from('supplier_transactions').insert([{
+          // A waiver settles the khata without any money leaving an account (waiver: true keeps it
+          // out of the cash-paid register and of any account reversal on delete).
+          const { error: waiverError } = await supabase.from('supplier_transactions').insert([{
             id: `stx_wo_${generateUUID()}`,
             supplier_id: id,
-            date: new Date().toISOString().split('T')[0],
+            date: normalizeTransactionTimestamp(getTodayLocalDate()),
             type: 'Payment',
             amount: bal,
             details: {
               mode: 'Supplier Waiver / Discount',
-              note: 'Payable balance settled via discount waiver prior to vendor archival'
+              note: 'Payable balance settled via discount waiver prior to vendor archival',
+              waiver: true
             }
           }]);
-          await adjustSupplierBalance(id, -bal);
+          if (waiverError) throw waiverError;
+          const { error: waiverBalanceError } = await adjustSupplierBalance(id, -bal);
+          if (waiverBalanceError) throw waiverBalanceError;
         }
         await updateSupplier(id, { isActive: false });
         showToast(`Supplier "${supp.name}" balance settled via waiver and marked Inactive!`, 'success');
@@ -7664,10 +8504,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       localStorage.setItem('mooco_active_user_id', matchedUser.id);
       localStorage.setItem('mooco_active_user_data', JSON.stringify(matchedUser));
     }
+    // The first sign-in on this device unlocks the database: load the workspace and push any
+    // work that was queued while nobody was signed in.
+    if (awaitingLogin.current) {
+      awaitingLogin.current = false;
+      void fetchData();
+    }
+    syncService.syncPending().catch(err => console.warn('[Login] Background sync notice:', err));
   };
 
-  // PIN verification happens entirely inside the Postgres RPC (hashed, salted,
-  // rate-limited). Plaintext PINs are never stored or compared client-side.
+  // The PIN is checked by the operator-login Edge Function (hashed, salted, rate-limited RPCs),
+  // which also returns the Supabase session every later request needs.
+  const signInOperator = async (request: OperatorLoginRequest, fallback: string): Promise<{ success: boolean; message?: string; user?: AppUser }> => {
+    const { user, message } = await operatorSignIn(request);
+    if (!user) return { success: false, message: message || fallback };
+    const matchedUser = mapRpcUser(user);
+    applyLogin(matchedUser);
+    return { success: true, user: matchedUser };
+  };
+
   const loginWithCredentials = async (username: string, pin: string): Promise<{ success: boolean; message?: string; user?: AppUser }> => {
     const cleanUser = username.trim().toLowerCase();
     const cleanPin = pin.trim();
@@ -7677,15 +8532,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (!cleanPin) {
       return { success: false, message: 'Enter the password / PIN code' };
     }
-
-    const { data, error } = await supabase.rpc('app_login', { p_username: cleanUser, p_pin: cleanPin });
-    if (error || !data) {
-      return { success: false, message: error?.message || 'Ghalat Username ya PIN code!' };
-    }
-
-    const matchedUser = mapRpcUser(data);
-    applyLogin(matchedUser);
-    return { success: true, user: matchedUser };
+    return signInOperator({ mode: 'username', username: cleanUser, pin: cleanPin }, 'Ghalat Username ya PIN code!');
   };
 
   const switchUserWithPin = async (pin: string): Promise<{ success: boolean; message?: string; user?: AppUser }> => {
@@ -7693,30 +8540,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (!cleanPin) {
       return { success: false, message: 'Invalid 4-Digit PIN Code!' };
     }
-
-    const { data, error } = await supabase.rpc('app_login_with_pin', { p_pin: cleanPin });
-    if (error || !data) {
-      return { success: false, message: error?.message || 'Invalid 4-Digit PIN Code!' };
-    }
-
-    const matchedUser = mapRpcUser(data);
-    applyLogin(matchedUser);
-    return { success: true, user: matchedUser };
+    return signInOperator({ mode: 'pin', pin: cleanPin }, 'Invalid 4-Digit PIN Code!');
   };
 
   const switchUserByIdAndPin = async (userId: string, pin: string): Promise<{ success: boolean; message?: string; user?: AppUser }> => {
     if (!pin.trim()) {
       return { success: false, message: 'Incorrect PIN Code' };
     }
-
-    const { data, error } = await supabase.rpc('app_verify_pin', { p_user_id: userId, p_pin: pin.trim() });
-    if (error || !data) {
-      return { success: false, message: error?.message || 'Incorrect PIN Code' };
-    }
-
-    const targetUser = mapRpcUser(data);
-    applyLogin(targetUser);
-    return { success: true, user: targetUser };
+    return signInOperator({ mode: 'user', user_id: userId, pin: pin.trim() }, 'Incorrect PIN Code');
   };
 
   const setCurrentUserDirectly = (user: AppUser) => {
@@ -7733,6 +8564,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       localStorage.removeItem('mooco_active_user_id');
       localStorage.removeItem('mooco_active_user_data');
     }
+    void operatorSignOut();
     setIsUserSwitcherOpen(true);
   };
 
@@ -7926,7 +8758,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setProductionBatches, createBatch, updateBatchStage, cancelBatch,
     addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, processCreditSaleTransaction, performRetailClosing, postClosingStockSale,
     addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
-    addExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, generateRecurringExpense, 
+    addExpense, updateExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, generateRecurringExpense, 
     addExpenseVendor, updateExpenseVendor, deleteExpenseVendor, recordExpenseVendorPayment, deleteExpenseVendorTransaction,
     addAccount, updateAccount, deleteAccount, recordBankTransaction, transferFunds, addManualAccount, deleteManualAccount, updateManualAccount, addJournalEntry,
     updateSettings, resetSystem, clearData, addCategory, removeCategory,
@@ -7946,6 +8778,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   return (
     <DairyContext.Provider value={contextValue}>
+      {children}
+    </DairyContext.Provider>
+  );
+};
+
+/**
+ * Keeps a hidden (kept-alive) page on the context value it last saw, so sales
+ * and syncs do not re-render screens nobody is looking at. When `frozen` turns
+ * false the live value flows through again and the page catches up at once.
+ */
+export const DairyFreeze: React.FC<{ frozen: boolean; children: ReactNode }> = ({ frozen, children }) => {
+  const live = useContext(DairyContext);
+  const snapshotRef = useRef(live);
+  if (!frozen) snapshotRef.current = live;
+  return (
+    <DairyContext.Provider value={frozen ? snapshotRef.current : live}>
       {children}
     </DairyContext.Provider>
   );

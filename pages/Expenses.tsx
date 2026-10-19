@@ -17,11 +17,12 @@ import {
   ExpenseCategoryModal, ExpenseFormModal, SavedExpensesModal,
   ExpenseVendorModal, VendorPaymentModal 
 } from '../components/expenses/ExpenseModals';
+import { formatCurrency, formatMoneyRaw } from '../lib/formatters';
 
 const Expenses: React.FC = () => {
   const { 
     expenses, expenseVendors, expenseVendorTransactions,
-    addExpense, deleteExpense, 
+    addExpense, updateExpense, deleteExpense, 
     addExpenseVendor, updateExpenseVendor, deleteExpenseVendor, 
     recordExpenseVendorPayment, deleteExpenseVendorTransaction,
     manualAccounts, addManualAccount, deleteManualAccount, updateManualAccount,
@@ -91,6 +92,7 @@ const Expenses: React.FC = () => {
 
   // Modals and Form States
   const [isAddMode, setIsAddMode] = useState(false);
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
@@ -110,12 +112,12 @@ const Expenses: React.FC = () => {
   const [filterVendorTabStatus, setFilterVendorTabStatus] = useState<'All' | 'With Dues' | 'Advance' | 'Active' | 'Inactive'>('All');
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
   const [dateFilterMode, setDateFilterMode] = useState<ExpenseDateFilterMode>('this_month');
-  const [filterSingleDate, setFilterSingleDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [filterSingleDate, setFilterSingleDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [filterStartDate, setFilterStartDate] = useState<string>(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   });
-  const [filterEndDate, setFilterEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [filterEndDate, setFilterEndDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [expandedExpenseRowId, setExpandedExpenseRowId] = useState<string | null>(null);
 
   // Khata Statement Date Filters
@@ -129,7 +131,7 @@ const Expenses: React.FC = () => {
     account_id?: string;
     dueDate?: string;
   }>({
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
     category: '', 
     subcategory: '',
     description: '', 
@@ -172,7 +174,7 @@ const Expenses: React.FC = () => {
     type: 'payment',
     vendor_id: '',
     amount: '',
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
     mode: 'Cash',
     account_id: settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '',
     reference_no: '',
@@ -349,18 +351,20 @@ const Expenses: React.FC = () => {
 
   // Filtered Expenses with Date & Date Range Support
   const filteredExpenses = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Every comparison uses the Pakistan business day, for the filter edges and the expense alike.
+    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+    const todayStr = pkDay(new Date());
     const yday = new Date();
     yday.setDate(yday.getDate() - 1);
-    const ydayStr = yday.toISOString().split('T')[0];
+    const ydayStr = pkDay(yday);
 
     const d7 = new Date();
     d7.setDate(d7.getDate() - 6);
-    const d7Str = d7.toISOString().split('T')[0];
+    const d7Str = pkDay(d7);
 
     const d30 = new Date();
     d30.setDate(d30.getDate() - 29);
-    const d30Str = d30.toISOString().split('T')[0];
+    const d30Str = pkDay(d30);
 
     const now = new Date();
     const prevMonthStr = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
@@ -376,7 +380,7 @@ const Expenses: React.FC = () => {
       const matchesStatus = filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus;
 
       const rawDate = exp.date || '';
-      const expDate = rawDate.includes('T') ? rawDate.split('T')[0] : rawDate.slice(0, 10);
+      const expDate = rawDate.includes('T') ? pkDay(new Date(rawDate)) : rawDate.slice(0, 10);
 
       let matchesDate = true;
       if (dateFilterMode === 'all') {
@@ -499,7 +503,7 @@ const Expenses: React.FC = () => {
         label: v.name,
         subLabel: v.service_type || 'Vendor/Staff',
         badge: bal !== 0 ? {
-          text: `Rs ${Math.abs(bal).toLocaleString()} ${bal > 0 ? 'Due' : 'Advance'}`,
+          text: `${formatCurrency(Math.abs(bal))} ${bal > 0 ? 'Due' : 'Advance'}`,
           variant: bal > 0 ? 'red' : 'green'
         } : {
           text: 'Cleared',
@@ -517,7 +521,7 @@ const Expenses: React.FC = () => {
       label: a.name,
       subLabel: a.type,
       badge: {
-        text: `Rs ${a.balance.toLocaleString()}`,
+        text: `${formatCurrency(a.balance)}`,
         variant: a.balance >= 0 ? 'slate' : 'red'
       },
       icon: a.type === 'Cash' ? <Wallet size={15} /> : <CreditCard size={15} />
@@ -804,9 +808,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleOpenAddModal = () => {
+    setEditingExpenseId(null);
     const defaultAcc = settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '';
     setFormData({ 
-      date: new Date().toISOString().split('T')[0], 
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
       category: '', 
       subcategory: '',
       description: '', 
@@ -915,6 +920,7 @@ const Expenses: React.FC = () => {
   };
 
   const handleEditExpense = (exp: ExpenseEntry) => {
+    setEditingExpenseId(exp.id);
     setFormData({
       date: exp.date,
       category: exp.category,
@@ -974,7 +980,7 @@ const Expenses: React.FC = () => {
     isSubmittingExpenseRef.current = true;
     setIsSubmitting(true);
     try {
-      const ok = await addExpense({
+      const expensePayload = {
         ...formData,
         amount: formData.amount,
         paidAmount: actualPaid,
@@ -986,35 +992,44 @@ const Expenses: React.FC = () => {
         account_name: actualPaid > 0 && chosenAccount ? chosenAccount.name : undefined,
         vendor_id: formData.vendor_id || undefined,
         vendor_name: vendorName
-      } as Omit<ExpenseEntry, 'id'>);
-      if (!ok) return;
+      };
 
-      if (rememberExpense) {
-        await upsertSavedExpense({
-          name: (rememberName || formData.description || '').trim(),
-          category: formData.category,
-          subcategory: formData.subcategory || '',
-          description: formData.description,
-          amount: formData.amount,
-          paidAmount: actualPaid,
-          paymentStatus: formData.paymentStatus,
-          paymentMode: formData.paymentMode || 'Cash',
-          account_id: formData.account_id,
-          vendor_id: formData.vendor_id || undefined,
-          vendor_name: vendorName || undefined,
-          notes: formData.notes || ''
-        });
-        setRememberExpense(false);
-        setRememberName('');
-      }
-
-      const remainingDues = formData.amount - actualPaid;
-      if (remainingDues > 0 && vendorName) {
-        showToast(`Expense of Rs ${formData.amount.toLocaleString()} recorded. Paid: Rs ${actualPaid.toLocaleString()}, Due to ${vendorName}: Rs ${remainingDues.toLocaleString()}`, 'success');
+      if (editingExpenseId) {
+        const ok = await updateExpense(editingExpenseId, expensePayload as Partial<ExpenseEntry>);
+        if (!ok) return;
+        showToast("Expense updated successfully", "success");
       } else {
-        showToast(`Expense of Rs ${formData.amount.toLocaleString()} recorded from ${chosenAccount?.name || 'Account'}`, 'success');
+        const ok = await addExpense(expensePayload as Omit<ExpenseEntry, 'id'>);
+        if (!ok) return;
+
+        if (rememberExpense) {
+          await upsertSavedExpense({
+            name: (rememberName || formData.description || '').trim(),
+            category: formData.category,
+            subcategory: formData.subcategory || '',
+            description: formData.description,
+            amount: formData.amount,
+            paidAmount: actualPaid,
+            paymentStatus: formData.paymentStatus,
+            paymentMode: formData.paymentMode || 'Cash',
+            account_id: formData.account_id,
+            vendor_id: formData.vendor_id || undefined,
+            vendor_name: vendorName || undefined,
+            notes: formData.notes || ''
+          });
+          setRememberExpense(false);
+          setRememberName('');
+        }
+
+        const remainingDues = formData.amount - actualPaid;
+        if (remainingDues > 0 && vendorName) {
+          showToast(`Expense of ${formatCurrency(formData.amount)} recorded. Paid: ${formatCurrency(actualPaid)}, Due to ${vendorName}: ${formatCurrency(remainingDues)}`, 'success');
+        } else {
+          showToast(`Expense of ${formatCurrency(formData.amount)} recorded from ${chosenAccount?.name || 'Account'}`, 'success');
+        }
       }
       setIsAddMode(false);
+      setEditingExpenseId(null);
       setIsSavedExpensesOpen(false);
     } catch (err: any) {
       showToast("Error recording expense: " + (err?.message || "Failed"), "error");
@@ -1110,7 +1125,7 @@ const Expenses: React.FC = () => {
   const handleDeleteVendor = (vendor: ExpenseVendor) => {
     const assessment = getDeleteAssessment('vendor', vendor.id);
     if (assessment.balance !== 0) {
-      showToast(`Cannot delete vendor with outstanding balance of Rs ${Math.abs(assessment.balance).toLocaleString()}. Please settle the balance first.`, 'error');
+      showToast(`Cannot delete vendor with outstanding balance of ${formatCurrency(Math.abs(assessment.balance))}. Please settle the balance first.`, 'error');
       return;
     }
     if (assessment.hasHistory) {
@@ -1191,7 +1206,7 @@ const Expenses: React.FC = () => {
       type: initialType,
       vendor_id: targetVendor ? targetVendor.id : '',
       amount: initialAmt,
-      date: new Date().toISOString().split('T')[0],
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
       mode: 'Cash',
       account_id: defaultAcc,
       reference_no: '',
@@ -1223,7 +1238,7 @@ const Expenses: React.FC = () => {
     const isRefund = paymentFormData.type === 'refund';
     const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
     if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
-      if (!confirm(`Warning: Account "${chosenAccount.name}" has Rs ${chosenAccount.balance.toLocaleString()} which is less than payment amount Rs ${amt.toLocaleString()}. Proceed anyway?`)) {
+      if (!confirm(`Warning: Account "${chosenAccount.name}" has ${formatCurrency(chosenAccount.balance)} which is less than payment amount ${formatCurrency(amt)}. Proceed anyway?`)) {
         return;
       }
     }
@@ -1343,28 +1358,18 @@ const Expenses: React.FC = () => {
 
     rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    let currentBalance = 0;
-    const computedRows = rows.map(r => {
-      currentBalance = currentBalance + r.debit - r.credit;
-      return {
-        ...r,
-        runningBalance: currentBalance
-      };
-    });
-
-    if (khataDateRange === 'all') return computedRows;
-
     const now = new Date();
     let startDateLimit = '';
     let endDateLimit = '';
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+    const todayStr = pkDay(new Date());
     const yday = new Date();
     yday.setDate(yday.getDate() - 1);
-    const ydayStr = yday.toISOString().split('T')[0];
+    const ydayStr = pkDay(yday);
     const d7 = new Date();
     d7.setDate(d7.getDate() - 6);
-    const d7Str = d7.toISOString().split('T')[0];
+    const d7Str = pkDay(d7);
 
     if (khataDateRange === 'today') {
       startDateLimit = todayStr;
@@ -1393,13 +1398,55 @@ const Expenses: React.FC = () => {
       endDateLimit = khataEndDate;
     }
 
-    return computedRows.filter(r => {
-      if (r.type === 'Opening Balance') return true;
-      const rDate = r.date ? (r.date.includes('T') ? r.date.split('T')[0] : r.date.slice(0, 10)) : '';
-      if (startDateLimit && rDate < startDateLimit) return false;
-      if (endDateLimit && rDate > endDateLimit) return false;
-      return true;
+    if (!startDateLimit && !endDateLimit) {
+      let currentBalance = 0;
+      return rows.map(r => {
+        currentBalance = currentBalance + r.debit - r.credit;
+        return {
+          ...r,
+          runningBalance: currentBalance
+        };
+      });
+    }
+
+    let priorBalance = 0;
+    const periodRows: LedgerRow[] = [];
+
+    rows.forEach(r => {
+      const rDate = r.date ? (r.date.includes('T') ? pkDay(new Date(r.date)) : r.date.slice(0, 10)) : '';
+      if (startDateLimit && rDate < startDateLimit) {
+        priorBalance = priorBalance + r.debit - r.credit;
+      } else if (!endDateLimit || rDate <= endDateLimit) {
+        periodRows.push(r);
+      }
     });
+
+    const resultRows: LedgerRow[] = [];
+    if (startDateLimit) {
+      resultRows.push({
+        id: `prior_ob_${vId}`,
+        date: startDateLimit,
+        type: 'Opening Balance',
+        description: 'Baqaya / Opening Balance (B/F)',
+        modeAccount: 'Balance B/F',
+        refNo: 'B/F',
+        debit: priorBalance > 0 ? priorBalance : 0,
+        credit: priorBalance < 0 ? Math.abs(priorBalance) : 0,
+        runningBalance: priorBalance
+      });
+    }
+
+    let currentBalance = priorBalance;
+    periodRows.forEach(r => {
+      if (r.type === 'Opening Balance' && startDateLimit) return;
+      currentBalance = currentBalance + r.debit - r.credit;
+      resultRows.push({
+        ...r,
+        runningBalance: currentBalance
+      });
+    });
+
+    return resultRows;
   }, [selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate]);
 
   // WhatsApp Statement Link Generator
@@ -1419,13 +1466,13 @@ const Expenses: React.FC = () => {
     text += `To: *${vendor.name}* (${vendor.service_type || 'Vendor'})\n`;
     text += `Date: ${new Date().toLocaleDateString('en-GB')}\n\n`;
     text += `📊 *Summary*\n`;
-    text += `• Total Billed: Rs ${totalBilled.toLocaleString()}\n`;
-    text += `• Total Paid: Rs ${totalPaid.toLocaleString()}\n`;
-    text += `• *Net Outstanding Dues:* Rs ${pendingDues.toLocaleString()}\n\n`;
+    text += `• Total Billed: ${formatCurrency(totalBilled)}\n`;
+    text += `• Total Paid: ${formatCurrency(totalPaid)}\n`;
+    text += `• *Net Outstanding Dues:* ${formatCurrency(pendingDues)}\n\n`;
     text += `*Last Activity:*\n`;
     
     khataLedgerRows.slice(-5).forEach(r => {
-      text += `• ${r.date} | ${r.description} | Bill: Rs ${r.debit.toLocaleString()} | Paid: Rs ${r.credit.toLocaleString()}\n`;
+      text += `• ${r.date} | ${r.description} | Bill: ${formatCurrency(r.debit)} | Paid: ${formatCurrency(r.credit)}\n`;
     });
 
     text += `\nThank you!`;
@@ -1491,8 +1538,8 @@ const Expenses: React.FC = () => {
           <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
             <span className="text-[9px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider truncate">Total</span>
             <h3 className="text-xs sm:text-lg font-black text-slate-900 dark:text-slate-100 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(totalExpense > 99999 ? (totalExpense/1000).toFixed(0) + 'k' : totalExpense.toLocaleString())}</span>
-              <span className="hidden sm:inline">Rs {totalExpense.toLocaleString()}</span>
+              <span className="sm:hidden">Rs {(totalExpense > 99999 ? (totalExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(totalExpense))}</span>
+              <span className="hidden sm:inline">{formatCurrency(totalExpense)}</span>
             </h3>
             <span className="text-[9px] text-slate-400 font-medium hidden sm:block mt-0.5">{filteredExpenses.length} txns</span>
           </div>
@@ -1500,8 +1547,8 @@ const Expenses: React.FC = () => {
           <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
             <span className="text-[9px] sm:text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">Cash</span>
             <h3 className="text-xs sm:text-lg font-black text-amber-800 dark:text-amber-300 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(cashExpense > 99999 ? (cashExpense/1000).toFixed(0) + 'k' : cashExpense.toLocaleString())}</span>
-              <span className="hidden sm:inline">Rs {cashExpense.toLocaleString()}</span>
+              <span className="sm:hidden">Rs {(cashExpense > 99999 ? (cashExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(cashExpense))}</span>
+              <span className="hidden sm:inline">{formatCurrency(cashExpense)}</span>
             </h3>
             <span className="text-[9px] text-amber-600 dark:text-amber-400 font-bold hidden sm:block mt-0.5">{totalExpense > 0 ? ((cashExpense/totalExpense)*100).toFixed(0) : 0}% total</span>
           </div>
@@ -1509,8 +1556,8 @@ const Expenses: React.FC = () => {
           <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
             <span className="text-[9px] sm:text-[11px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider truncate">Digital</span>
             <h3 className="text-xs sm:text-lg font-black text-blue-800 dark:text-blue-300 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(onlineExpense > 99999 ? (onlineExpense/1000).toFixed(0) + 'k' : onlineExpense.toLocaleString())}</span>
-              <span className="hidden sm:inline">Rs {onlineExpense.toLocaleString()}</span>
+              <span className="sm:hidden">Rs {(onlineExpense > 99999 ? (onlineExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(onlineExpense))}</span>
+              <span className="hidden sm:inline">{formatCurrency(onlineExpense)}</span>
             </h3>
             <span className="text-[9px] text-blue-500 font-medium hidden sm:block mt-0.5">Accounts</span>
           </div>
@@ -1522,8 +1569,8 @@ const Expenses: React.FC = () => {
               Dues
             </span>
             <h3 className={`text-xs sm:text-lg font-black font-mono mt-0.5 truncate ${totalOutstandingVendorDues > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'}`}>
-              <span className="sm:hidden">Rs {(totalOutstandingVendorDues > 99999 ? (totalOutstandingVendorDues/1000).toFixed(0) + 'k' : totalOutstandingVendorDues.toLocaleString())}</span>
-              <span className="hidden sm:inline">Rs {totalOutstandingVendorDues.toLocaleString()}</span>
+              <span className="sm:hidden">Rs {(totalOutstandingVendorDues > 99999 ? (totalOutstandingVendorDues/1000).toFixed(0) + 'k' : formatMoneyRaw(totalOutstandingVendorDues))}</span>
+              <span className="hidden sm:inline">{formatCurrency(totalOutstandingVendorDues)}</span>
             </h3>
             <span className="text-[9px] text-rose-500 font-medium hidden sm:block mt-0.5">{expenseVendors.filter(v => (v.pending_balance || 0) > 0).length} parties</span>
           </div>
