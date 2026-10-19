@@ -30,26 +30,19 @@ interface WorkspaceContainerProps {
   toggleTheme: () => void;
 }
 
-export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMode, toggleTheme }) => {
-  const {
-    tabs,
-    activeTabId,
-    splitTabId,
-    isSplitView,
-    closeTab
-  } = useTabs();
+// Recently opened pages stay mounted (hidden) so returning to them is instant and keeps their state.
+const KEEP_ALIVE_LIMIT = 4;
 
-  const [visitedTabs, setVisitedTabs] = useState(() => new Set([activeTabId]));
+export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMode, toggleTheme }) => {
+  const { activeTab, activeTabId, goBack } = useTabs();
+
+  const [recentPages, setRecentPages] = useState<WorkspaceTab[]>(() => [activeTab]);
   useEffect(() => {
-    setVisitedTabs(previous => {
-      const activeIds = new Set(tabs.map(t => t.id));
-      const next = new Set([...previous].filter(id => activeIds.has(id)));
-      next.add(activeTabId);
-      if (isSplitView && splitTabId) next.add(splitTabId);
-      if (next.size === previous.size && [...next].every(id => previous.has(id))) return previous;
-      return next;
+    setRecentPages(previous => {
+      if (previous[0]?.id === activeTabId) return previous[0] === activeTab ? previous : [activeTab, ...previous.slice(1)];
+      return [activeTab, ...previous.filter(page => page.id !== activeTabId)].slice(0, KEEP_ALIVE_LIMIT);
     });
-  }, [tabs, activeTabId, isSplitView, splitTabId]);
+  }, [activeTab, activeTabId]);
 
   // Download the initial dashboard module while session/data requests are running.
   useEffect(() => {
@@ -167,7 +160,7 @@ export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMod
       case 'settings':
         return (
           <ProtectedRoute module="settings">
-            <Settings onBack={() => closeTab(tab.id)} themeMode={themeMode} toggleTheme={toggleTheme} />
+            <Settings onBack={goBack} themeMode={themeMode} toggleTheme={toggleTheme} />
           </ProtectedRoute>
         );
       default:
@@ -179,38 +172,29 @@ export const WorkspaceContainer: React.FC<WorkspaceContainerProps> = ({ themeMod
     }
   };
 
-  const isDualView = Boolean(isSplitView && splitTabId && splitTabId !== activeTabId && tabs.some(t => t.id === splitTabId));
-
   return (
     <div className="flex-1 flex flex-col min-h-0 h-full w-full overflow-hidden relative">
-      <div className={`flex-1 flex ${isDualView ? 'flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-200 dark:divide-slate-800' : 'flex-col'} min-h-0 h-full w-full overflow-hidden`}>
-        {tabs.map(tab => {
-          const isLeft = tab.id === activeTabId;
-          const isRight = isDualView && tab.id === splitTabId;
-          const isVisible = isDualView ? (isLeft || isRight) : isLeft;
-          const isPos = tab.id === 'pos';
-          const isContained = isPos || tab.id === 'reports';
+      {recentPages.map(tab => {
+        const isVisible = tab.id === activeTabId;
+        const isPos = tab.id === 'pos';
+        const isContained = isPos || tab.id === 'reports';
 
-          // Saved tabs stay in navigation without downloading/mounting their pages until first activated.
-          if (!isVisible && !visitedTabs.has(tab.id)) return null;
-
-          return (
-            <div
-              key={tab.id}
-              data-module={tab.id}
-              data-active={isVisible ? 'true' : 'false'}
-              style={{ display: isVisible ? 'flex' : 'none' }}
-              className={`workspace-pane w-full h-full flex-1 flex flex-col min-h-0 ${isContained ? 'overflow-hidden' : 'overflow-y-auto'} ${!isVisible ? 'hidden' : ''}`}
-            >
-              <div className={`workspace-page w-full ${isContained ? 'flex-1 flex flex-col min-h-0 h-full' : 'min-h-full'} ${isPos ? '' : `px-3 sm:px-4 md:px-8 ${isContained ? 'pb-4' : 'pb-8'} pt-2 max-w-[1600px] mx-auto`}`}>
-                <Suspense fallback={<PageLoadingFallback />}>
-                  {renderModuleComponent(tab)}
-                </Suspense>
-              </div>
+        return (
+          <div
+            key={tab.id}
+            data-module={tab.id}
+            data-active={isVisible ? 'true' : 'false'}
+            style={{ display: isVisible ? 'flex' : 'none' }}
+            className={`workspace-pane w-full h-full flex-1 flex flex-col min-h-0 ${isContained ? 'overflow-hidden' : 'overflow-y-auto'}`}
+          >
+            <div className={`workspace-page w-full ${isContained ? 'flex-1 flex flex-col min-h-0 h-full' : 'min-h-full'} ${isPos ? '' : `px-3 sm:px-4 md:px-8 ${isContained ? 'pb-4' : 'pb-8'} pt-4 max-w-[1600px] mx-auto`}`}>
+              <Suspense fallback={<PageLoadingFallback />}>
+                {renderModuleComponent(tab)}
+              </Suspense>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 };

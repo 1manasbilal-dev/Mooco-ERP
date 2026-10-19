@@ -3,13 +3,12 @@ import { DairyProvider, useDairy } from './context/DairyContext';
 import { ToastProvider } from './context/ToastContext';
 import { TabProvider, useTabs } from './context/TabContext';
 import Sidebar from './components/Sidebar';
-import TabBar from './components/TabBar';
 import WorkspaceContainer from './components/WorkspaceContainer';
 import ToastContainer from './components/ToastContainer';
 import ErrorBoundary from './components/ErrorBoundary';
 import SyncStatusBadge from './components/SyncStatusBadge';
 import PageLoadingFallback from './components/PageLoadingFallback';
-import { Search, Menu, Sun, Moon, Lock, LogOut, ChevronDown } from 'lucide-react';
+import { Search, Menu, Sun, Moon, Lock, LogOut, ChevronDown, ChevronRight, Home } from 'lucide-react';
 
 const UserSwitcherModal = lazy(() => import('./components/UserSwitcherModal'));
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(module => ({ default: module.CommandPalette })));
@@ -97,7 +96,7 @@ const HeaderUserButton: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { tabs, activeTabId } = useTabs();
+  const { activeTab, activeTabId, openTab } = useTabs();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('app_theme');
@@ -106,8 +105,6 @@ const AppContent: React.FC = () => {
   });
 
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const activeTabObj = tabs.find(t => t.id === activeTabId);
-  const activeTitle = activeTabObj?.title || activeTabId.replace(/-/g, ' ');
 
   const toggleTheme = () => {
     if (themeMode === 'light') {
@@ -201,15 +198,25 @@ const AppContent: React.FC = () => {
               </button>
               
               <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-                  <h1 className="hidden sm:block text-base lg:text-xl font-black text-slate-900 dark:text-slate-50 capitalize tracking-tight truncate max-w-[130px] md:max-w-[200px] lg:max-w-none">
-                    {activeTitle}
-                  </h1>
-                  <span className="hidden lg:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-lime-100/80 text-lime-800 dark:bg-lime-900/30 dark:text-lime-300 border border-lime-200/50 dark:border-lime-700/30 shrink-0">
-                    Enterprise
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden xl:block">Mooco Dairy Management & Accounting ERP</p>
+                <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => openTab('dashboard')}
+                    className="flex items-center gap-1 hover:text-lime-700 dark:hover:text-lime-400 transition-colors cursor-pointer shrink-0"
+                  >
+                    <Home size={12} aria-hidden="true" />
+                    <span>Mooco ERP</span>
+                  </button>
+                  {activeTab.section && (
+                    <>
+                      <ChevronRight size={12} className="text-slate-300 dark:text-slate-600 shrink-0" aria-hidden="true" />
+                      <span className="truncate">{activeTab.section}</span>
+                    </>
+                  )}
+                </nav>
+                <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-900 dark:text-slate-50 tracking-tight truncate leading-tight">
+                  {activeTab.title}
+                </h1>
               </div>
             </div>
             
@@ -256,9 +263,6 @@ const AppContent: React.FC = () => {
               </button>
             </div>
           </header>
-
-          {/* Browser-style Tab Workspace Bar */}
-          <TabBar />
 
           {/* Main Workspace Area */}
           <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
