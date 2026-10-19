@@ -60,7 +60,13 @@ export const ItemDetailView: React.FC<Props> = ({
   const reorder = item.reorder_level || 5;
   const stockTone: 'out' | 'low' | 'ok' = stock <= 0 ? 'out' : stock <= reorder ? 'low' : 'ok';
   const stockPct = Math.max(0, Math.min(100, (stock / (reorder * 4 || 20)) * 100));
-  const packsReady = activeVariants.reduce((sum, v) => sum + (Number(variantStocks[v.id]) || 0), 0);
+  // Only pre-packed sizes hold their own count (dozen/tray draw from loose stock). Never add different sizes together.
+  const packedVariants = activeVariants.filter(v => v.deduct_from_base !== true);
+  const packsReady = packedVariants
+    .map(v => ({ name: v.name, count: Number(variantStocks[v.id]) || 0 }))
+    .filter(p => p.count !== 0)
+    .map(p => `${formatQty(p.count)} × ${p.name}`)
+    .join(' · ');
 
   const [tab, setTab] = useState<'amount' | 'qty'>(qtyFirst ? 'qty' : 'amount');
   const preview = useMemo(() => buildQuickPreview(rate, item.unit, item.quick_amounts), [rate, item.unit, item.quick_amounts]);
@@ -70,7 +76,7 @@ export const ItemDetailView: React.FC<Props> = ({
   const profitBasis = useMemo(() => {
     if (rate > 0) return { sell: rate, cost, per: item.unit };
     const pack = activeVariants.find(v => Number(v.selling_price) > 0);
-    if (pack) return { sell: Number(pack.selling_price), cost: cost * (Number(pack.quantity_in_base_unit) || 1), per: pack.name };
+    if (pack) return { sell: Number(pack.selling_price), cost: cost * sellUnitContains(pack), per: pack.name };
     return null;
   }, [rate, cost, item.unit, activeVariants]);
   const profit = profitBasis ? profitBasis.sell - profitBasis.cost : 0;
@@ -187,7 +193,7 @@ export const ItemDetailView: React.FC<Props> = ({
             </div>
             <div className="mt-2 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden" aria-hidden="true"><div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${stockPct}%` }} /></div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1.5 block">
-              {activeVariants.length > 0 ? `${formatQty(packsReady)} packs ready · ` : ''}reorder at {formatQty(reorder)}
+              {packedVariants.length > 0 ? `${packsReady || 'No packs'} ready · ` : ''}reorder at {formatQty(reorder)}
             </span>
           </div>
 

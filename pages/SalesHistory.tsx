@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { isDateOnlyOrMidnight } from '../lib/formatters';
+import { saleLineStock } from '../lib/sellUnits';
 
 const MotionDiv = motion.div as any;
 
@@ -24,6 +25,16 @@ interface ReturnItemSelection {
   unit?: string;
   variantId?: string;
   isSelected: boolean;
+  /** Position of the bill line, saved with the return so later returns match the exact line. */
+  lineIndex?: number;
+  /** Bill snapshot, passed through so the return restocks the pile the sale used. */
+  lineUnit?: string;
+  baseUnit?: string;
+  stockDeduction?: number;
+  deductFromBase?: boolean;
+  isLoose?: boolean;
+  /** Pre-packed lines go back in whole packs. */
+  wholeOnly?: boolean;
 }
 
 const formatSaleDateTime = (dateStr?: string, fallbackTime?: string) => {
@@ -208,7 +219,7 @@ const matchSaleWithToken = (
 };
 
 const SalesHistory: React.FC = () => {
-  const { sales, customers, accounts, settings, processSalesReturn, updateSalePaymentMode, canPerform } = useDairy();
+  const { sales, customers, accounts, settings, items, processSalesReturn, updateSalePaymentMode, canPerform } = useDairy();
   const { showToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
@@ -360,18 +371,32 @@ const SalesHistory: React.FC = () => {
     const initialRefundMode = sale.payment_mode === 'Online' ? 'Online' : 'Cash';
     setRefundPaymentMode(initialRefundMode);
 
-    const previouslyReturned = ((sale as any).returned_items || []) as Array<{ name: string; qty: number; itemId?: string; variantId?: string }>;
+    const previouslyReturned = ((sale as any).returned_items || (sale as any).details?.returned_items || []) as Array<{ name: string; qty: number; itemId?: string; variantId?: string; lineIndex?: number }>;
 
-    const itemsList: ReturnItemSelection[] = (sale.items || []).map(it => {
-      const returnedQtySoFar = previouslyReturned
-        .filter(r => {
-          if (r.itemId && it.itemId) {
-            return r.itemId === it.itemId && (r.variantId || '') === (it.variantId || '');
-          }
-          return r.name.toLowerCase() === it.name.toLowerCase();
-        })
-        .reduce((sum, r) => sum + (r.qty || 0), 0);
-      const remainingQty = Math.max(0, it.qty - returnedQtySoFar);
+    // Give each earlier return to exactly one bill line. Two lines of the same item and pack
+    // share a key, so a return without a saved line index fills them in order and is never counted twice.
+    const saleLines = sale.items || [];
+    const returnedByLine = saleLines.map(() => 0);
+    const sameLine = (r: { name: string; itemId?: string; variantId?: string }, it: any) => (r.itemId && it.itemId)
+      ? r.itemId === it.itemId && (r.variantId || '') === (it.variantId || '')
+      : (r.name || '').toLowerCase() === (it.name || '').toLowerCase();
+    const indexed = previouslyReturned.filter(r => Number.isInteger(r.lineIndex) && saleLines[r.lineIndex as number]);
+    indexed.forEach(r => { returnedByLine[r.lineIndex as number] += Number(r.qty) || 0; });
+    previouslyReturned.filter(r => !indexed.includes(r)).forEach(r => {
+      let left = Number(r.qty) || 0;
+      saleLines.forEach((it, index) => {
+        if (left <= 0 || !sameLine(r, it)) return;
+        const take = Math.min(left, Math.max(0, (Number(it.qty) || 0) - returnedByLine[index]));
+        returnedByLine[index] += take;
+        left -= take;
+      });
+    });
+
+    const itemsList: ReturnItemSelection[] = saleLines.map((it, index) => {
+      const remainingQty = Math.max(0, it.qty - returnedByLine[index]);
+      const line: any = it;
+      const itemDef = (items || []).find(i => i.id === it.itemId);
+      const wholeOnly = saleLineStock(line, itemDef as any).fromBase === false;
 
       return {
         itemId: it.itemId,
@@ -380,9 +405,16 @@ const SalesHistory: React.FC = () => {
         remainingQty,
         returnQty: remainingQty > 0 ? remainingQty : 0,
         price: it.price,
-        unit: (it as any).variantName ? (it as any).variantName : ((it as any).unit || 'Unit'),
+        unit: line.variantName ? line.variantName : (line.unit || 'Unit'),
         variantId: it.variantId,
-        isSelected: remainingQty > 0
+        isSelected: remainingQty > 0,
+        lineIndex: index,
+        lineUnit: line.unit,
+        baseUnit: line.baseUnit,
+        stockDeduction: line.stockDeduction,
+        deductFromBase: line.deductFromBase,
+        isLoose: line.isLoose,
+        wholeOnly
       };
     });
 
@@ -456,7 +488,8 @@ const SalesHistory: React.FC = () => {
     setReturnItems(prev => prev.map((item, idx) => {
       if (idx === index) {
         const maxQty = item.remainingQty !== undefined ? item.remainingQty : item.soldQty;
-        const validated = isNaN(newQty) ? 0 : Math.min(maxQty, Math.max(0, newQty));
+        const clamped = isNaN(newQty) ? 0 : Math.min(maxQty, Math.max(0, newQty));
+        const validated = item.wholeOnly ? Math.floor(clamped + 1e-9) : clamped;
         return {
           ...item,
           returnQty: validated,
@@ -605,8 +638,14 @@ const SalesHistory: React.FC = () => {
         name: it.name,
         qty: it.returnQty,
         price: it.price,
-        unit: it.unit,
-        variantId: it.variantId
+        unit: it.lineUnit ?? it.unit,
+        variantId: it.variantId,
+        // The bill's own snapshot, so the context restocks the pile and size the sale used.
+        lineIndex: it.lineIndex,
+        baseUnit: it.baseUnit,
+        stockDeduction: it.stockDeduction,
+        deductFromBase: it.deductFromBase,
+        isLoose: it.isLoose
       }));
 
     if (selectedToReturn.length === 0) {
@@ -1541,7 +1580,7 @@ const SalesHistory: React.FC = () => {
                               )}
                             </td>
                             <td className="px-2 py-2.5 text-center font-bold text-slate-800">
-                              {it.qty} <span className="text-[10px] font-normal text-slate-400">{(it as any).variantName ? 'Pack' : ((it as any).unit || 'Unit')}</span>
+                              {it.qty} <span className="text-[10px] font-normal text-slate-400">{(it as any).variantName || (it as any).unit || 'Unit'}</span>
                             </td>
                             <td className="px-2 py-2.5 text-right font-mono text-slate-600">
                               Rs {it.price?.toLocaleString()}
@@ -1697,7 +1736,7 @@ const SalesHistory: React.FC = () => {
                           <div className="flex items-center bg-slate-50 rounded-lg border border-slate-200 px-1.5 py-0.5 focus-within:border-lime-500 focus-within:bg-white transition-all">
                             <input
                               type="number"
-                              step="any"
+                              step={item.wholeOnly ? 1 : 'any'}
                               min="0"
                               max={item.soldQty}
                               value={item.returnQty === 0 ? '' : item.returnQty}

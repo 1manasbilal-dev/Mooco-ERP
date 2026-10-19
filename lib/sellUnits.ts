@@ -121,6 +121,85 @@ export function sellLineCaption(line: CartSellLine): string {
   return `${formatQty(qty, 3)} ${name} = ${formatQty(qty * contains, 3)} ${base}`;
 }
 
+export interface SaleLineStock {
+  /** True: the line moved the loose (main) pile. False: it moved the packed count of `variantId`. */
+  fromBase: boolean;
+  /** Base units inside one sold unit. */
+  contains: number;
+  /** Packed variant pile, only when fromBase is false. */
+  variantId?: string;
+  /** Quantity moved in its own pile: base units for main stock, pack count for packed stock. */
+  stockQty: number;
+  /** The same quantity in base units, for reports that add lines together. */
+  baseQty: number;
+}
+
+/**
+ * Stock effect of one saved bill line. The bill's own snapshot wins, so a later catalog change
+ * (dozen switched to packed, tray resized, variant deleted) never rewrites history.
+ * The catalog only fills gaps on old bills saved before the snapshot carried these fields.
+ */
+export function saleLineStock(
+  line: { qty?: number; variantId?: string; variant_id?: string; isLoose?: boolean; stockDeduction?: number; deductFromBase?: boolean; deduct_from_base?: boolean },
+  item?: { variants?: { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean }[] } | null
+): SaleLineStock {
+  const qty = Number(line.qty) || 0;
+  const rawVariant = line.variantId || line.variant_id;
+  const variantId = rawVariant && rawVariant !== 'loose' && rawVariant !== 'base' && !line.isLoose ? rawVariant : undefined;
+  const variant = variantId ? (item?.variants || []).find(v => v.id === variantId) : undefined;
+  const snapshotContains = Number(line.stockDeduction);
+  const contains = snapshotContains > 0
+    ? snapshotContains
+    : (variant && Number(variant.quantity_in_base_unit) > 0 ? Number(variant.quantity_in_base_unit) : 1);
+  const flag = line.deductFromBase ?? line.deduct_from_base;
+  const fromBase = !variantId || (flag === true ? true : flag === false ? false : variant?.deduct_from_base === true);
+  const baseQty = cleanQty(qty * (variantId ? contains : 1));
+  return {
+    fromBase,
+    contains: variantId ? contains : 1,
+    variantId: fromBase ? undefined : variantId,
+    stockQty: fromBase ? baseQty : cleanQty(qty),
+    baseQty
+  };
+}
+
+/**
+ * Base units physically on hand: loose stock plus every packed pile at its pack size.
+ * Multi-unit counts (dozen, tray) are views of the loose pile, so they are never added again.
+ * Negative piles count as zero, so a shortfall never dilutes the average cost.
+ */
+export function stockOnHandBase(
+  looseStock: number,
+  variantStocks?: Record<string, number> | null,
+  variants?: { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean }[] | null
+): number {
+  let total = Math.max(0, Number(looseStock) || 0);
+  Object.entries(variantStocks || {}).forEach(([id, count]) => {
+    const variant = (variants || []).find(v => v.id === id);
+    if (!variant || variant.deduct_from_base === true) return;
+    total += Math.max(0, Number(count) || 0) * sellUnitContains(variant);
+  });
+  return cleanQty(total);
+}
+
+/** Moving average cost per base unit after stock comes in. Old stock below zero carries no cost weight. */
+export function averageCostAfterIntake(onHandBase: number, currentCost: number, incomingBase: number, incomingValue: number): number {
+  const before = Math.max(0, Number(onHandBase) || 0);
+  const added = Math.max(0, Number(incomingBase) || 0);
+  if (added <= 0) return Number(currentCost) || 0;
+  const cost = before > 0 && Number(currentCost) > 0
+    ? (before * Number(currentCost) + (Number(incomingValue) || 0)) / (before + added)
+    : (Number(incomingValue) || 0) / added;
+  return cleanNumber(cost, 4);
+}
+
+/** Saved line cost is per sold unit. This is the same cost per base unit. */
+export function saleLineCostPerBase(line: { cost_price?: number }, stock: SaleLineStock, fallbackBaseCost = 0): number {
+  const own = Number(line.cost_price);
+  if (Number.isFinite(own) && own > 0) return cleanNumber(own / (stock.contains || 1), 4);
+  return Number(fallbackBaseCost) || 0;
+}
+
 export function sellUnitRateLabel(price: number, name: string): string {
   return `${formatCurrency(price)} / ${name || 'unit'}`;
 }

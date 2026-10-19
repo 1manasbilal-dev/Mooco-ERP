@@ -11,7 +11,7 @@ import {
   stepQuickQuantity,
 } from '../../lib/posQuickEntry';
 import { MOOCO_THEME } from '../../theme';
-import { availableSellUnits, oneUnitLabel, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { availableSellUnits, oneUnitLabel, qtyAfterUnitSwitch, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
 
 interface Props {
   open: boolean;
@@ -128,8 +128,11 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
     const v = variants.find(item => item.id === next);
     const nextContains = v ? sellUnitContains(v) : 1;
     const nextRate = v ? sellUnitPrice(Number(product.price) || 0, nextContains, v.selling_price) : (Number(product.price) || 0);
+    // Keep the same stock quantity like the cart does: 24 loose eggs become 2 Dozen, not 24 Dozen.
     const currentQty = entry.error || entry.qty <= 0 ? 1 : entry.qty;
-    setAmount(String(cleanNumber(currentQty * nextRate)));
+    const nextIsPack = next !== 'base' || !looseAllowed;
+    const switched = qtyAfterUnitSwitch(currentQty, contains, nextContains, nextIsPack);
+    setAmount(String(cleanNumber(switched.qty * nextRate)));
     setSubmitError('');
     setTappedPreset(null);
   };

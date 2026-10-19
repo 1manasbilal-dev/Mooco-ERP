@@ -538,6 +538,8 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
   const selectedVariant = editVariantId !== 'base' ? variants.find((v: any) => v.id === editVariantId) : null;
   const looseEdit = !selectedVariant;
   const editContains = selectedVariant ? sellUnitContains(selectedVariant) : 1;
+  // Labels follow the unit picked in this dialog, not the line's unit before the change.
+  const selectedUnitName = looseEdit ? baseUnit : (selectedVariant.name || 'Pack');
   const editCaption = sellLineCaption({
     qty: parseFloat(editQty) || 0,
     unit: looseEdit ? baseUnit : selectedVariant.name,
@@ -640,7 +642,7 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
             {/* 2. Unit Rate */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Tag size={13} className="text-lime-600" /> Rate / Price (Per {editingCartItem.unit})
+                <Tag size={13} className="text-lime-600" /> Rate / Price (Per {selectedUnitName})
               </label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none z-10">Rs</span>
@@ -657,7 +659,7 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
             {/* 3. Quantity Stepper */}
             <div className="space-y-1.5 pt-1 border-t border-slate-100 dark:border-slate-800">
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Package size={13} className="text-blue-600" /> Quantity ({editingCartItem.unit})
+                <Package size={13} className="text-blue-600" /> Quantity ({selectedUnitName})
               </label>
               <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-1 border border-slate-200 dark:border-slate-700">
                 <button 
@@ -706,7 +708,7 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
                 </label>
                 {parseFloat(editRate) > 0 && (
                   <span className="text-[10px] font-mono text-slate-400">
-                    Rate: Rs {parseFloat(editRate).toFixed(1)}/{editingCartItem.unit}
+                    Rate: Rs {parseFloat(editRate).toFixed(1)}/{selectedUnitName}
                   </span>
                 )}
               </div>

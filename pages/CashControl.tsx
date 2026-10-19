@@ -303,13 +303,14 @@ const CashControl: React.FC = () => {
       const variantStocks = inv.variant_stocks || {};
       for (const variant of ((item as any).variants || []) as any[]) {
         const vid = variant.id || variant.variantId;
-        if (!vid || variant.isActive === false) continue;
+        // Dozen/tray style units are views of the loose pile; only ready-made packs have a count of their own.
+        if (!vid || variant.isActive === false || variant.deduct_from_base === true) continue;
         rows.push({
           key: `${item.id}::${vid}`,
           itemId: item.id,
           variantId: vid,
           label: `${item.name} — ${variant.name || variant.variant_name || vid}`,
-          unit: 'pcs',
+          unit: 'packs',
           system: roundQuantity(Number(variantStocks[vid] || 0))
         });
       }

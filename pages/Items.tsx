@@ -227,6 +227,15 @@ const Items: React.FC = () => {
 
   const ITEM_TYPES: ItemType[] = ['Raw material', 'Packaging material', 'Sale product'];
 
+  // Base unit is how stock, cost and every pack size are measured. Once stock exists it cannot be relabelled.
+  const unitLocked = useMemo(() => {
+    if (drawerMode !== 'edit' || !selectedItem) return false;
+    const inv = inventory?.find(i => i.item_id === selectedItem.id);
+    const loose = Math.abs(Number(inv?.quantity ?? (selectedItem as any).stock ?? 0)) > 0.0001;
+    const packs = Object.values(inv?.variant_stocks || selectedItem.variant_stocks || {}).some(v => Math.abs(Number(v) || 0) > 0.0001);
+    return loose || packs;
+  }, [drawerMode, selectedItem, inventory]);
+
   const selectedUnitGroup = unitGroups.find(g => g.id === formData.unit_group_id);
   const availableUnits = selectedUnitGroup?.units || [];
 
@@ -237,7 +246,7 @@ const Items: React.FC = () => {
 
 
   const getItemStock = (item: ItemDefinition) => {
-    const inv = inventory?.find(i => i.item_id === item.id || i.name.toLowerCase() === item.name.toLowerCase());
+    const inv = inventory?.find(i => i.item_id === item.id) || inventory?.find(i => !i.item_id && i.name.toLowerCase() === item.name.toLowerCase());
     const rawStock = inv?.quantity !== undefined ? inv.quantity : ((item as any).stock || 0);
     return cleanQty(rawStock);
   };
@@ -485,7 +494,7 @@ const Items: React.FC = () => {
       name: newVariant.name.trim(), 
       packaging_item_id: isMultiUnit ? '' : (newVariant.packId || ''), 
       packaging_item_name: isMultiUnit ? '' : packItemName, 
-      packaging_qty: isMultiUnit ? 0 : parseFloat(newVariant.packQty || '0'), 
+      packaging_qty: isMultiUnit ? 0 : (newVariant.packId ? (parseFloat(newVariant.packQty) > 0 ? parseFloat(newVariant.packQty) : 1) : 0), 
       quantity_in_base_unit: contains, 
       selling_price: newVariant.price ? parseFloat(newVariant.price) : undefined, 
       deduct_from_base: isMultiUnit, 
@@ -509,7 +518,7 @@ const Items: React.FC = () => {
     setNewVariant({ 
       name: v.name, 
       packId: v.packaging_item_id || '', 
-      packQty: (v.packaging_qty || 1).toString(), 
+      packQty: String(v.packaging_qty ?? 0), 
       productQty: v.quantity_in_base_unit.toString(), 
       price: v.selling_price ? v.selling_price.toString() : '', 
       fromBase: isMulti 
@@ -517,7 +526,15 @@ const Items: React.FC = () => {
     setEditingVariantIndex(index);
     setActiveFormTab('variants');
   };
-  const removeVariant = (index: number) => { const updated = [...(formData.variants || [])]; updated.splice(index, 1); setFormData({ ...formData, variants: updated }); if (editingVariantIndex === index) resetVariantForm(); };
+  const removeVariant = (index: number) => {
+    const target = formData.variants?.[index];
+    const onHand = target ? Number((inventory?.find(i => i.item_id === selectedItem?.id)?.variant_stocks || selectedItem?.variant_stocks || {})[target.id] || 0) : 0;
+    if (target && target.deduct_from_base !== true && Math.abs(onHand) > 0.0001) {
+      showToast(`"${target.name}" ke ${onHand} packs stock mein hain. Pehle stock count se 0 karein, phir hatayein.`, "warning");
+      return;
+    }
+    const updated = [...(formData.variants || [])]; updated.splice(index, 1); setFormData({ ...formData, variants: updated }); if (editingVariantIndex === index) resetVariantForm();
+  };
   const resetVariantForm = () => { setNewVariant({ name: '', packId: '', packQty: '1', productQty: '', price: '', fromBase: variantSubTab === 'multi_unit' }); setEditingVariantIndex(-1); };
 
   const checkDependencies = (itemId: string): string[] => { const dependants: string[] = []; items.forEach(otherItem => { if (otherItem.recipe && otherItem.recipe.length > 0) { const usesIt = otherItem.recipe.some(ing => ing.item_id === itemId); if (usesIt) dependants.push(otherItem.name); } }); return dependants; };
@@ -1462,7 +1479,7 @@ const Items: React.FC = () => {
                               <UnitSelector
                                  value={formData.unit || ''}
                                  unitGroupId={formData.unit_group_id}
-                                 disabled={formData.isSystem}
+                                 disabled={formData.isSystem || unitLocked}
                                  labelClass={labelClass}
                                  onChange={(symbol, groupId) => {
                                     setFormData(prev => ({
@@ -1473,6 +1490,9 @@ const Items: React.FC = () => {
                                  }}
                                  onOpenManager={() => !formData.isSystem && setIsUnitManagerOpen(true)}
                               />
+                              {unitLocked && (
+                                 <p className="mt-1.5 text-[11px] font-medium text-amber-600">Is product ka stock {selectedItem?.unit} mein para hai, isliye base unit lock hai. Unit badalne ke liye pehle stock 0 karein.</p>
+                              )}
                                                          </div>
 
                            <div className="grid grid-cols-1 gap-4 pt-4 border-t border-slate-100">
@@ -1759,7 +1779,7 @@ const Items: React.FC = () => {
                                    <label className={labelClass}>Standard Input Quantity</label>
                                    <div className="relative">
                                       <input type="number" className="w-full bg-white border border-slate-300 rounded-xl pl-3 pr-12 py-2.5 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-lime-500 transition-all shadow-sm" placeholder="e.g. 40" value={formData.recipe_base_quantity || ''} onChange={e => setFormData({...formData, recipe_base_quantity: parseFloat(e.target.value)})}/>
-                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">Liters</span>
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">{formData.recipe_base_item_id && formData.recipe_base_item_id !== 'MILK_BASE' ? (items.find(i => i.id === formData.recipe_base_item_id)?.unit || 'units') : 'L'}</span>
                                     </div>
                                 </div>
                                 <div>
@@ -1793,7 +1813,7 @@ const Items: React.FC = () => {
                                             <div className="flex items-center gap-3">
                                                <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-xs">{idx + 1}</div>
                                                <div>
-                                                  <p className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200">{ing.item_name}</p>
+                                                  <p className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200">{items.find(i => i.id === ing.item_id)?.name || ing.item_name}</p>
                                                   <p className="text-[10px] text-slate-400 font-medium">Type: {ing.type}</p>
                                                </div>
                                             </div>
@@ -2232,7 +2252,7 @@ const Items: React.FC = () => {
                                            </div>
                                            <p className="text-[11px] text-slate-400 font-medium mt-0.5">
                                              Selling Price: <span className="font-mono font-bold text-slate-700 dark:text-slate-300">Rs {formatCurrency(v.selling_price || 0)}</span>
-                                             {v.packaging_item_name ? ` · Uses: ${formatQty(v.packaging_qty || 1)} ${v.packaging_item_name}` : ''}
+                                             {v.packaging_item_name ? ` · Uses: ${formatQty(v.packaging_qty || 0)} ${v.packaging_item_name}` : ''}
                                            </p>
                                          </div>
                                          <div className="flex items-center gap-1.5 shrink-0">

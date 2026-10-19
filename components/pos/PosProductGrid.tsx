@@ -3,6 +3,7 @@ import { Search, X, LayoutGrid, Package, Check, Plus } from 'lucide-react';
 import { AvailableProduct } from './PosTypes';
 import { PosProductImage } from './PosProductImage';
 import { formatQty, formatCurrency, formatMoneyRaw } from '../../lib/formatters';
+import { availableSellUnits, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
 
 interface PosProductGridProps {
   searchProduct: string;
@@ -149,29 +150,36 @@ export const PosProductGrid: React.FC<PosProductGridProps> = ({
             {availableProducts.map(product => {
               const isAvailable = product.is_available;
               const inCartQty = cartQtyByProductId[product.id] || 0;
-              const hasVariants = product.variants && product.variants.length > 0;
+              const activeVariants = (product.variants || []).filter((v: any) => v.isActive !== false);
+              const hasVariants = activeVariants.length > 0;
               const isLooseAllowed = product.allow_loose_sale !== false;
               const totalVStock = product.total_variant_stock || 0;
-              const isPhysicallyOut = isLooseAllowed 
-                ? (product.stock <= 0 && totalVStock <= 0) 
+              // Dozen / tray units sell from main stock even when loose sale is off.
+              const mainStockUnits = activeVariants.filter((v: any) => v.deduct_from_base === true);
+              const usesMainStock = isLooseAllowed || mainStockUnits.length > 0;
+              const isPhysicallyOut = usesMainStock
+                ? (product.stock <= 0 && totalVStock <= 0)
                 : (totalVStock <= 0);
 
-              const variantPrices = hasVariants ? product.variants.map((v: any) => v.selling_price || 0).filter((p: number) => p > 0) : [];
+              // An empty pack price follows the loose rate times its size, as at checkout.
+              const variantPrices = hasVariants ? activeVariants.map((v: any) => sellUnitPrice(product.price, sellUnitContains(v), v.selling_price)).filter((p: number) => p > 0) : [];
               const minVPrice = variantPrices.length ? Math.min(...variantPrices) : product.price;
               const maxVPrice = variantPrices.length ? Math.max(...variantPrices) : product.price;
 
               // Clean single-variant label without duplicating product name (e.g., 'Bottle' instead of 'Badam Doodh Bottle')
-              const singleVariantCleanLabel = hasVariants && product.variants.length === 1
-                ? (product.variants[0]?.name?.replace(new RegExp(product.name, 'i'), '').trim() || product.variants[0]?.name || 'Pack')
+              const singleVariantCleanLabel = hasVariants && activeVariants.length === 1
+                ? (activeVariants[0]?.name?.replace(new RegExp(product.name, 'i'), '').trim() || activeVariants[0]?.name || 'Pack')
                 : 'Pack';
 
               // Stock pill tone + label (overlaid on the image)
-              const stockValue = isLooseAllowed ? (product.stock > 0 ? product.stock : totalVStock) : totalVStock;
+              const onlyMainUnit = !isLooseAllowed && mainStockUnits.length === 1 ? mainStockUnits[0] : null;
+              const mainSellable = onlyMainUnit ? availableSellUnits(product.stock, 0, onlyMainUnit) : product.stock;
+              const stockValue = usesMainStock ? (product.stock > 0 ? mainSellable : totalVStock) : totalVStock;
               const stockTone = isPhysicallyOut ? 'out' : stockValue > 5 ? 'ok' : 'low';
               const stockLabel = isPhysicallyOut
                 ? 'Out of stock'
-                : isLooseAllowed && product.stock > 0
-                ? `${formatQty(product.stock)} ${product.unit}`
+                : usesMainStock && product.stock > 0
+                ? (onlyMainUnit ? `${formatQty(mainSellable)} ${onlyMainUnit.name || 'Pack'}` : `${formatQty(product.stock)} ${product.unit}`)
                 : `${formatQty(totalVStock)} Packs`;
 
               // Price parts (big number + small prefix / suffix)
@@ -214,14 +222,14 @@ export const PosProductGrid: React.FC<PosProductGridProps> = ({
 
                     {/* Variant Pack Badge (Top-Left) */}
                     {hasVariants && (
-                      <span className="pos-card-tag">{product.variants.length} Packs</span>
+                      <span className="pos-card-tag">{activeVariants.length} Packs</span>
                     )}
 
                     {/* Cart Quantity Badge (Top-Right) */}
                     {inCartQty > 0 && (
                       <span className="pos-card-cart-badge">
                         <Check size={11} strokeWidth={3.2} />
-                        <span>{formatQty(inCartQty)}</span>
+                        <span>{formatQty(inCartQty)} {product.unit}</span>
                       </span>
                     )}
 

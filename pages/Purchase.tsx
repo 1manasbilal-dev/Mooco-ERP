@@ -255,7 +255,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const { 
     suppliers, purchases, materialPurchases, allocations, addPurchase, 
     returnPurchase, returnMaterialPurchase, addBulkMaterialPurchase, 
-    items, settings, accounts = [], canPerform, activeShiftSession, isDayLocked
+    items, inventory = [], settings, accounts = [], canPerform, activeShiftSession, isDayLocked
   } = useDairy();
   const { showToast } = useToast();
   const { openTab } = useTabs();
@@ -667,8 +667,22 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
   const handleOpenReturnMaterial = (entry: any) => {
     const itemDef = items.find(i => i.id === entry.item_id || i.name.toLowerCase() === entry.item_name.toLowerCase());
-    const availableStock = itemDef ? (itemDef.stock || 0) : entry.quantity;
-    const maxQty = Math.min(entry.quantity, availableStock > 0 ? availableStock : entry.quantity);
+    // The bill is in its purchase unit (e.g. 2 ctn); stock is in base units or packs. Compare like with like.
+    const conversion = Number(entry.details?.conversion_factor) || 1;
+    const packId = entry.details?.variant_id;
+    const invRow = inventory.find(inv => inv.item_id === itemDef?.id);
+    const stockInBase = Number(invRow?.quantity ?? (itemDef as any)?.stock ?? 0);
+    const availableStock = !itemDef
+      ? entry.quantity
+      : packId
+        ? Number((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0)
+        : roundQuantity(stockInBase / conversion);
+    // With nothing on hand (stock already used or negative) the bill can still be reversed in full;
+    // the stock then goes below zero, which is shown rather than hidden.
+    const maxQty = availableStock > 0 ? Math.min(entry.quantity, availableStock) : entry.quantity;
+    if (itemDef && availableStock <= 0) {
+      showToast(`${entry.item_name} ka stock ${formatQty(availableStock)} hai. Return karne se stock minus mein chala jayega.`, "warning");
+    }
 
     setReturnModalEntry(entry);
     setReturnModalType('material');
@@ -740,7 +754,8 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
         if (v.name && v.name.toLowerCase() !== baseUnit.toLowerCase()) {
           units.push({
             unit: v.name,
-            label: `${v.name} (${factor} ${baseUnit})`,
+            // Ready-made packs are stocked as packs; dozen/tray style units go into loose stock.
+            label: `${v.name} (${factor} ${baseUnit}${v.deduct_from_base === true ? '' : ' · packed stock'})`,
             factor,
             isBase: false
           });

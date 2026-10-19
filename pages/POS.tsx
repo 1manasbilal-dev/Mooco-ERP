@@ -25,6 +25,11 @@ import {
   PosEditItemModal 
 } from '../components/pos/PosModals';
 
+/** Packs of one packed variant already sitting in the cart, excluding one line. Packed twin of reservedBaseQty. */
+const reservedPackedQty = (cart: any[], productId: string, variantId: string, exceptCartItemId?: string): number => cleanQty(cart
+  .filter(line => line.id === productId && line.variantId === variantId && line.cartItemId !== exceptCartItemId && !cartLineUsesMainStock(line))
+  .reduce((sum, line) => sum + (Number(line.qty) || 0), 0));
+
 const POS: React.FC = () => {
   const {
     inventory, customers, addSale, addCustomer, items, sales, settings, accounts,
@@ -490,13 +495,26 @@ const POS: React.FC = () => {
   }, [pendingQuick, allAvailableProducts]);
 
   // Cart Quantities Lookup
+  // Counted in base units, so 2 Dozen + 3 pcs reads 27 pcs, not 5.
   const cartQtyByProductId = useMemo(() => {
     const map: Record<string, number> = {};
     cart.forEach(item => {
-      map[item.id] = (map[item.id] || 0) + (typeof item.qty === 'number' ? item.qty : 1);
+      const qty = typeof item.qty === 'number' ? item.qty : 1;
+      map[item.id] = cleanQty((map[item.id] || 0) + qty * cartLineContains(item));
     });
     return map;
   }, [cart]);
+
+  // Live stock for a product. A cart line's own stock copy is from add time and goes stale after other sales.
+  const liveStock = (line: any, variantId?: string) => {
+    const live: any = allAvailableProducts.find(p => p.id === line.id) || (items || []).find(i => i.id === line.id);
+    const main = live?.stock ?? line.stock;
+    const packed = variantId ? (live?.variant_stocks?.[variantId] ?? line.variant_stocks?.[variantId]) : 0;
+    return { main: Number(main) || 0, packed: Number(packed) || 0 };
+  };
+
+  // Pre-packed piles are counted, so their quantity is a whole number. Multi-unit packs may be 0.5 Dozen.
+  const packedQtyIsWhole = (qty: number) => Math.abs(qty - Math.round(qty)) < 0.001;
 
   const getLineTotal = (item: any) => {
     if (item.customTotal !== undefined && item.customTotal !== null && !isNaN(item.customTotal)) {
@@ -622,12 +640,15 @@ const POS: React.FC = () => {
     const finalPrice = priceOverride !== undefined ? priceOverride : product.price;
     const finalDeduction = contains;
 
-    const availableStock = fromBase
-      ? (Number(product.stock) || 0)
-      : (Number(product.variant_stocks?.[variantId!]) || 0);
+    if (!fromBase && !packedQtyIsWhole(qty)) {
+      showToast(`${variantName || 'Packs'} must be sold in whole numbers`, 'warning');
+      return false;
+    }
+    const stockNow = liveStock(product, variantId);
+    const availableStock = fromBase ? stockNow.main : stockNow.packed;
     const requestedStock = fromBase
       ? reservedBaseQty(cart, product.id) + (qty * finalDeduction)
-      : ((existing ? existing.qty : 0) + qty);
+      : reservedPackedQty(cart, product.id, variantId!) + qty;
 
     if (!settings.inventory.allowNegativeStock && requestedStock > availableStock + 0.01) {
       showToast(`Insufficient stock for ${product.name}${variantName ? ` (${variantName})` : ''}`, 'warning');
@@ -666,10 +687,11 @@ const POS: React.FC = () => {
 
   const enoughStock = (item: any, nextQty: number) => {
     const fromBase = cartLineUsesMainStock(item);
-    const available = fromBase ? (Number(item.stock) || 0) : (Number(item.variant_stocks?.[item.variantId]) || 0);
+    const stockNow = liveStock(item, fromBase ? undefined : item.variantId);
+    const available = fromBase ? stockNow.main : stockNow.packed;
     const requested = fromBase
       ? reservedBaseQty(cart, item.id, item.cartItemId) + (nextQty * cartLineContains(item))
-      : nextQty;
+      : reservedPackedQty(cart, item.id, item.variantId, item.cartItemId) + nextQty;
     if (!settings.inventory.allowNegativeStock && requested > available + 0.01) {
       showToast('Max stock reached', 'warning');
       return false;
@@ -695,6 +717,10 @@ const POS: React.FC = () => {
       if (item.cartItemId === cartItemId) {
         if (isNaN(parsed) || parsed <= 0) {
           return { ...item, qty: 0, customTotal: undefined };
+        }
+        if (!cartLineUsesMainStock(item) && !packedQtyIsWhole(parsed)) {
+          showToast(`${item.variantName || 'Packs'} must be sold in whole numbers`, 'warning');
+          return item;
         }
         if (!enoughStock(item, parsed)) return item;
         return { ...item, qty: parsed, customTotal: undefined };
@@ -723,9 +749,12 @@ const POS: React.FC = () => {
         }
         // Packed piles keep their count and change the rate. Main-stock units keep their price and change the count.
         const packedPile = !cartLineUsesMainStock(item);
-        if (packedPile && item.qty > 0) {
-          const newRate = roundCurrency(parsedTotal / item.qty);
-          return { ...item, price: newRate, customTotal: parsedTotal };
+        if (packedPile) {
+          // A blank count comes back as the nearest whole pack count, never 2.5 packs.
+          const packs = item.qty > 0 ? item.qty : Math.max(1, Math.round(parsedTotal / (Number(item.price) || parsedTotal)));
+          if (!(item.qty > 0) && !enoughStock(item, packs)) return item;
+          const newRate = roundCurrency(parsedTotal / packs);
+          return { ...item, qty: packs, price: newRate, customTotal: parsedTotal };
         }
         if (item.price > 0) {
           const newQty = cleanQty(parsedTotal / item.price);
@@ -754,10 +783,11 @@ const POS: React.FC = () => {
       ? (productDef.selling_price || 0)
       : sellUnitPrice(productDef.selling_price || 0, nextContains, variant.selling_price);
     const nextName = loose ? baseUnit : (variant.name || 'Pack');
-    const available = fromBase ? (Number(current.stock) || Number(productDef.stock) || 0) : (Number(current.variant_stocks?.[variant.id]) || 0);
+    const stockNow = liveStock(current, fromBase ? undefined : variant.id);
+    const available = fromBase ? stockNow.main : stockNow.packed;
     const requested = fromBase
       ? reservedBaseQty(cart, current.id, current.cartItemId) + (switched.qty * nextContains)
-      : switched.qty;
+      : reservedPackedQty(cart, current.id, variant.id, current.cartItemId) + switched.qty;
     if (!settings.inventory.allowNegativeStock && requested > available + 0.01) {
       showToast(`Not enough ${baseUnit} for ${switched.qty} ${nextName}`, 'warning');
       return;
@@ -831,6 +861,17 @@ const POS: React.FC = () => {
     }
     const tot = parseFloat(newTotalStr);
     const r = parseFloat(editRate) || Number(editingCartItem?.price) || 0;
+    const productDef = editingCartItem ? (items || []).find(i => i.id === editingCartItem.id) : null;
+    const variant = editVariantId && editVariantId !== 'base' ? (productDef?.variants || []).find((v: any) => v.id === editVariantId) : null;
+    if (variant && variant.deduct_from_base !== true) {
+      // Packed pile: the packed count stays and the rate changes.
+      if (isNaN(tot) || tot <= 0) return;
+      const q = parseFloat(editQty);
+      const packs = q > 0 && packedQtyIsWhole(q) ? Math.round(q) : Math.max(1, Math.round(r > 0 ? tot / r : 1));
+      setEditQty(String(packs));
+      setEditRate(String(roundCurrency(tot / packs)));
+      return;
+    }
     if (!isNaN(tot) && r > 0) {
       const calculatedQty = cleanQty(tot / r);
       setEditQty(calculatedQty.toString());
@@ -882,12 +923,15 @@ const POS: React.FC = () => {
     const newDeduction = variant ? sellUnitContains(variant) : 1;
     const fromBase = !variant || variant.deduct_from_base === true;
     const newVariantName = variant?.name || '';
-    const availableStock = fromBase
-      ? (Number(editingCartItem.stock) || Number(productDef?.stock) || 0)
-      : (Number(editingCartItem.variant_stocks?.[variant.id]) || 0);
+    if (!fromBase && !packedQtyIsWhole(parsedQty)) {
+      showToast(`${newVariantName || 'Packs'} must be sold in whole numbers`, "warning");
+      return;
+    }
+    const stockNow = liveStock(editingCartItem, fromBase ? undefined : variant.id);
+    const availableStock = fromBase ? stockNow.main : stockNow.packed;
     const totalDeduction = fromBase
       ? reservedBaseQty(cart, editingCartItem.id, editingCartItem.cartItemId) + (parsedQty * newDeduction)
-      : parsedQty;
+      : reservedPackedQty(cart, editingCartItem.id, variant.id, editingCartItem.cartItemId) + parsedQty;
     if (!settings.inventory.allowNegativeStock && totalDeduction > availableStock + 0.01) {
       showToast("Insufficient stock for requested quantity", "warning");
       return;
@@ -896,28 +940,49 @@ const POS: React.FC = () => {
     const computedTotal = roundCurrency(parsedRate * parsedQty);
     const isCustom = !isNaN(parsedTotal) && parsedTotal > 0 && Math.abs(parsedTotal - computedTotal) > 0.05;
 
-    const itemUnit = editVariantId && editVariantId !== 'base' 
-      ? (newVariantName || 'Pack') 
+    const itemUnit = variant
+      ? (newVariantName || 'Pack')
       : (productDef?.unit || editingCartItem.baseUnit || editingCartItem.unit || 'Unit');
 
-    setCart(cart.map(item => {
-      if (item.cartItemId === editingCartItem.cartItemId) {
-        return {
-          ...item,
-          price: parsedRate,
-          qty: parsedQty,
-          unit: itemUnit,
-          baseUnit: productDef?.unit || editingCartItem.baseUnit || editingCartItem.unit || 'Unit',
-          variantId: editVariantId === 'base' ? undefined : editVariantId,
-          variantName: newVariantName,
-          stockDeduction: newDeduction,
-          deductFromBase: fromBase,
-          isLoose: isLoose,
-          customTotal: isCustom ? parsedTotal : undefined
-        };
-      }
-      return item;
-    }));
+    // A new sell unit gets the same line key addToCart and changeItemVariant build, so later
+    // loose adds never land in a pack line. A same-unit twin at the same rate is merged.
+    const unitChanged = (editingCartItem.variantId || 'base') !== (variant ? variant.id : 'base');
+    const catalogPrice = variant
+      ? sellUnitPrice(productDef?.selling_price || 0, newDeduction, variant.selling_price)
+      : (productDef?.selling_price || 0);
+    let nextCartId = unitChanged ? `${editingCartItem.id}_${variant ? variant.id : 'base'}_${catalogPrice}` : editingCartItem.cartItemId;
+    let twin = unitChanged ? cart.find(line => line.cartItemId === nextCartId && line.cartItemId !== editingCartItem.cartItemId) : undefined;
+    if (twin && Math.abs((Number(twin.price) || 0) - parsedRate) > 0.001) {
+      nextCartId = `${nextCartId}_${parsedRate}`;
+      twin = cart.find(line => line.cartItemId === nextCartId && line.cartItemId !== editingCartItem.cartItemId);
+      if (twin && Math.abs((Number(twin.price) || 0) - parsedRate) > 0.001) { nextCartId = `${nextCartId}_${Date.now()}`; twin = undefined; }
+    }
+    const ownTotal = isCustom ? parsedTotal : computedTotal;
+    const mergedQty = twin ? cleanQty((Number(twin.qty) || 0) + parsedQty) : parsedQty;
+    const mergedCustom = twin
+      ? (twin.customTotal !== undefined || isCustom ? roundCurrency((twin.customTotal ?? roundCurrency(twin.price * twin.qty)) + ownTotal) : undefined)
+      : (isCustom ? parsedTotal : undefined);
+
+    const currentLine = cart.find(line => line.cartItemId === editingCartItem.cartItemId) || editingCartItem;
+    const nextLine = {
+      ...currentLine,
+      cartItemId: nextCartId,
+      originalPrice: unitChanged ? catalogPrice : currentLine.originalPrice,
+      price: parsedRate,
+      qty: mergedQty,
+      unit: itemUnit,
+      baseUnit: productDef?.unit || editingCartItem.baseUnit || editingCartItem.unit || 'Unit',
+      variantId: variant ? variant.id : undefined,
+      variantName: newVariantName,
+      stockDeduction: newDeduction,
+      deductFromBase: fromBase,
+      isLoose: isLoose,
+      customTotal: mergedCustom
+    };
+    const rest = cart.filter(line => line.cartItemId !== editingCartItem.cartItemId && line !== twin);
+    const index = cart.findIndex(line => line.cartItemId === editingCartItem.cartItemId);
+    rest.splice(Math.min(Math.max(index, 0), rest.length), 0, nextLine);
+    setCart(rest);
 
     showToast(`${editingCartItem.name} updated`, "success");
     setEditingCartItem(null);
@@ -992,6 +1057,15 @@ const POS: React.FC = () => {
   const handleCheckout = async (): Promise<boolean> => {
     if (cart.length === 0 || isSubmitting || isSubmittingRef.current) return false;
     if (bookingId && (!booking || !hasPermission('customer_orders') || !canPerform('pos', 'create'))) return false;
+    if (cart.some(line => !(Number(line.qty) > 0))) {
+      showToast('Qty 0 wali line hata dein ya qty likhein', 'warning');
+      return false;
+    }
+    const brokenPack = !bookingId && cart.find(line => !cartLineUsesMainStock(line) && !packedQtyIsWhole(Number(line.qty) || 0));
+    if (brokenPack) {
+      showToast(`${brokenPack.name}: ${brokenPack.variantName || 'Packs'} must be sold in whole numbers`, 'warning');
+      return false;
+    }
 
     if (!activeShiftSession || activeShiftSession.status !== 'Active') {
       showToast("No active shift. Please start a shift first.", "warning");

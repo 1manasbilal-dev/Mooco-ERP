@@ -43,15 +43,16 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
     const isMilk = /\b(milk|doodh)\b/.test(categories) || /\b(milk|doodh|buffalo|cow|mixed)\b/.test(name);
     if (!isMilk || /\b(powder|shake|flavou?red|condensed)\b/.test(name)) return [];
     
-    const unit = stock.unit.trim().toLowerCase();
+    const unit = String(stock.unit || master?.unit || '').trim().toLowerCase();
     const factor = ['l', 'ltr', 'ltrs', 'liter', 'liters', 'litre', 'litres'].includes(unit) ? 1
       : ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'].includes(unit) ? 0.001 : 0;
     const quantity = Number(stock.quantity);
     if (!factor || !Number.isFinite(quantity)) return [];
 
     const liters = Math.round(quantity * factor * 100) / 100;
-    const rate = master?.selling_price || stock.price || 0;
-    const costRate = master?.cost_price || 0;
+    // Catalog rates are per stock unit; express them per litre so ml stock is valued correctly.
+    const rate = (Number(master?.selling_price || stock.price) || 0) / factor;
+    const costRate = (Number(master?.cost_price) || 0) / factor;
     const value = Math.round(liters * rate);
     const costValue = Math.round(liters * costRate);
 

@@ -376,6 +376,13 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
         </div>
       </div>
       
+      {/* A blank or 0 qty line blocks checkout; handleCheckout shows the same message as a toast. */}
+      {cart.some(line => !(Number(line.qty) > 0)) && (
+        <p role="status" className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-2 py-1">
+          Qty 0 wali line hata dein ya qty likhein
+        </p>
+      )}
+
       {/* Confirm & Pay Action Button */}
       <button
         type="button" aria-label="Complete sale"
