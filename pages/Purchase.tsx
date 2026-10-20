@@ -3,23 +3,30 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useTabs } from '../context/TabContext';
 import { MilkType, Shift, RateType, PurchaseType } from '../types';
-import { 
-  Save, Milk, Package, History, Trash2, Calendar as CalendarIcon, ClipboardCheck, 
-  ChevronDown, Search, X, User, RotateCcw, Sun, Moon, Wallet, CreditCard, Building2,
-  Plus, Minus, ShoppingCart, Check, Loader2, AlertTriangle
+import {
+  Save, Milk, Package, History, Trash2, Calendar as CalendarIcon,
+  ChevronDown, Search, X, User, RotateCcw, Sun, Moon, Wallet, Banknote, Smartphone,
+  Plus, Minus, ShoppingCart, Check, Loader2, AlertTriangle, ArrowRight, BookOpen, Lock, Receipt, Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useToast } from '../context/ToastContext';
-import { RichSelect, RichSelectOption } from '../components/RichSelect';
-import { SegmentedControl } from '../components/SegmentedControl';
-import { formatQty, formatCurrency, cleanNumber, cleanQty, normalizeTransactionTimestamp, getTodayLocalDate } from '../lib/formatters';
+import type { RichSelectOption } from '../components/RichSelect';
+import { formatQty, formatCurrency, normalizeTransactionTimestamp, getTodayLocalDate } from '../lib/formatters';
 import { businessDate } from '../lib/dashboardAnalytics';
 import { SmartNumberInput } from '../components/SmartNumberInput';
 import { roundCurrency, roundQuantity } from '../lib/db';
 import { confirmAction } from '../components/ui/ConfirmDialog';
+import { Modal } from '../components/ui/Modal';
+import {
+  Avatar, PillGroup, PillOption, ProcurementHeader, SectionLabel, SettlementBar, ShiftIcon, StatTile, varietyDot,
+} from '../components/procurement/ProcurementUI';
 
 // Fix Framer Motion Types
 const MotionDiv = motion.div as any;
+
+const timeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
 
 const SearchableSupplierDropdown: React.FC<{
   value: string;
@@ -475,9 +482,13 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
   const todaySupplyStats = useMemo(() => {
     const rows = materialPurchases.filter(entry => entry.date && entry.status !== 'Cancelled' && entry.status !== 'Returned' && businessDate(entry.date) === todayKey);
+    // One saved bill writes one row per line, all with the same supplier and timestamp.
+    const bills = new Set(rows.map(entry => `${entry.supplier_id || 'cash'}|${entry.date}`));
     return {
-      bills: rows.length,
+      bills: bills.size,
+      lines: rows.length,
       amount: rows.reduce((sum, entry) => sum + (Number(entry.total_amount) || 0), 0),
+      paid: rows.reduce((sum, entry: any) => sum + (Number(entry.paid_amount ?? entry.details?.paid_amount) || 0), 0),
     };
   }, [materialPurchases, todayKey]);
 
@@ -508,23 +519,6 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
       };
     });
   }, [filteredSuppliers]);
-
-  const shiftOptions: RichSelectOption[] = useMemo(() => {
-    return configuredShifts.map(shiftName => {
-      const lower = shiftName.toLowerCase();
-      let icon = <Sun size={14} className="text-amber-500" />;
-      if (lower.includes('evening') || lower.includes('night') || lower.includes('sham') || lower.includes('raat')) {
-        icon = <Moon size={14} className="text-indigo-400" />;
-      } else if (lower.includes('noon') || lower.includes('afternoon') || lower.includes('dopehar')) {
-        icon = <Sun size={14} className="text-orange-500" />;
-      }
-      return {
-        value: shiftName,
-        label: shiftName,
-        icon
-      };
-    });
-  }, [configuredShifts]);
 
   // Check if a milk variety is active in Items catalog
   const isMilkVarietyActive = (variety: MilkType | string) => {
@@ -729,18 +723,20 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   };
 
   // Materials / Products Logic
+  const purchasableItems = useMemo(() => items.filter(i =>
+    (i.isActive !== false) && (i.source === 'Supplier' || i.source === 'Both') &&
+    (
+      i.item_type.includes('Raw material') ||
+      i.item_type.includes('Packaging material') ||
+      i.item_type.includes('Sale product')
+    ) &&
+    !i.category.some(c => c.toLowerCase().includes('milk')) &&
+    !i.name.toLowerCase().includes('milk')
+  ), [items]);
+
   const getFilteredItems = () => {
-    const purchasableItems = items.filter(i => (i.isActive !== false) && (i.source === 'Supplier' || i.source === 'Both'));
-    return purchasableItems.filter(i => 
-      (
-        i.item_type.includes('Raw material') || 
-        i.item_type.includes('Packaging material') || 
-        i.item_type.includes('Sale product')
-      ) &&
-      !i.category.some(c => c.toLowerCase().includes('milk')) &&
-      !i.name.toLowerCase().includes('milk') &&
-      i.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const q = searchQuery.toLowerCase();
+    return purchasableItems.filter(i => i.name.toLowerCase().includes(q));
   };
 
   const getItemPurchaseUnits = (itemId: string) => {
@@ -1019,12 +1015,15 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   };
 
   const selectedVendorData = suppliers.find(s => s.id === invoiceSupplier);
+  const balanceOf = (supplier: any) => Number(supplier?.pending_balance ?? supplier?.balance ?? 0) || 0;
 
-  // Standard Compact Input Tokens
-  const inputClass = "w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-100 focus:border-lime-500 dark:focus:border-lime-400 focus:ring-1 focus:ring-lime-500 outline-none transition-all";
-  const labelClass = "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1";
+  // Shared input tokens
+  const inputClass = "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 outline-none transition-all focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:text-slate-100";
+  const labelClass = "mb-1 block text-xs font-semibold text-slate-700";
+  const chipClass = (active: boolean) => `rounded-lg px-2 py-1 text-[10px] font-bold transition-colors ${active ? 'bg-lime-600 text-white' :'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900 dark:ring-slate-700'}`;
 
   const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
+  const [productHighlight, setProductHighlight] = useState(0);
   const productSearchRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -1039,51 +1038,80 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   // Product search dropdown. Rendered inline (not as a nested component) so typing does not
   // remount the input, which used to drop focus and close the results after every key.
   const renderProductSearch = () => {
-    const isOpen = isProductSearchOpen;
-    const setIsOpen = setIsProductSearchOpen;
-    const dropdownRef = productSearchRef;
     const results = getFilteredItems();
+    const showResults = isProductSearchOpen && (results.length > 0 || searchQuery.trim() !== '');
+    const highlighted = Math.min(productHighlight, Math.max(0, results.length - 1));
 
     return (
-      <div className="relative w-full" ref={dropdownRef}>
+      <div className="relative w-full" ref={productSearchRef}>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-          <input 
-            type="text" 
-            className={`${inputClass} pl-9 pr-9`} 
-            placeholder="Search material, packaging or products..." 
-            value={searchQuery} 
-            onChange={(e) => { setSearchQuery(e.target.value); setIsOpen(true); }} 
-            onFocus={() => setIsOpen(true)} 
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input
+            type="text"
+            role="combobox"
+            aria-expanded={showResults}
+            aria-controls="supply-product-results"
+            aria-autocomplete="list"
+            className={`${inputClass} h-12 pl-10 pr-10`}
+            placeholder="Search material, packaging or product to add…"
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setIsProductSearchOpen(true); setProductHighlight(0); }}
+            onFocus={() => setIsProductSearchOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIsProductSearchOpen(true);
+                setProductHighlight(Math.min(highlighted + 1, results.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setProductHighlight(Math.max(highlighted - 1, 0));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const pick = results[highlighted];
+                if (pick) { handleAddItem(pick.id); setIsProductSearchOpen(false); }
+              } else if (e.key === 'Escape') {
+                setIsProductSearchOpen(false);
+              }
+            }}
           />
           {searchQuery && (
-            <button aria-label="Hatayen" onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1">
-              <X size={13} />
+            <button aria-label="Search saaf karein" type="button" onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-slate-700">
+              <X size={14} />
             </button>
           )}
         </div>
-        {isOpen && results.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto z-50 divide-y divide-slate-100">
-            {results.map(item => (
-              <button 
-                key={item.id} 
-                className="w-full text-left px-3.5 py-2.5 hover:bg-lime-50/60 transition-colors flex justify-between items-center group text-xs" 
-                onClick={() => { handleAddItem(item.id); setIsOpen(false); }}
+        {showResults && (
+          <div id="supply-product-results" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-xl">
+            {results.length === 0 ? (
+              <div className="px-4 py-6 text-center">
+                <Package className="mx-auto mb-1.5 text-slate-300" size={20} />
+                <p className="text-xs font-semibold text-slate-600">&ldquo;{searchQuery}&rdquo; nahi mila</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">Pehle Products &amp; Catalog mein item banayein (source: Supplier).</p>
+              </div>
+            ) : results.map((item, idx) => (
+              <button
+                key={item.id}
+                type="button"
+                role="option"
+                aria-selected={idx === highlighted}
+                onMouseEnter={() => setProductHighlight(idx)}
+                onClick={() => { handleAddItem(item.id); setIsProductSearchOpen(false); }}
+                className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${idx === highlighted ? 'bg-lime-50' : 'hover:bg-slate-50'}`}
               >
-                <div>
-                  <p className="font-semibold text-slate-800 text-xs sm:text-sm">{item.name}</p>
-                  <p className="text-[11px] text-slate-400 font-normal">{item.category.join(', ')} • Cost: Rs {item.cost_price || 0}</p>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {Array.isArray(item.variants) && item.variants.length > 0 && (
-                    <span className="text-[10px] font-bold text-lime-700 bg-lime-50 border border-lime-200 px-1.5 py-0.5 rounded">
-                      +{item.variants.length} units
-                    </span>
-                  )}
-                  <span className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-0.5 rounded font-semibold group-hover:bg-white transition-colors">
-                    {item.unit}
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-500"><Package size={14} /></span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold text-slate-800">{item.name}</span>
+                    <span className="block truncate text-[11px] text-slate-400">{item.category.join(', ')} · Cost Rs {item.cost_price || 0}/{item.unit}</span>
                   </span>
-                </div>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {Array.isArray(item.variants) && item.variants.length > 0 && (
+                    <span className="rounded-md border border-lime-200 bg-lime-50 px-1.5 py-0.5 text-[10px] font-bold text-lime-700">+{item.variants.length} units</span>
+                  )}
+                  <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-600">{item.unit}</span>
+                  <Plus size={14} className="text-lime-600" />
+                </span>
               </button>
             ))}
           </div>
@@ -1092,1194 +1120,849 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     );
   };
 
-  return (
-    <div className="space-y-3 pb-8">
-      
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3 sm:px-4 sm:py-3 shadow-sm flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Procurement</p>
-            <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white tracking-tight">
-              {activeTab === PurchaseType.MILK ? 'Milk Collection' : 'Supplies & Materials'}
-            </h2>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-              {activeTab === PurchaseType.MILK
-                ? 'Select supplier, specify volume and rate, and press enter to log intake.'
-                : 'Purchase packaging, feed, and other products with multi-unit support.'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {activeTab === PurchaseType.MILK && (
-              <button
-                type="button"
-                onClick={() => openTab('purchase-details')}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 cursor-pointer"
-              >
-                <ClipboardCheck size={14} />
-                Details
-              </button>
-            )}
-            <button 
-              onClick={() => toggleHistory()} 
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all shadow-xs shrink-0 ${
-                isHistoryOpen ? 'bg-lime-600 text-white border-lime-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <History size={14} /> 
-              <span>Log</span>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
-                isHistoryOpen ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-100'
-              }`}>
-                {activeTab === PurchaseType.MILK ? purchases.length : materialPurchases.length}
-              </span>
-            </button>
-          </div>
+  // --- Milk screen derived view data ---
+  const isMilk = activeTab === PurchaseType.MILK;
+  const selectedBalance = balanceOf(selectedSupplier);
+  const projectedBalance = selectedBalance + milkDueAmount;
+  const lastDelivery = supplierRecentPurchases[0];
+  const todayShiftTotals = configuredShifts.map(name => {
+    const rows = todayMilkEntries.filter(entry => String(entry.shift || '').toLowerCase() === name.toLowerCase());
+    return { name, slips: rows.length, liters: rows.reduce((sum, entry) => sum + (Number(entry.quantity) || 0), 0) };
+  });
+  const maxShiftLiters = Math.max(1, ...todayShiftTotals.map(s => s.liters));
+  const milkCanSave = Boolean(milkForm.supplier_id && milkForm.quantity > 0 && milkForm.rate > 0 && !isSubmitting && milkTypeOptions.length > 0 && !isMilkDateLocked);
+  const isBackDated = milkForm.date !== getTodayLocalDate();
+  const milkStatus = milkTotalPayable <= 0
+    ? null
+    : effectiveMilkPaid >= milkTotalPayable
+      ? { label: 'Fully paid', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
+      : effectiveMilkPaid > 0
+        ? { label: 'Partly paid', cls: 'bg-amber-50 text-amber-700 border-amber-200' }
+        : { label: 'On khata', cls: 'bg-rose-50 text-rose-700 border-rose-200' };
+
+  const shiftPills: PillOption<string>[] = configuredShifts.map(name => ({ value: name, label: name, icon: <ShiftIcon name={name} size={13} /> }));
+  const varietyPills: PillOption<string>[] = milkTypeOptions.map(opt => ({ value: String(opt.value), label: String(opt.label).replace(/\s*milk$/i, ''), dot: varietyDot(String(opt.value)) }));
+  const payModePills: PillOption<string>[] = [
+    { value: 'Cash', label: 'Cash', icon: <Banknote size={13} /> },
+    { value: 'Online', label: 'Online', icon: <Smartphone size={13} /> },
+  ];
+
+  const resetMilkForm = () => {
+    setMilkForm({
+      supplier_id: '',
+      date: getTodayLocalDate(),
+      shift: configuredShifts[0] || 'Morning',
+      milk_type: MilkType.BUFFALO,
+      quantity: 0,
+      rate: 0,
+      fat: 0,
+      snf: 0
+    });
+    setMilkPaidAmount('');
+    setMilkPaymentMode('Cash');
+  };
+
+  // --- Supplies screen derived view data ---
+  const supplyCanSave = invoiceItems.length > 0 && !isSubmittingInvoice && (isCashPaidFull || !!invoiceSupplier) && !isMaterialDateLocked;
+  const vendorBalance = balanceOf(selectedVendorData);
+  const quickAddItems = useMemo(() => {
+    const counts = new Map<string, number>();
+    materialPurchases.forEach(entry => {
+      if (entry.item_id && entry.status !== 'Cancelled') counts.set(entry.item_id, (counts.get(entry.item_id) || 0) + 1);
+    });
+    return purchasableItems
+      .filter(item => counts.has(item.id))
+      .sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0))
+      .slice(0, 6);
+  }, [materialPurchases, purchasableItems]);
+
+  const accountPicker = (value: string, onChange: (id: string) => void, mode: string) => (
+    availableAccounts.length === 0 ? (
+      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900" role="alert">
+        <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600" />
+        <div>
+          <span className="font-bold">Koi Cash Drawer ya Bank Account nahi hai</span>
+          <p className="mt-0.5 text-[11px] leading-snug text-amber-700">Pehle <b>Bank &amp; Cash</b> mein account banayein, ya paid amount <b>0</b> rakh kar khata par save karein.</p>
         </div>
-
-        {activeTab === PurchaseType.MILK ? (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">{milkForm.shift} shift</span>
-              <p className="font-mono font-black text-slate-900 dark:text-white">{formatQty(todayMilkStats.shiftLiters)} L</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">Today total</span>
-              <p className="font-mono font-black text-slate-900 dark:text-white">{formatQty(todayMilkStats.liters)} L</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">{todayMilkStats.farmers} farmers</span>
-              <p className="font-mono font-black text-lime-700 dark:text-lime-400">{formatCurrency(todayMilkStats.amount)}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">On khata today</span>
-              <p className="font-mono font-black text-rose-600 dark:text-rose-400">{formatCurrency(todayMilkStats.due)}</p>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">Bills today</span>
-              <p className="font-mono font-black text-slate-900 dark:text-white">{todaySupplyStats.bills}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 px-3 py-2">
-              <span className="text-[10px] font-bold uppercase text-slate-400">Spent today</span>
-              <p className="font-mono font-black text-lime-700 dark:text-lime-400">{formatCurrency(todaySupplyStats.amount)}</p>
-            </div>
-          </div>
-        )}
       </div>
+    ) : (
+      <div>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+            <Wallet size={12} className="text-lime-600" /> Paid from account
+          </label>
+          {mode === 'Cash' && activeShiftSession && (
+            <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">Shift drawer</span>
+          )}
+        </div>
+        <select className={`${inputClass} h-10 py-0 text-xs font-semibold`} value={value} onChange={e => onChange(e.target.value)}>
+          {availableAccounts.map(acc => (
+            <option key={acc.id} value={acc.id}>{acc.name} ({acc.type}) — {formatCurrency(acc.balance)}</option>
+          ))}
+        </select>
+      </div>
+    )
+  );
 
-      {/* 2. MAIN WORKSPACE */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        
-        {/* --- TAB 1: MILK PROCUREMENT FORM --- */}
-        {activeTab === PurchaseType.MILK && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[380px]">
-            
-            {/* Left Column: Form */}
-            <form onSubmit={handleMilkSubmit} className="col-span-12 lg:col-span-8 p-3.5 sm:p-5 flex flex-col justify-between lg:border-r border-slate-200 space-y-4">
-              <div className="space-y-3.5">
-                
-                {/* Proactive Day-Lock Warning Banner */}
-                {isMilkDateLocked && (
-                  <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-semibold animate-in fade-in" role="alert">
-                    <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
-                    <span><strong>Day Locked ({milkForm.date}):</strong> This business date is closed and locked for accounting. Milk intake cannot be saved for locked days.</span>
-                  </div>
-                )}
+  const paidInput = (value: string, onChange: (v: string) => void, total: number, paid: number) => (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 font-mono text-xs font-semibold text-slate-400">Rs</span>
+      <SmartNumberInput
+        step="any"
+        min="0"
+        placeholder="0"
+        aria-label="Paid now"
+        className={`${inputClass} h-11 pl-9 pr-[7.5rem] font-mono text-base font-bold text-slate-900`}
+        value={value}
+        onChange={onChange}
+      />
+      <div className="absolute right-1.5 top-1/2 z-20 flex -translate-y-1/2 gap-1">
+        <button type="button" onClick={() => onChange('')} className={chipClass(total > 0 && paid <= 0)} title="Poori raqam khata par">Khata</button>
+        <button type="button" disabled={total <= 0} onClick={() => onChange(total.toString())} className={`${chipClass(total > 0 && paid >= total)} disabled:opacity-40`} title="Poori raqam abhi ada">Full</button>
+      </div>
+    </div>
+  );
 
-                {/* Row 1: Session Meta (Date, Shift Dropdown, Milk Variety Dropdown) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
-                  {/* Date */}
-                  <div>
-                    <label className={labelClass}>Date *</label>
-                    <input 
-                      type="date" 
-                      className={inputClass} 
-                      value={milkForm.date} 
-                      onChange={e => setMilkForm({...milkForm, date: e.target.value})} 
-                      required
-                    />
-                  </div>
+  const logCount = isMilk ? todayMilkStats.slips : todaySupplyStats.lines;
 
-                  {/* Shift & Milk Variety in 1 Row on Mobile */}
-                  <div className="grid grid-cols-2 gap-2.5 sm:col-span-2 sm:gap-3">
-                    {/* Shift Dropdown Menu */}
-                    <div>
-                      <label className={labelClass}>Shift *</label>
-                      <RichSelect
-                        options={shiftOptions}
-                        value={milkForm.shift}
-                        onChange={val => setMilkForm({ ...milkForm, shift: val as string })}
-                        enableSearch={false}
-                        allowClear={false}
-                        compact={true}
-                        placeholder="Select Shift"
-                      />
-                    </div>
+  return (
+    <div className="space-y-4 pb-8">
+      <ProcurementHeader
+        active={isMilk ? 'purchase' : 'purchase-supplies'}
+        title={isMilk ? 'Milk Collection' : 'Supplies & Materials'}
+        subtitle={isMilk ? 'Farmer chunein, liter aur rate likhein, Enter dabayein.' : 'Packaging, feed aur doosra saman — multi-unit bill ke sath.'}
+        actions={
+          <button
+            type="button"
+            onClick={() => toggleHistory()}
+            className={`flex h-[38px] shrink-0 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold shadow-xs transition-colors ${
+              isHistoryOpen ? 'border-lime-600 bg-lime-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <History size={14} />
+            <span className="hidden sm:inline">Log</span>
+            <span className={`rounded-full px-1.5 font-mono text-[10px] font-bold ${isHistoryOpen ? 'bg-white/20' : 'bg-slate-100 text-slate-600'}`}>{logCount}</span>
+          </button>
+        }
+      />
 
-                    {/* Milk Variety Dropdown Menu */}
-                    <div>
-                      <label className={labelClass}>Milk Variety *</label>
-                      {milkTypeOptions.length > 0 ? (
-                        <RichSelect
-                          options={milkTypeOptions}
-                          value={milkForm.milk_type}
-                          onChange={val => setMilkForm({ ...milkForm, milk_type: val as MilkType })}
-                          enableSearch={false}
-                          allowClear={false}
-                          compact={true}
-                          placeholder="Select Milk Variety"
-                        />
-                      ) : (
-                        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 font-medium">
-                          All milk varieties inactive in catalog.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+      {/* KPI strip */}
+      {isMilk ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile icon={Milk} tone="lime" label="Collected" value={`${formatQty(todayMilkStats.liters)} L`} hint={`${todayMilkStats.slips} slips · ${todayMilkStats.farmers} farmers`} />
+          <StatTile
+            icon={/evening|night|sham|raat/i.test(milkForm.shift) ? Moon : Sun}
+            tone="amber"
+            label={`${milkForm.shift} shift`}
+            value={`${formatQty(todayMilkStats.shiftLiters)} L`}
+            hint={todayMilkStats.liters > 0 ? `${Math.round((todayMilkStats.shiftLiters / todayMilkStats.liters) * 100)}% of today` : 'Abhi koi entry nahi'}
+          />
+          <StatTile icon={Wallet} tone="violet" label="Milk bill today" value={formatCurrency(todayMilkStats.amount)} hint={todayMilkStats.liters > 0 ? `Avg Rs ${(todayMilkStats.amount / todayMilkStats.liters).toFixed(1)}/L` : '—'} />
+          <StatTile icon={BookOpen} tone="rose" valueTone={todayMilkStats.due > 0 ? 'rose' : undefined} label="On khata today" value={formatCurrency(todayMilkStats.due)} hint={`Paid ${formatCurrency(Math.max(0, todayMilkStats.amount - todayMilkStats.due))}`} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile icon={Receipt} tone="cyan" label="Bills today" value={todaySupplyStats.bills} hint={`${todaySupplyStats.lines} item lines`} />
+          <StatTile icon={Wallet} tone="violet" label="Spent today" value={formatCurrency(todaySupplyStats.amount)} />
+          <StatTile icon={Banknote} tone="emerald" label="Paid today" value={formatCurrency(todaySupplyStats.paid)} />
+          <StatTile icon={BookOpen} tone="rose" valueTone={todaySupplyStats.amount - todaySupplyStats.paid > 0.5 ? 'rose' : undefined} label="On credit today" value={formatCurrency(Math.max(0, todaySupplyStats.amount - todaySupplyStats.paid))} />
+        </div>
+      )}
 
-                {/* Row 2: Gwala / Farmer / Supplier */}
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className={`${labelClass} mb-0`}>Gwala / Farmer / Supplier *</label>
-                    {selectedSupplier && (Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)) !== 0 && (
-                      <span className={`text-[10px] font-bold font-mono px-1.5 py-0.2 rounded border ${
-                        (Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)) > 0 
-                          ? 'bg-rose-50 text-rose-700 border-rose-200' 
-                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      }`}>
-                        {formatCurrency(Math.abs(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)))} {(Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
-                      </span>
-                    )}
-                  </div>
-                  <SearchableSupplierDropdown
-                    value={milkForm.supplier_id}
-                    onChange={id => setMilkForm({...milkForm, supplier_id: id})}
-                    suppliers={filteredSuppliers}
-                    placeholder="Search or select Gwala / Farmer... (Type name or phone)"
-                    inputClass={inputClass}
-                    labelClass={labelClass}
-                    focusToken={supplierFocusToken}
-                  />
-                </div>
-
-                {/* Row 3: Volume (Qty in Liters) and Rate / Liter (Rs) - 1 Row on Mobile and Desktop */}
-                <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
-                  {/* Volume Input */}
-                  <div>
-                    <label className={`${labelClass} mb-1 block`}>Volume (Qty in Liters) *</label>
-                    <div className="relative">
-                      <SmartNumberInput 
-                        step="any" 
-                        min="0" 
-                        placeholder="0.0" 
-                        className={`${inputClass} text-base sm:text-lg font-bold h-11 pl-3 pr-8 font-mono text-slate-900 focus:border-lime-500 focus:ring-1 focus:ring-lime-400`} 
-                        value={milkForm.quantity || ''} 
-                        onChange={val => setMilkForm({...milkForm, quantity: parseFloat(val) || 0})} 
-                        required 
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-xs pointer-events-none z-10">L</span>
-                    </div>
-                  </div>
-
-                  {/* Rate per Liter Input */}
-                  <div>
-                    <label className={`${labelClass} mb-1 block`}>Rate / Liter (Rs) *</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-semibold font-mono pointer-events-none z-10">Rs</span>
-                      <SmartNumberInput 
-                        step="any" 
-                        min="0" 
-                        placeholder="0" 
-                        className={`${inputClass} pl-8 pr-8 text-base sm:text-lg font-bold h-11 font-mono text-slate-900 focus:border-lime-500 focus:ring-1 focus:ring-lime-400`} 
-                        value={milkForm.rate || ''} 
-                        onChange={val => setMilkForm({...milkForm, rate: parseFloat(val) || 0})} 
-                        required 
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-xs pointer-events-none z-10">/L</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Row 4: Professional Payment Settlement Card */}
-                <div className="bg-slate-50/90 rounded-xl p-3 sm:p-3.5 border border-slate-200/90 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">Payment Settlement</span>
-                    
-                    {/* Status Badge */}
-                    {milkTotalPayable > 0 && (
-                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                        effectiveMilkPaid >= milkTotalPayable
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : effectiveMilkPaid > 0
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-rose-50 text-rose-700 border-rose-200'
-                      }`}>
-                        {effectiveMilkPaid >= milkTotalPayable ? 'Fully Paid' : effectiveMilkPaid > 0 ? `Partial (${formatCurrency(effectiveMilkPaid)})` : 'On Khata (Unpaid)'}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
-                    {/* Paid Amount Input */}
-                    <div className="sm:col-span-6">
-                      <label className="text-xs font-semibold text-slate-700 mb-1 block">Amount Paid (Rs)</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-semibold font-mono pointer-events-none z-10">Rs</span>
-                        <SmartNumberInput 
-                          step="any" 
-                          min="0" 
-                          placeholder="0"
-                          className={`${inputClass} pl-8 pr-14 text-sm font-bold font-mono text-slate-900`} 
-                          value={milkPaidAmount} 
-                          onChange={setMilkPaidAmount} 
-                        />
-                        {milkTotalPayable > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setMilkPaidAmount(milkTotalPayable.toString())}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-lime-700 hover:text-lime-800 bg-lime-100/90 hover:bg-lime-200 px-2 py-0.5 rounded transition-colors z-20 cursor-pointer"
-                            title="Pay Full Amount"
-                          >
-                            Full
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Payment Mode (Only Cash or Online) */}
-                    <div className="sm:col-span-6">
-                      <label className="text-xs font-semibold text-slate-700 mb-1 block">Payment Mode</label>
-                      <SegmentedControl
-                        options={[
-                          { value: 'Cash', label: 'Cash' },
-                          { value: 'Online', label: 'Online' }
-                        ]}
-                        value={milkPaymentMode}
-                        onChange={val => setMilkPaymentMode(val)}
-                        size="md"
-                        disabled={effectiveMilkPaid <= 0}
-                      />
-                    </div>
-
-                    {/* Account Selector or Warning when paid > 0 */}
-                    {effectiveMilkPaid > 0 && (
-                      <div className="sm:col-span-12 pt-1 border-t border-slate-200/60">
-                        {availableAccounts.length === 0 ? (
-                          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 animate-in fade-in">
-                            <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
-                            <div>
-                              <span className="font-bold">⚠️ Koi Cash Drawer ya Bank Account add nahi hy!</span>
-                              <p className="mt-0.5 text-[11px] text-amber-700 leading-tight">
-                                Raqam deduct kerne k liye pehle <b>'Bank & Cash'</b> module men account banayein, ya <b>Amount Paid</b> ko <b>0</b> rakh ker entry ko <b>Khata (Unpaid)</b> per record karein.
-                              </p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                                <Wallet size={13} className="text-lime-700" />
-                                <span>Deduct From Account / Cash Drawer *</span>
-                              </label>
-                              {milkPaymentMode === 'Cash' && activeShiftSession && (
-                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                  Active Shift Drawer
-                                </span>
-                              )}
-                            </div>
-                            <select
-                              className={`${inputClass} text-xs font-semibold bg-white border-slate-300`}
-                              value={milkAccountId}
-                              onChange={e => setMilkAccountId(e.target.value)}
-                            >
-                              {availableAccounts.map(acc => (
-                                <option key={acc.id} value={acc.id}>
-                                  {acc.name} ({acc.type}) — Balance: {formatCurrency(acc.balance)}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Financial Breakdown Badges */}
-                  {milkTotalPayable > 0 && (
-                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 text-center">
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase block">Total Bill</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-slate-900">{formatCurrency(milkTotalPayable)}</span>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
-                        <span className="text-[9px] font-bold text-emerald-600 uppercase block">Paid Now</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-emerald-700">{formatCurrency(effectiveMilkPaid)}</span>
-                      </div>
-                      <div className="bg-white p-2 rounded-lg border border-slate-200/80 shadow-2xs">
-                        <span className="text-[9px] font-bold text-rose-600 uppercase block">Added to Khata</span>
-                        <span className="text-xs sm:text-sm font-bold font-mono text-rose-700">{formatCurrency(milkDueAmount)}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-              </div>
-
-              {/* Bottom Action Bar */}
-              <div className="pt-3.5 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Payable</span>
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-xl sm:text-2xl font-bold font-mono text-lime-700 leading-tight">
-                      {formatCurrency(milkTotalPayable)}
-                    </span>
-                    {effectiveMilkPaid > 0 && (
-                      <span className="text-xs text-slate-500 font-medium">
-                        (Paid: <strong className="text-emerald-700 font-mono">{formatCurrency(effectiveMilkPaid)}</strong> • Due: <strong className="text-rose-700 font-mono">{formatCurrency(milkDueAmount)}</strong>)
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setMilkForm({
-                        supplier_id: '',
-                        date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
-                        shift: configuredShifts[0] || 'Morning',
-                        milk_type: MilkType.BUFFALO,
-                        quantity: 0,
-                        rate: 0,
-                        fat: 0,
-                        snf: 0
-                      });
-                      setMilkPaidAmount('');
-                      setMilkPaymentMode('Cash');
-                    }}
-                    className="px-3.5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold text-xs transition-colors"
-                  >
-                    Clear
-                  </button>
-                  <button 
-                    type="submit" 
-                    disabled={!milkForm.supplier_id || milkForm.quantity <= 0 || milkForm.rate <= 0 || isSubmitting || milkTypeOptions.length === 0 || isMilkDateLocked}
-                    title={isMilkDateLocked ? `Selected date (${milkForm.date}) is closed & locked` : undefined}
-                    className={`font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                      milkForm.supplier_id && milkForm.quantity > 0 && milkForm.rate > 0 && !isSubmitting && milkTypeOptions.length > 0 && !isMilkDateLocked
-                        ? 'bg-lime-600 hover:bg-lime-700 text-white cursor-pointer'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    }`}
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 size={15} className="animate-spin" /> Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save size={15} /> Save Intake
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-            </form>
-
-            {/* Right Column: Vendor Snapshot */}
-            <div className="hidden lg:flex lg:col-span-4 bg-slate-50/70 p-4 sm:p-5 flex-col justify-between space-y-3.5">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Vendor Overview</h4>
-                  <span className="text-[10px] font-semibold bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded">Live</span>
-                </div>
-
-                {selectedSupplier ? (
-                  <div className="space-y-2.5">
-                    {/* Supplier Card */}
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="font-bold text-slate-900 text-sm">{selectedSupplier.name}</h4>
-                          <p className="text-[11px] text-slate-400">{selectedSupplier.phone || selectedSupplier.village || 'No contact specified'}</p>
-                        </div>
-                        <div className="w-8 h-8 rounded-full bg-lime-100 text-lime-800 font-bold text-xs flex items-center justify-center">
-                          {selectedSupplier.name.charAt(0).toUpperCase()}
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5 pt-1.5 border-t border-slate-100 text-xs">
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-500">Current Due:</span>
-                          {(() => {
-                            const bal = Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0) || 0;
-                            return (
-                              <span className={`font-bold font-mono ${bal > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-                                {formatCurrency(bal)}
-                              </span>
-                            );
-                          })()}
-                        </div>
-
-                        {milkTotalPayable > 0 && (
-                          <div className="flex justify-between items-center pt-1 border-t border-dashed border-slate-200">
-                            <span className="text-slate-500 font-medium">Projected Due:</span>
-                            {(() => {
-                              const bal = Number(selectedSupplier.pending_balance ?? selectedSupplier.balance ?? 0) || 0;
-                              const proj = bal + milkDueAmount;
-                              return (
-                                <span className={`font-bold font-mono ${proj > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                                  {formatCurrency(proj)}
-                                </span>
-                              );
-                            })()}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Recent Deliveries */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Recent Deliveries</span>
-                      {supplierRecentPurchases.length === 0 ? (
-                        <p className="text-xs text-slate-400 italic text-center py-3 bg-white rounded-lg border border-slate-200">No recent entries found</p>
-                      ) : (
-                        supplierRecentPurchases.map(p => (
-                          <div key={p.id} className="bg-white p-2.5 rounded-lg border border-slate-200 text-xs flex justify-between items-center hover:border-slate-300 transition-colors">
-                            <div>
-                              <span className="font-semibold text-slate-800 block">{formatQty(p.quantity)}L • {p.milk_type}</span>
-                              <span className="text-slate-400 text-[10px]">{new Date(p.date).toLocaleDateString()} ({p.shift})</span>
-                            </div>
-                            <span className="font-bold font-mono text-slate-900">{formatCurrency(p.total_amount)}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">Latest intakes today</span>
-                    {todayMilkEntries.length === 0 ? (
-                      <div className="py-8 text-center opacity-70 bg-white/60 rounded-xl border border-dashed border-slate-200">
-                        <Milk size={22} className="mx-auto mb-1.5 text-slate-400" />
-                        <p className="text-xs font-semibold text-slate-600">No milk intakes recorded today</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Select a farmer and enter volume in liters</p>
-                      </div>
-                    ) : (
-                      todayMilkEntries.slice(0, 6).map(entry => (
-                        <div key={entry.id} className="bg-white p-2.5 rounded-lg border border-slate-200 text-xs flex justify-between items-center">
-                          <div className="min-w-0">
-                            <span className="font-semibold text-slate-800 block truncate">{entry.supplier_name || 'Farmer'}</span>
-                            <span className="text-slate-400 text-[10px]">{formatQty(entry.quantity)}L · {entry.milk_type} · {entry.shift}</span>
-                          </div>
-                          <span className="font-bold font-mono text-slate-900 shrink-0">{formatCurrency(entry.total_amount)}</span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
+      {/* --- MILK COLLECTION --- */}
+      {isMilk && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <form onSubmit={handleMilkSubmit} className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-xs lg:col-span-8">
+            {/* Session bar: date, shift, variety */}
+            <div className="flex flex-col gap-2.5 rounded-t-2xl border-b border-slate-200 bg-slate-50 p-3 sm:flex-row sm:flex-wrap sm:items-center sm:px-5">
+              <label className={`flex h-[38px] items-center gap-2 rounded-xl border bg-white px-3 text-xs font-semibold shadow-xs ${isBackDated ? 'border-amber-300 text-amber-800' : 'border-slate-200 text-slate-700'}`}>
+                <CalendarIcon size={14} className={isBackDated ? 'text-amber-600' : 'text-slate-400'} />
+                <input
+                  type="date"
+                  aria-label="Collection date"
+                  className="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs font-semibold outline-none focus:ring-0 dark:bg-transparent"
+                  value={milkForm.date}
+                  onChange={e => setMilkForm({ ...milkForm, date: e.target.value })}
+                  required
+                />
+                {isBackDated && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700">Back-date</span>}
+              </label>
+              <PillGroup label="Shift" options={shiftPills} value={milkForm.shift} onChange={val => setMilkForm({ ...milkForm, shift: val })} className="overflow-x-auto scrollbar-hide sm:flex-initial" />
+              {varietyPills.length > 0 ? (
+                <PillGroup label="Milk variety" options={varietyPills} value={String(milkForm.milk_type)} onChange={val => setMilkForm({ ...milkForm, milk_type: val as MilkType })} className="sm:ml-auto" />
+              ) : (
+                <span className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700 sm:ml-auto">Catalog mein sab milk varieties inactive hain.</span>
+              )}
             </div>
 
-          </div>
-        )}
-
-        {/* --- TAB 2: RAW MATERIALS & SUPPLIES INVOICE --- */}
-        {activeTab !== PurchaseType.MILK && (
-          <div className="flex flex-col h-full divide-y divide-slate-200">
-            
-            {/* Top Invoice Controls */}
-            <div className="p-3 sm:p-4 bg-slate-50 space-y-3">
-              {/* Proactive Day-Lock Warning Banner */}
-              {isMaterialDateLocked && (
-                <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-semibold animate-in fade-in" role="alert">
-                  <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span><strong>Day Locked ({invoiceDate}):</strong> This business date is closed and locked for accounting. Supplies invoice cannot be saved for locked days.</span>
+            <div className="flex-1 space-y-5 p-4 sm:p-5">
+              {isMilkDateLocked && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900" role="alert">
+                  <Lock size={15} className="shrink-0 text-amber-600" />
+                  <span><strong>{milkForm.date} band (locked) hai.</strong> Is din ki milk entry save nahi ho sakti.</span>
                 </div>
               )}
 
-              <div className="flex items-end gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className={`${labelClass} mb-0`}>Vendor / Supplier</label>
-                    {selectedVendorData && (Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)) !== 0 && (
-                      <span className={`text-[10px] font-bold font-mono px-1.5 py-0.2 rounded border ${
-                        (Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)) > 0 
-                          ? 'bg-rose-50 text-rose-700 border-rose-200' 
-                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      }`}>
-                        {formatCurrency(Math.abs(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)))} {(Number(selectedVendorData.pending_balance ?? selectedVendorData.balance ?? 0)) > 0 ? 'Due' : 'Advance'}
-                      </span>
-                    )}
+              {/* Step 1: farmer */}
+              <section>
+                <SectionLabel
+                  step={1}
+                  aside={selectedSupplier && selectedBalance !== 0 && (
+                    <span className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-bold ${selectedBalance > 0 ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                      {formatCurrency(Math.abs(selectedBalance))} {selectedBalance > 0 ? 'Due' : 'Advance'}
+                    </span>
+                  )}
+                >
+                  Farmer / Gwala
+                </SectionLabel>
+                <SearchableSupplierDropdown
+                  value={milkForm.supplier_id}
+                  onChange={id => setMilkForm({ ...milkForm, supplier_id: id })}
+                  suppliers={filteredSuppliers}
+                  placeholder="Naam, gaon ya phone se dhoondein…"
+                  inputClass={`${inputClass} h-12`}
+                  labelClass={labelClass}
+                  focusToken={supplierFocusToken}
+                />
+                {lastDelivery && (
+                  <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500 lg:hidden">
+                    <History size={11} className="text-slate-400" />
+                    Pichli: <b className="font-mono text-slate-700">{formatQty(lastDelivery.quantity)} L @ Rs {lastDelivery.rate}</b>
+                    · {new Date(lastDelivery.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} {lastDelivery.shift}
+                  </p>
+                )}
+              </section>
+
+              {/* Step 2: volume and rate */}
+              <section>
+                <SectionLabel step={2}>Quantity &amp; rate</SectionLabel>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3.5 top-2 z-10 text-[10px] font-bold uppercase tracking-wider text-slate-400">Liters</span>
+                    <SmartNumberInput
+                      step="any"
+                      min="0"
+                      placeholder="0.0"
+                      aria-label="Liters"
+                      className={`${inputClass} h-16 pb-1.5 pl-3.5 pr-9 pt-5 font-mono text-2xl font-black tracking-tight text-slate-900`}
+                      value={milkForm.quantity || ''}
+                      onChange={val => setMilkForm({ ...milkForm, quantity: parseFloat(val) || 0 })}
+                      required
+                    />
+                    <span className="pointer-events-none absolute right-3.5 top-1/2 z-10 -translate-y-1/2 text-sm font-bold text-slate-400">L</span>
                   </div>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3.5 top-2 z-10 text-[10px] font-bold uppercase tracking-wider text-slate-400">Rate / liter</span>
+                    <span className="pointer-events-none absolute bottom-[0.85rem] left-3.5 z-10 font-mono text-sm font-bold text-slate-400">Rs</span>
+                    <SmartNumberInput
+                      step="any"
+                      min="0"
+                      placeholder="0"
+                      aria-label="Rate per liter"
+                      className={`${inputClass} h-16 pb-1.5 pl-10 pr-3.5 pt-5 font-mono text-2xl font-black tracking-tight text-slate-900`}
+                      value={milkForm.rate || ''}
+                      onChange={val => setMilkForm({ ...milkForm, rate: parseFloat(val) || 0 })}
+                      required
+                    />
+                  </div>
+                </div>
+                {Number(selectedSupplier?.default_rate) > 0 &&Number(milkForm.rate) !== Number(selectedSupplier.default_rate) && (
+                  <button type="button" onClick={() => setMilkForm({ ...milkForm, rate: selectedSupplier.default_rate })} className="mt-1.5 text-[11px] font-semibold text-lime-700 hover:underline">
+                    Farmer ka default rate Rs {selectedSupplier.default_rate} lagayein
+                  </button>
+                )}
+              </section>
+
+              {/* Step 3: payment */}
+              <section>
+                <SectionLabel step={3} aside={milkStatus && <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${milkStatus.cls}`}>{milkStatus.label}</span>}>
+                  Payment
+                </SectionLabel>
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <span className="mb-1 block text-[11px] font-semibold text-slate-500">Abhi ada (paid now)</span>
+                      {paidInput(milkPaidAmount, setMilkPaidAmount, milkTotalPayable, effectiveMilkPaid)}
+                    </div>
+                    <div>
+                      <span className="mb-1 block text-[11px] font-semibold text-slate-500">Paid via</span>
+                      <PillGroup
+                        label="Payment mode"
+                        options={payModePills.map(p => ({ ...p, disabled: effectiveMilkPaid <= 0 }))}
+                        value={milkPaymentMode}
+                        onChange={setMilkPaymentMode}
+                        className="h-11 items-stretch"
+                      />
+                    </div>
+                  </div>
+                  {effectiveMilkPaid > 0 && accountPicker(milkAccountId, setMilkAccountId, milkPaymentMode)}
+                  <SettlementBar total={milkTotalPayable} paid={effectiveMilkPaid} formatMoney={formatCurrency} />
+                </div>
+              </section>
+            </div>
+
+            {/* Totals and save */}
+            <div className="flex flex-col gap-3 rounded-b-2xl border-t border-slate-200 bg-slate-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <div className="min-w-0">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Total payable</span>
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-mono text-2xl font-black tracking-tight text-lime-700">{formatCurrency(milkTotalPayable)}</span>
+                  {milkForm.quantity > 0 && milkForm.rate > 0 && (
+                    <span className="font-mono text-xs text-slate-500">{formatQty(milkForm.quantity)} L × Rs {milkForm.rate}</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={resetMilkForm} className="flex h-11 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100">
+                  <RotateCcw size={14} /> Clear
+                </button>
+                <button
+                  type="submit"
+                  disabled={!milkCanSave}
+                  title={isMilkDateLocked ? `Selected date (${milkForm.date}) is closed & locked` : undefined}
+                  className={`flex h-11 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 text-sm font-bold transition-all active:scale-[0.98] sm:flex-initial ${
+                    milkCanSave ? 'cursor-pointer bg-lime-600 text-white shadow-md shadow-lime-600/25 hover:bg-lime-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'
+                  }`}
+                >
+                  {isSubmitting ? (<><Loader2 size={16} className="animate-spin" /> Saving…</>) : (
+                    <>
+                      <Save size={16} /> Save intake
+                      <kbd className="hidden rounded-md bg-white/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold sm:inline">Enter ↵</kbd>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </form>
+
+          {/* Right rail: farmer snapshot and today's feed */}
+          <aside className="space-y-4 lg:col-span-4">
+            {selectedSupplier && (
+              <div className="hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-xs lg:block">
+                <div className="flex items-center gap-3">
+                  <Avatar name={selectedSupplier.name} owed={selectedBalance > 0} size="lg" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-900">{selectedSupplier.name}</p>
+                    <p className="truncate text-[11px] text-slate-400">{[selectedSupplier.village || selectedSupplier.city, selectedSupplier.phone].filter(Boolean).join(' · ') || 'No contact saved'}</p>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-xl bg-slate-50 p-2.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Balance now</span>
+                    <span className={`font-mono text-sm font-black ${selectedBalance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700'}`}>{formatCurrency(Math.abs(selectedBalance))}</span>
+                    <span className="ml-1 text-[10px] font-semibold text-slate-400">{selectedBalance > 0 ? 'due' : selectedBalance < 0 ? 'adv' : ''}</span>
+                  </div>
+                  <div className={`rounded-xl p-2.5 ${milkDueAmount > 0 ? 'bg-rose-50' : 'bg-slate-50'}`}>
+                    <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">After slip <ArrowRight size={10} /></span>
+                    <span className={`font-mono text-sm font-black ${projectedBalance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700'}`}>{formatCurrency(Math.abs(projectedBalance))}</span>
+                    <span className="ml-1 text-[10px] font-semibold text-slate-400">{projectedBalance > 0 ? 'due' : projectedBalance < 0 ? 'adv' : ''}</span>
+                  </div>
+                </div>
+                <p className="mb-1.5 mt-4 text-[10px] font-bold uppercase tracking-wider text-slate-400">Recent deliveries</p>
+                {supplierRecentPurchases.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 py-3 text-center text-xs text-slate-400">Pehli delivery</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {supplierRecentPurchases.map(p => (
+                      <li key={p.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 px-2.5 py-2 text-xs">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${varietyDot(p.milk_type)}`} />
+                          <span className="min-w-0">
+                            <span className="block font-semibold text-slate-800">{formatQty(p.quantity)} L <span className="font-normal text-slate-400">@ Rs {p.rate}</span></span>
+                            <span className="block text-[10px] text-slate-400">{new Date(p.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · {p.shift}</span>
+                          </span>
+                        </span>
+                        <span className="font-mono font-bold text-slate-900">{formatCurrency(p.total_amount)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-xs">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-lime-400 opacity-60 motion-reduce:animate-none" /><span className="relative inline-flex h-2 w-2 rounded-full bg-lime-500" /></span>
+                  Today&rsquo;s intake
+                </h3>
+                <span className="font-mono text-xs font-bold text-slate-500">{formatQty(todayMilkStats.liters)} L</span>
+              </div>
+              <div className="space-y-2 px-4 py-3">
+                {todayShiftTotals.map(s => (
+                  <div key={s.name} className="flex items-center gap-2.5 text-xs">
+                    <span className="flex w-20 shrink-0 items-center gap-1.5 truncate font-semibold text-slate-600"><ShiftIcon name={s.name} size={12} />{s.name}</span>
+                    <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                      <span className={`block h-full rounded-full transition-all duration-500 ${s.name === milkForm.shift ? 'bg-lime-500' : 'bg-slate-300 dark:bg-slate-600'}`} style={{ width: `${(s.liters / maxShiftLiters) * 100}%` }} />
+                    </span>
+                    <span className="w-16 shrink-0 text-right font-mono font-bold text-slate-800">{formatQty(s.liters)} L</span>
+                  </div>
+                ))}
+              </div>
+              {todayMilkEntries.length === 0 ? (
+                <div className="border-t border-slate-100 px-4 py-8 text-center">
+                  <span className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-2xl bg-lime-50 text-lime-600"><Milk size={18} /></span>
+                  <p className="text-xs font-semibold text-slate-600">Aaj abhi koi entry nahi</p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">Pehli slip upar se record karein</p>
+                </div>
+              ) : (
+                <ul className="max-h-[420px] divide-y divide-slate-100 overflow-y-auto border-t border-slate-100">
+                  {todayMilkEntries.slice(0, 12).map(entry => {
+                    const due = Math.max(0, (Number(entry.total_amount) || 0) - (Number(entry.paid_amount) || 0));
+                    const at = new Date(entry.date);
+                    return (
+                      <li key={entry.id} className="flex items-center gap-2.5 px-4 py-2.5 text-xs">
+                        <Avatar name={entry.supplier_name || suppliers.find(s => s.id === entry.supplier_id)?.name || 'Farmer'} owed={due > 0} size="sm" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-semibold text-slate-800">{entry.supplier_name || suppliers.find(s => s.id === entry.supplier_id)?.name || 'Farmer'}</span>
+                          <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                            <span className={`h-1.5 w-1.5 rounded-full ${varietyDot(entry.milk_type)}`} />
+                            {formatQty(entry.quantity)} L · {entry.shift}{Number.isFinite(at.getTime()) && entry.date.includes('T') ? ` · ${timeFormatter.format(at)}` : ''}
+                          </span>
+                        </span>
+                        <span className="text-right">
+                          <span className="block font-mono font-bold text-slate-900">{formatCurrency(entry.total_amount)}</span>
+                          <span className={`block text-[10px] font-semibold ${due > 0.5 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700'}`}>{due > 0.5 ? 'Khata' : 'Paid'}</span>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {todayMilkEntries.length > 0 && (
+                <button type="button" onClick={() => toggleHistory(true)} className="flex w-full items-center justify-center gap-1.5 rounded-b-2xl border-t border-slate-100 py-2.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900">
+                  Poora log dekhein <ArrowRight size={13} />
+                </button>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* --- SUPPLIES & MATERIALS BILL --- */}
+      {!isMilk && (
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+          <section className="rounded-2xl border border-slate-200 bg-white shadow-xs lg:col-span-8">
+            <div className="space-y-4 rounded-t-2xl border-b border-slate-200 bg-slate-50 p-4 sm:p-5">
+              {isMaterialDateLocked && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900" role="alert">
+                  <Lock size={15} className="shrink-0 text-amber-600" />
+                  <span><strong>{invoiceDate} band (locked) hai.</strong> Is din ka supplies bill save nahi ho sakta.</span>
+                </div>
+              )}
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_11rem]">
+                <div>
+                  <SectionLabel step={1} aside={!invoiceSupplier && <span className="text-[10px] font-semibold text-slate-400">Cash buy ke liye optional</span>}>Vendor / Supplier</SectionLabel>
                   <SearchableSupplierDropdown
                     value={invoiceSupplier}
                     onChange={val => setInvoiceSupplier(val)}
                     suppliers={filteredSuppliers}
-                    placeholder={isCashPaidFull ? 'Cash / Walk-in Buy (Optional)' : 'Search or select Vendor...'}
-                    inputClass={inputClass}
+                    placeholder={isCashPaidFull ? 'Cash / walk-in (optional)' : 'Vendor dhoondein…'}
+                    inputClass={`${inputClass} h-12`}
                     labelClass={labelClass}
                   />
                 </div>
-
-                <div className="shrink-0" title={`Invoice Date: ${invoiceDate}`}>
-                  <label className={`${labelClass} mb-1 block invisible select-none`}>Date</label>
-                  <div className="relative w-10 h-10 flex items-center justify-center bg-white hover:bg-slate-100/80 border border-slate-200 rounded-lg cursor-pointer shadow-2xs transition-colors group">
-                    <CalendarIcon size={18} className="text-slate-600 group-hover:text-lime-600 transition-colors pointer-events-none" />
-                    <input 
-                      type="date" 
-                      className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10" 
-                      value={invoiceDate} 
-                      onChange={e => setInvoiceDate(e.target.value)} 
-                      title={`Date: ${invoiceDate}`}
-                    />
-                  </div>
+                <div>
+                  <SectionLabel>Bill date</SectionLabel>
+                  <label className="flex h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700">
+                    <CalendarIcon size={15} className="text-slate-400" />
+                    <input type="date" aria-label="Bill date" className="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs font-semibold outline-none focus:ring-0 dark:bg-transparent" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} />
+                  </label>
                 </div>
               </div>
-
               <div>
-                <label className={`${labelClass} mb-1 block`}>Search & Add Products to Bill</label>
+                <SectionLabel step={2} aside={<span className="hidden text-[10px] font-semibold text-slate-400 sm:inline">↑ ↓ chunein · Enter add</span>}>Add products</SectionLabel>
                 {renderProductSearch()}
+                {quickAddItems.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400"><Sparkles size={11} /> Aksar</span>
+                    {quickAddItems.map(item => (
+                      <button key={item.id} type="button" onClick={() => handleAddItem(item.id)} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:border-lime-400 hover:text-lime-700">
+                        <Plus size={11} /> {item.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Line Items Container */}
-            <div className="flex-1 overflow-y-auto min-h-[260px] bg-white">
-              
-              {/* Empty State */}
-              {invoiceItems.length === 0 ? (
-                <div className="p-10 text-center text-slate-400 flex flex-col items-center justify-center">
-                  <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 mb-2.5 shadow-2xs">
-                    <Package size={26} className="text-lime-600 opacity-60" />
-                  </div>
-                  <p className="text-xs sm:text-sm font-bold text-slate-700">No Supplies Added Yet</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5 max-w-xs">
-                    Search material, packaging, or cattle feed above to add items to this purchase invoice.
-                  </p>
+            {invoiceItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+                <span className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-lime-50 to-cyan-50 text-lime-600 ring-1 ring-slate-200 dark:from-lime-500/10 dark:to-cyan-500/10 dark:ring-slate-700">
+                  <ShoppingCart size={24} />
+                </span>
+                <p className="text-sm font-bold text-slate-800">Bill khaali hai</p>
+                <p className="mt-1 max-w-xs text-xs text-slate-400">Material, packaging ya feed upar search kar ke bill mein add karein.</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between px-4 pt-3 sm:px-5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{invoiceItems.length} {invoiceItems.length === 1 ? 'item' : 'items'} in bill</span>
+                  <span className="text-[10px] text-slate-400 md:hidden">Swipe to remove · tap to edit</span>
                 </div>
-              ) : (
-                <>
-                  {/* --- MOBILE VIEW: EXACT POS CART-STYLE COMPACT TABLE (< md screens) --- */}
-                  <div className="md:hidden">
-                    {/* Mobile Table Header */}
-                    <div className="grid grid-cols-12 px-3 py-2 bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400 tracking-wider items-center">
-                      <span className="col-span-5">Item</span>
-                      <span className="col-span-4 text-center">Qty</span>
-                      <div className="col-span-3 flex justify-between items-center">
-                        <span className="w-full text-right">Total</span>
+
+                {/* Mobile: cart-style rows with swipe-to-delete */}
+                <div className="mt-2 divide-y divide-slate-100 border-t border-slate-100 md:hidden">
+                  {invoiceItems.map((item) => (
+                    <div key={item.tempId} className="relative overflow-hidden bg-rose-500">
+                      <div className="absolute inset-0 flex items-center justify-between px-4 text-xs font-bold text-white">
+                        <span className="flex items-center gap-1.5"><Trash2 size={14} /> Delete</span>
+                        <span className="flex items-center gap-1.5">Delete <Trash2 size={14} /></span>
                       </div>
-                    </div>
-
-                    {/* Mobile Table Rows with Swipe-to-Delete */}
-                    <div className="divide-y divide-slate-100">
-                      {invoiceItems.map((item) => (
-                        <div key={item.tempId} className="relative overflow-hidden bg-red-500">
-                          {/* Background Reveal when swiping */}
-                          <div className="absolute inset-0 flex items-center justify-between px-4 text-white text-xs font-bold">
-                            <span className="flex items-center gap-1.5"><Trash2 size={14} /> Delete</span>
-                            <span className="flex items-center gap-1.5">Delete <Trash2 size={14} /></span>
-                          </div>
-
-                          {/* Draggable Swipe Row */}
-                          <MotionDiv
-                            drag="x"
-                            dragDirectionLock
-                            dragConstraints={{ left: 0, right: 0 }}
-                            dragElastic={0.6}
-                            onDragEnd={(_e: any, info: any) => {
-                              if (Math.abs(info.offset.x) > 70 || Math.abs(info.velocity.x) > 350) {
-                                removeLineItem(item.tempId);
-                                showToast(`${item.item_name} removed from bill`, 'info');
-                              }
-                            }}
-                            className="relative bg-white px-3 py-2.5 grid grid-cols-12 items-center gap-1.5 touch-pan-y"
-                          >
-                            {/* Col 1: Item Name & Unit / Rate (col-span-5) - Clicking opens Edit Modal */}
-                            <div 
-                              onClick={() => openEditModal(item)}
-                              className="col-span-5 min-w-0 pr-1 cursor-pointer active:opacity-70 group"
-                              title="Click to edit quantity & rate"
-                            >
-                              <p className="font-bold text-slate-800 text-xs truncate leading-tight group-hover:text-lime-600 transition-colors">
-                                {item.item_name}
-                              </p>
-                              {destinationTag(item)}
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="bg-lime-50 text-lime-800 border border-lime-200 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                                  {item.unit}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-medium">
-                                  • Rs {item.rate}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Col 2: Quantity Stepper (col-span-4) */}
-                            <div className="col-span-4 flex items-center justify-center">
-                              <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
-                                <button aria-label="Decrease Qty" 
-                                  type="button"
-                                  onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))} 
-                                  className="w-6 h-6 rounded-md hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
-                                  title="Decrease Qty"
-                                >
-                                  <Minus size={11} />
-                                </button>
-                                <input 
-                                  type="number"
-                                  step="any"
-                                  min="0.1"
-                                  value={item.quantity}
-                                  onChange={e => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)}
-                                  className="w-8 text-center text-xs font-bold font-mono text-slate-900 bg-transparent outline-none"
-                                />
-                                <button aria-label="Increase Qty" 
-                                  type="button"
-                                  onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)} 
-                                  className="w-6 h-6 rounded-md hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
-                                  title="Increase Qty"
-                                >
-                                  <Plus size={11} />
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Col 3: Line Total (Editable auto-calculates qty) */}
-                            <div className="col-span-3 text-right">
-                              <div className="flex items-center justify-end">
-                                <span className="text-[10px] text-slate-400 mr-0.5 font-mono">Rs</span>
-                                <input
-                                  type="number"
-                                  step="any"
-                                  value={item.quantity * item.rate}
-                                  onChange={e => updateLineTotal(item.tempId, e.target.value)}
-                                  className="w-14 text-right text-xs font-black font-mono bg-transparent border border-transparent hover:border-slate-200 focus:border-lime-500 focus:bg-white rounded px-1 py-0.5 outline-none text-slate-900 transition-colors"
-                                  title="Click to edit total amount (auto-calculates quantity)"
-                                />
-                              </div>
-                            </div>
-                          </MotionDiv>
+                      <MotionDiv
+                        drag="x"
+                        dragDirectionLock
+                        dragConstraints={{ left: 0, right: 0 }}
+                        dragElastic={0.6}
+                        onDragEnd={(_e: any, info: any) => {
+                          if (Math.abs(info.offset.x) > 70 || Math.abs(info.velocity.x) > 350) {
+                            removeLineItem(item.tempId);
+                            showToast(`${item.item_name} removed from bill`, 'info');
+                          }
+                        }}
+                        className="relative flex touch-pan-y items-center gap-2 bg-white px-4 py-3"
+                      >
+                        <button type="button" onClick={() => openEditModal(item)} className="min-w-0 flex-1 text-left" title="Edit quantity & rate">
+                          <span className="block truncate text-sm font-bold text-slate-800">{item.item_name}</span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <span className="rounded-md border border-lime-200 bg-lime-50 px-1.5 py-0.5 text-[10px] font-bold text-lime-700">{item.unit}</span>
+                            Rs {item.rate}
+                          </span>
+                          {destinationTag(item)}
+                        </button>
+                        <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+                          <button aria-label="Decrease quantity" type="button" onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))} className="grid h-7 w-7 place-items-center rounded-lg text-slate-600 hover:bg-white active:scale-90"><Minus size={12} /></button>
+                          <input type="number" step="any" min="0.1" aria-label={`${item.item_name} quantity`} value={item.quantity} onChange={e => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="w-9 border-0 bg-transparent p-0 text-center font-mono text-xs font-bold text-slate-900 outline-none dark:bg-transparent" />
+                          <button aria-label="Increase quantity" type="button" onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-600 hover:bg-white active:scale-90"><Plus size={12} /></button>
                         </div>
-                      ))}
+                        <span className="w-20 shrink-0 text-right font-mono text-sm font-black text-slate-900">{formatCurrency(item.quantity * item.rate)}</span>
+                      </MotionDiv>
                     </div>
-                  </div>
+                  ))}
+                </div>
 
-                  {/* --- DESKTOP VIEW: STRUCTURED DATA TABLE (>= md screens) --- */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10 uppercase font-bold text-[11px] tracking-wider border-b border-slate-200">
-                        <tr>
-                          <th className="px-4 py-2.5">Product Name</th>
-                          <th className="px-3 py-2.5 w-24 text-center">Unit</th>
-                          <th className="px-3 py-2.5 w-32 text-center">Quantity</th>
-                          <th className="px-3 py-2.5 w-36 text-right">Unit Rate (Rs)</th>
-                          <th className="px-4 py-2.5 w-36 text-right">Total</th>
-                          <th className="px-3 py-2.5 w-12 text-center"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-medium">
-                        {invoiceItems.map((item) => (
-                          <tr key={item.tempId} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="px-4 py-3">
-                              <span 
-                                onClick={() => openEditModal(item)}
-                                className="font-bold text-slate-900 text-xs sm:text-sm cursor-pointer hover:text-lime-700"
-                                title="Click to edit product"
-                              >
+                {/* Desktop: editable table */}
+                <div className="mt-2 hidden overflow-x-auto md:block">
+                  <table className="w-full border-collapse text-left text-xs">
+                    <thead className="border-y border-slate-100 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <tr>
+                        <th className="px-5 py-2.5">Product</th>
+                        <th className="w-28 px-3 py-2.5 text-center">Unit</th>
+                        <th className="w-32 px-3 py-2.5 text-center">Qty</th>
+                        <th className="w-32 px-3 py-2.5 text-right">Rate</th>
+                        <th className="w-32 px-3 py-2.5 text-right">Total</th>
+                        <th className="w-12 px-3 py-2.5" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {invoiceItems.map((item) => {
+                        const availUnits = getItemPurchaseUnits(item.item_id);
+                        return (
+                          <tr key={item.tempId} className="group transition-colors hover:bg-slate-50/70">
+                            <td className="px-5 py-3">
+                              <button type="button" onClick={() => openEditModal(item)} className="text-left text-sm font-bold text-slate-900 hover:text-lime-700" title="Edit product">
                                 {item.item_name}
-                              </span>
+                              </button>
                               <div>{destinationTag(item)}</div>
                             </td>
                             <td className="px-3 py-3 text-center">
-                              {(() => {
-                                const availUnits = getItemPurchaseUnits(item.item_id);
-                                if (availUnits.length > 1) {
-                                  return (
-                                    <div className="relative inline-block">
-                                      <select
-                                        aria-label={`Select unit for ${item.item_name}`}
-                                        value={item.unit}
-                                        onChange={(e) => {
-                                          const chosen = availUnits.find(u => u.unit === e.target.value);
-                                          if (chosen) {
-                                            handleLineItemUnitChange(item.tempId, chosen.unit, chosen.factor);
-                                          }
-                                        }}
-                                        className="bg-lime-50/80 hover:bg-lime-100 text-lime-900 font-bold px-2 py-1 rounded-lg text-xs border border-lime-300 dark:bg-slate-800 dark:text-lime-300 dark:border-lime-700 outline-none cursor-pointer transition-all shadow-2xs"
-                                        title="Change purchase unit"
-                                      >
-                                        {availUnits.map(u => (
-                                          <option key={u.unit} value={u.unit}>
-                                            {u.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  );
-                                }
-                                return (
-                                  <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-semibold border border-slate-200">
-                                    {item.unit}
-                                  </span>
-                                );
-                              })()}
+                              {availUnits.length > 1 ? (
+                                <select
+                                  aria-label={`Select unit for ${item.item_name}`}
+                                  value={item.unit}
+                                  onChange={(e) => {
+                                    const chosen = availUnits.find(u => u.unit === e.target.value);
+                                    if (chosen) handleLineItemUnitChange(item.tempId, chosen.unit, chosen.factor);
+                                  }}
+                                  className="max-w-[7rem] cursor-pointer rounded-lg border border-lime-300 bg-lime-50 px-2 py-1 text-xs font-bold text-lime-800 outline-none"
+                                  title="Change purchase unit"
+                                >
+                                  {availUnits.map(u => <option key={u.unit} value={u.unit}>{u.label}</option>)}
+                                </select>
+                              ) : (
+                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{item.unit}</span>
+                              )}
                             </td>
                             <td className="px-3 py-3">
-                              <div className="flex items-center bg-slate-50 rounded-lg border border-slate-200 p-0.5 focus-within:border-lime-500 focus-within:bg-white transition-all max-w-[120px] mx-auto">
-                                <button aria-label="Kam karein"
-                                  type="button"
-                                  onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))}
-                                  className="w-6 h-6 rounded hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
-                                >
-                                  <Minus size={11} />
-                                </button>
-                                <input 
-                                  type="number" 
-                                  min="0.1" 
-                                  step="any" 
-                                  className="w-full text-center font-bold font-mono text-xs text-slate-900 bg-transparent outline-none" 
-                                  value={item.quantity} 
-                                  onChange={(e) => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)} 
-                                />
-                                <button aria-label="Zyada karein"
-                                  type="button"
-                                  onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)}
-                                  className="w-6 h-6 rounded hover:bg-white text-slate-700 active:scale-90 flex items-center justify-center transition-all"
-                                >
-                                  <Plus size={11} />
-                                </button>
+                              <div className="mx-auto flex max-w-[120px] items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 transition-all focus-within:border-lime-500 focus-within:bg-white">
+                                <button aria-label="Kam karein" type="button" onClick={() => updateLineItem(item.tempId, 'quantity', Math.max(0.1, (item.quantity || 1) - 1))} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-white active:scale-90"><Minus size={12} /></button>
+                                <input type="number" min="0.1" step="any" aria-label={`${item.item_name} quantity`} className="w-full border-0 bg-transparent p-0 text-center font-mono text-xs font-bold text-slate-900 outline-none dark:bg-transparent" value={item.quantity} onChange={(e) => updateLineItem(item.tempId, 'quantity', parseFloat(e.target.value) || 0)} />
+                                <button aria-label="Zyada karein" type="button" onClick={() => updateLineItem(item.tempId, 'quantity', (item.quantity || 0) + 1)} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-white active:scale-90"><Plus size={12} /></button>
                               </div>
                             </td>
                             <td className="px-3 py-3 text-right">
-                              <div className="relative max-w-[120px] ml-auto">
-                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px] font-mono font-semibold">Rs</span>
-                                <input 
-                                  type="number" 
-                                  min="0" 
-                                  step="any" 
-                                  className="w-full h-8 bg-slate-50 focus:bg-white border border-slate-200 rounded-lg text-right pr-2 pl-7 font-bold font-mono text-xs text-slate-900 outline-none focus:border-lime-500 transition-all" 
-                                  value={item.rate} 
-                                  onChange={(e) => updateLineItem(item.tempId, 'rate', parseFloat(e.target.value) || 0)} 
-                                />
+                              <div className="relative ml-auto max-w-[120px]">
+                                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-[11px] font-semibold text-slate-400">Rs</span>
+                                <input type="number" min="0" step="any" aria-label={`${item.item_name} rate`} className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-7 pr-2 text-right font-mono text-xs font-bold text-slate-900 outline-none transition-all focus:border-lime-500 focus:bg-white" value={item.rate} onChange={(e) => updateLineItem(item.tempId, 'rate', parseFloat(e.target.value) || 0)} />
                               </div>
                             </td>
-                            <td className="px-4 py-3 text-right font-bold font-mono text-slate-900 text-xs sm:text-sm">
+                            <td className="px-3 py-3 text-right">
                               <input
                                 type="number"
                                 step="any"
+                                aria-label={`${item.item_name} total`}
                                 value={item.quantity * item.rate}
                                 onChange={e => updateLineTotal(item.tempId, e.target.value)}
-                                className="w-24 text-right font-bold font-mono bg-transparent border border-transparent hover:border-slate-200 focus:border-lime-500 focus:bg-white rounded px-1 py-0.5 outline-none text-slate-900 transition-colors"
-                                title="Click to edit total amount"
+                                className="w-24 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-right font-mono text-sm font-black text-slate-900 outline-none transition-colors hover:border-slate-200 focus:border-lime-500 focus:bg-white dark:bg-transparent"
+                                title="Total badlein (qty khud adjust hogi)"
                               />
                             </td>
                             <td className="px-3 py-3 text-center">
-                              <button aria-label="Remove Item" 
-                                onClick={() => removeLineItem(item.tempId)} 
-                                className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                                title="Remove Item"
-                              >
-                                <Trash2 size={14}/>
+                              <button aria-label="Remove Item" type="button" onClick={() => removeLineItem(item.tempId)} className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-600 group-hover:text-slate-400" title="Remove Item">
+                                <Trash2 size={14} />
                               </button>
                             </td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-
-            </div>
-
-            {/* Bottom Finalization & Payment Settlement Bar */}
-            <div className="p-3 sm:p-4 bg-slate-50 shrink-0 space-y-3">
-              <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3">
-                
-                {/* Left: Financial Totals */}
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Purchase Bill</span>
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-xl sm:text-2xl font-bold font-mono text-lime-700 leading-tight">
-                      {formatCurrency(invoiceTotal)}
-                    </span>
-                    <span className="text-xs font-semibold text-slate-500">
-                      ({invoiceItems.length} {invoiceItems.length === 1 ? 'product' : 'products'})
-                    </span>
-                    {effectivePaid > 0 && (
-                      <span className="text-xs text-slate-500 font-medium">
-                        • Paid: <strong className="text-emerald-700 font-mono">{formatCurrency(effectivePaid)}</strong>
-                        {unpaidInvoiceBalance > 0 && (
-                          <> • Due: <strong className="text-rose-700 font-mono">{formatCurrency(unpaidInvoiceBalance)}</strong></>
-                        )}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right: Payment Settlement & Actions */}
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
-                  <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2.5">
-                    {/* Paid Amount Input with internal minimal Full button */}
-                    <div className="w-full sm:w-36">
-                      <label className="text-xs font-semibold text-slate-700 mb-1 block">Amount Paid</label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-semibold font-mono pointer-events-none z-10">Rs</span>
-                        <SmartNumberInput 
-                          min="0" 
-                          className={`${inputClass} pl-8 pr-14 text-xs sm:text-sm font-bold font-mono text-slate-900`} 
-                          placeholder="0" 
-                          value={paidAmount} 
-                          onChange={setPaidAmount} 
-                        />
-                        {invoiceTotal > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setPaidAmount(invoiceTotal.toString())}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-lime-700 hover:text-lime-800 bg-lime-100/90 hover:bg-lime-200 px-2 py-0.5 rounded transition-colors z-20 cursor-pointer"
-                            title="Pay Full Amount"
-                          >
-                            Full
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Payment Mode Switcher */}
-                    <div className="w-full sm:w-44">
-                      <span className="text-xs font-semibold text-slate-700 block mb-1">Payment Mode</span>
-                      <SegmentedControl
-                        options={[
-                          { value: 'Cash', label: 'Cash' },
-                          { value: 'Online', label: 'Online' }
-                        ]}
-                        value={paymentMode}
-                        onChange={val => setPaymentMode(val)}
-                        size="md"
-                        disabled={effectivePaid <= 0}
-                      />
-                    </div>
-
-                    {/* Account Selector or Warning for Material Purchase */}
-                    {effectivePaid > 0 && availableAccounts.length > 0 && (
-                      <div className="w-full sm:w-48">
-                        <span className="text-xs font-semibold text-slate-700 block mb-1">Account</span>
-                        <select
-                          className={`${inputClass} text-xs font-medium bg-slate-50 py-1.5`}
-                          value={materialAccountId}
-                          onChange={e => setMaterialAccountId(e.target.value)}
-                        >
-                          {availableAccounts.map(acc => (
-                            <option key={acc.id} value={acc.id}>
-                              {acc.name} ({acc.type}) — {formatCurrency(acc.balance)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Warning if paying without accounts */}
-                  {effectivePaid > 0 && availableAccounts.length === 0 && (
-                    <div className="mt-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 animate-in fade-in">
-                      <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
-                      <div>
-                        <span className="font-bold">⚠️ Koi Cash Drawer ya Bank Account add nahi hy!</span>
-                        <p className="mt-0.5 text-[11px] text-amber-700 leading-tight">
-                          Pehle 'Bank & Cash' module men account banayein ya bill ko Khata per save karein.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Submit Action Button */}
-                  <div className="flex items-center gap-2 pt-1 sm:pt-4">
-                    {invoiceItems.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (await confirmAction({
-                            tone: 'warning',
-                            title: 'Yeh invoice saaf karein?',
-                            consequences: ['Invoice ke sab items, supplier aur paid amount hat jayenge.', 'Abhi tak kuch save nahi hua, is liye kisi khaate par asar nahi hoga.'],
-                            confirmLabel: 'Haan, saaf karein',
-                          })) {
-                            setInvoiceItems([]);
-                            setInvoiceSupplier('');
-                            setPaidAmount('');
-                          }
-                        }}
-                        className="px-3 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold text-xs transition-colors"
-                      >
-                        Clear
-                      </button>
-                    )}
-                    <button 
-                      onClick={submitInvoice} 
-                      disabled={invoiceItems.length === 0 || isSubmittingInvoice || (!isCashPaidFull && !invoiceSupplier) || isMaterialDateLocked} 
-                      title={isMaterialDateLocked ? `Selected date (${invoiceDate}) is closed & locked` : undefined}
-                      className={`font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap flex-1 sm:flex-initial ${
-                        invoiceItems.length > 0 && !isSubmittingInvoice && (isCashPaidFull || !!invoiceSupplier) && !isMaterialDateLocked
-                          ? 'bg-lime-600 hover:bg-lime-700 text-white cursor-pointer' 
-                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                      }`}
-                    >
-                      {isSubmittingInvoice ? (
-                        <>
-                          <Loader2 size={15} className="animate-spin" /> Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Save size={15} /> {!invoiceSupplier ? (isCashPaidFull ? 'Save Cash Buy' : 'Select Vendor to Save') : 'Save Purchase Bill'}
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-
-          </div>
-        )}
-
-      </div>
-
-      {/* --- MODAL: EDIT PURCHASE LINE ITEM DIALOG --- */}
-      {editingLineItem && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs">
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200">
-            <div className="px-4 py-3.5 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white flex justify-between items-center border-b border-slate-200 dark:border-slate-700">
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-white">{editingLineItem.item_name}</h3>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Unit: <strong className="text-lime-700 dark:text-lime-400 font-bold">{editItemUnit || editingLineItem.unit}</strong>
-                </p>
-              </div>
-              <button aria-label="Band karein" onClick={() => setEditingLineItem(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-3.5 text-xs">
-              {/* Unit & Packaging Selector */}
-              {(() => {
-                const availUnits = getItemPurchaseUnits(editingLineItem.item_id);
-                if (availUnits.length <= 1) return null;
-                return (
-                  <div>
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                      Purchase Unit / Packaging
-                    </label>
-                    <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
-                      {availUnits.map(u => {
-                        const isSelected = (editItemUnit || editingLineItem.unit) === u.unit;
-                        return (
-                          <button
-                            key={u.unit}
-                            type="button"
-                            onClick={() => handleModalUnitChange(u.unit, u.factor)}
-                            className={`p-2 rounded-xl text-left border text-xs transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-lime-50/90 dark:bg-lime-950/40 border-lime-600 text-lime-900 dark:text-lime-200 font-bold ring-2 ring-lime-500/20'
-                                : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-lime-400'
-                            }`}
-                          >
-                            <div className="flex justify-between items-center">
-                              <span className="truncate">{u.unit}</span>
-                              {isSelected && <Check size={12} className="text-lime-600 shrink-0" />}
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-normal block mt-0.5">
-                              {u.factor === 1 ? 'Base unit' : `= ${u.factor} ${editingLineItem.base_unit || 'base'}`}
-                            </span>
-                            {(() => {
-                              const dest = lineDestination({ ...editingLineItem, unit: u.unit, conversion_factor: u.factor, quantity: 1 });
-                              return dest ? <span className={`text-[10px] font-bold block mt-0.5 ${dest.packed ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`}>{dest.packed ? 'Adds packs' : 'Adds loose'}</span> : null;
-                            })()}
-                          </button>
                         );
                       })}
-                    </div>
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* Checkout panel */}
+          <aside className="rounded-2xl border border-slate-200 bg-white shadow-xs lg:sticky lg:top-4 lg:col-span-4">
+            <div className="border-b border-slate-100 p-4">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Bill summary</p>
+              {selectedVendorData ? (
+                <div className="flex items-center gap-3">
+                  <Avatar name={selectedVendorData.name} owed={vendorBalance > 0} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-slate-900">{selectedVendorData.name}</p>
+                    <p className={`font-mono text-[11px] font-semibold ${vendorBalance > 0 ? 'text-rose-600 dark:text-rose-400' : vendorBalance < 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                      {vendorBalance === 0 ? 'Khata clear' : `${formatCurrency(Math.abs(vendorBalance))} ${vendorBalance > 0 ? 'due' : 'advance'}`}
+                    </p>
                   </div>
-                );
-              })()}
-
-              {/* Quantity */}
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Quantity ({editItemUnit || editingLineItem.unit})</label>
-                <div className="flex items-center bg-slate-50 rounded-xl border border-slate-200 p-1 focus-within:border-lime-500 focus-within:bg-white">
-                  <button
-                    type="button"
-                    onClick={() => handleEditQtyChange(Math.max(0.1, (parseFloat(editItemQty) || 1) - 1).toString())}
-                    className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-700 active:scale-90 flex items-center justify-center text-sm font-bold shrink-0"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0.1"
-                    value={editItemQty}
-                    onChange={e => handleEditQtyChange(e.target.value)}
-                    className="w-full text-center font-bold font-mono text-sm text-slate-900 bg-transparent outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleEditQtyChange(((parseFloat(editItemQty) || 0) + 1).toString())}
-                    className="w-8 h-8 rounded-lg hover:bg-slate-200 text-slate-700 active:scale-90 flex items-center justify-center text-sm font-bold shrink-0"
-                  >
-                    +
-                  </button>
                 </div>
-                {/* Quick Qty Chips */}
-                <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                  {[1, 2, 5, 10, 25, 50].map(val => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => handleEditQtyChange(val.toString())}
-                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-lime-100 hover:text-lime-800 text-[10px] font-semibold text-slate-600 transition-colors"
-                    >
-                      {val}
-                    </button>
-                  ))}
+              ) : (
+                <div className="flex items-center gap-3 rounded-xl border border-dashed border-slate-200 p-2.5">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-400"><User size={16} /></span>
+                  <p className="text-[11px] leading-snug text-slate-500"><b className="text-slate-700">Cash / walk-in buy.</b> Vendor ke baghair bill poora ada hona chahiye.</p>
                 </div>
-              </div>
-
-              {/* Unit Rate */}
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Purchase Rate (Rs / {editItemUnit || editingLineItem.unit})</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">Rs</span>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={editItemRate}
-                    onChange={e => handleEditRateChange(e.target.value)}
-                    className="w-full h-9 bg-slate-50 focus:bg-white border border-slate-200 rounded-xl pl-8 pr-3 text-sm font-bold font-mono text-slate-900 outline-none focus:border-lime-500"
-                  />
-                </div>
-              </div>
-
-              {/* Line Total (Editable) */}
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Total Amount (Rs)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs">Rs</span>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={editItemTotal}
-                    onChange={e => handleEditTotalChange(e.target.value)}
-                    className="w-full h-9 bg-slate-50 focus:bg-white border border-slate-200 rounded-xl pl-8 pr-3 text-sm font-bold font-mono text-slate-900 outline-none focus:border-lime-500"
-                  />
-                </div>
-                <span className="text-[10px] text-slate-400 block mt-0.5">Changing total automatically updates quantity.</span>
-              </div>
+              )}
             </div>
 
-            {/* Modal Footer */}
-            <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex justify-between items-center gap-2">
+            <div className="space-y-3 p-4">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs font-semibold text-slate-500">Bill total</span>
+                <span className="font-mono text-2xl font-black tracking-tight text-lime-700">{formatCurrency(invoiceTotal)}</span>
+              </div>
+              <div>
+                <span className="mb-1 block text-[11px] font-semibold text-slate-500">Abhi ada (paid now)</span>
+                {paidInput(paidAmount, setPaidAmount, invoiceTotal, effectivePaid)}
+              </div>
+              <div>
+                <span className="mb-1 block text-[11px] font-semibold text-slate-500">Paid via</span>
+                <PillGroup label="Payment mode" options={payModePills.map(p => ({ ...p, disabled: effectivePaid <= 0 }))} value={paymentMode} onChange={setPaymentMode} />
+              </div>
+              {effectivePaid > 0 && accountPicker(materialAccountId, setMaterialAccountId, paymentMode)}
+              <SettlementBar total={invoiceTotal} paid={effectivePaid} formatMoney={formatCurrency} />
+              {selectedVendorData && unpaidInvoiceBalance > 0 && (
+                <p className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                  <span className="flex items-center gap-1">Vendor khata after bill <ArrowRight size={11} /></span>
+                  <b className={`font-mono ${vendorBalance + unpaidInvoiceBalance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700'}`}>{formatCurrency(Math.abs(vendorBalance + unpaidInvoiceBalance))}</b>
+                </p>
+              )}
+              {!invoiceSupplier && invoiceItems.length > 0 && !isCashPaidFull && (
+                <p className="flex items-start gap-1.5 text-[11px] font-semibold text-amber-700">
+                  <AlertTriangle size={13} className="mt-px shrink-0" /> Udhaar bill ke liye vendor chunein, ya Full paid karein.
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2 rounded-b-2xl border-t border-slate-100 bg-slate-50 p-4">
+              {invoiceItems.length > 0 && (
+                <button
+                  type="button"
+                  aria-label="Bill saaf karein"
+                  onClick={async () => {
+                    if (await confirmAction({
+                      tone: 'warning',
+                      title: 'Yeh invoice saaf karein?',
+                      consequences: ['Invoice ke sab items, supplier aur paid amount hat jayenge.', 'Abhi tak kuch save nahi hua, is liye kisi khaate par asar nahi hoga.'],
+                      confirmLabel: 'Haan, saaf karein',
+                    })) {
+                      setInvoiceItems([]);
+                      setInvoiceSupplier('');
+                      setPaidAmount('');
+                    }
+                  }}
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                  title="Clear bill"
+                >
+                  <RotateCcw size={15} />
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  removeLineItem(editingLineItem.tempId);
-                  setEditingLineItem(null);
-                  showToast(`${editingLineItem.item_name} removed`, 'info');
-                }}
-                className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 font-bold rounded-xl text-xs flex items-center gap-1 transition-colors"
+                onClick={submitInvoice}
+                disabled={!supplyCanSave}
+                title={isMaterialDateLocked ? `Selected date (${invoiceDate}) is closed & locked` : undefined}
+                className={`flex h-11 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-sm font-bold transition-all active:scale-[0.98] ${
+                  supplyCanSave ? 'cursor-pointer bg-lime-600 text-white shadow-md shadow-lime-600/25 hover:bg-lime-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'
+                }`}
               >
-                <Trash2 size={13} /> Remove
+                {isSubmittingInvoice ? (<><Loader2 size={16} className="animate-spin" /> Saving…</>) : (
+                  <><Save size={16} /> {invoiceItems.length === 0 ? 'Items add karein' : !invoiceSupplier ? (isCashPaidFull ? 'Save cash buy' : 'Vendor chunein') : 'Save purchase bill'}</>
+                )}
               </button>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingLineItem(null)}
-                  className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveEditedItem}
-                  className="px-4 py-2 bg-lime-600 hover:bg-lime-700 text-white font-bold rounded-xl text-xs transition-colors shadow-xs"
-                >
-                  Update
-                </button>
-              </div>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 
-      {/* 3. Slide-Over Procurement Audit Drawer */}
+      {/* --- MODAL: EDIT PURCHASE LINE ITEM --- */}
+      <Modal
+        open={Boolean(editingLineItem)}
+        onClose={() => setEditingLineItem(null)}
+        size="sm"
+        icon={<span className="grid h-10 w-10 place-items-center rounded-xl bg-lime-100 text-lime-700"><Package size={18} /></span>}
+        title={editingLineItem?.item_name || ''}
+        description={editingLineItem ? `Unit: ${editItemUnit || editingLineItem.unit}` : undefined}
+        footer={editingLineItem && (
+          <div className="flex w-full items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                removeLineItem(editingLineItem.tempId);
+                setEditingLineItem(null);
+                showToast(`${editingLineItem.item_name} removed`, 'info');
+              }}
+              className="flex items-center gap-1 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition-colors hover:bg-red-100"
+            >
+              <Trash2 size={13} /> Remove
+            </button>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setEditingLineItem(null)} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100">Cancel</button>
+              <button type="button" onClick={handleSaveEditedItem} className="rounded-xl bg-lime-600 px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-lime-700">Update</button>
+            </div>
+          </div>
+        )}
+      >
+        {editingLineItem && (
+          <div className="space-y-4 text-xs">
+            {(() => {
+              const availUnits = getItemPurchaseUnits(editingLineItem.item_id);
+              if (availUnits.length <= 1) return null;
+              return (
+                <div>
+                  <label className={labelClass}>Purchase unit / packaging</label>
+                  <div className="grid max-h-36 grid-cols-2 gap-1.5 overflow-y-auto">
+                    {availUnits.map(u => {
+                      const isSelected = (editItemUnit || editingLineItem.unit) === u.unit;
+                      const dest = lineDestination({ ...editingLineItem, unit: u.unit, conversion_factor: u.factor, quantity: 1 });
+                      return (
+                        <button
+                          key={u.unit}
+                          type="button"
+                          onClick={() => handleModalUnitChange(u.unit, u.factor)}
+                          className={`rounded-xl border p-2 text-left text-xs transition-all ${
+                            isSelected ? 'border-lime-600 bg-lime-50 font-bold text-lime-900 ring-2 ring-lime-500/20' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-lime-400'
+                          }`}
+                        >
+                          <span className="flex items-center justify-between"><span className="truncate">{u.unit}</span>{isSelected && <Check size={12} className="shrink-0 text-lime-600" />}</span>
+                          <span className="mt-0.5 block text-[10px] font-normal text-slate-400">{u.factor === 1 ? 'Base unit' : `= ${u.factor} ${editingLineItem.base_unit || 'base'}`}</span>
+                          {dest && <span className={`mt-0.5 block text-[10px] font-bold ${dest.packed ? 'text-amber-700' : 'text-emerald-700'}`}>{dest.packed ? 'Adds packs' : 'Adds loose'}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div>
+              <label className={labelClass}>Quantity ({editItemUnit || editingLineItem.unit})</label>
+              <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-1 focus-within:border-lime-500 focus-within:bg-white">
+                <button type="button" aria-label="Kam karein" onClick={() => handleEditQtyChange(Math.max(0.1, (parseFloat(editItemQty) || 1) - 1).toString())} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-200 active:scale-90"><Minus size={14} /></button>
+                <input type="number" step="any" min="0.1" aria-label="Quantity" value={editItemQty} onChange={e => handleEditQtyChange(e.target.value)} className="w-full border-0 bg-transparent text-center font-mono text-base font-bold text-slate-900 outline-none dark:bg-transparent" />
+                <button type="button" aria-label="Zyada karein" onClick={() => handleEditQtyChange(((parseFloat(editItemQty) || 0) + 1).toString())} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-200 active:scale-90"><Plus size={14} /></button>
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {[1, 2, 5, 10, 25, 50].map(val => (
+                  <button key={val} type="button" onClick={() => handleEditQtyChange(val.toString())} className="rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-lime-100 hover:text-lime-800">{val}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>Rate / {editItemUnit || editingLineItem.unit}</label>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">Rs</span>
+                  <input type="number" step="any" min="0" value={editItemRate} onChange={e => handleEditRateChange(e.target.value)} className={`${inputClass} h-10 pl-8 font-mono font-bold`} />
+                </div>
+              </div>
+              <div>
+                <label className={labelClass}>Total</label>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">Rs</span>
+                  <input type="number" step="any" min="0" value={editItemTotal} onChange={e => handleEditTotalChange(e.target.value)} className={`${inputClass} h-10 pl-8 font-mono font-bold`} />
+                </div>
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-400">Total badalne se quantity khud update ho jati hai.</p>
+          </div>
+        )}
+      </Modal>
+
+      {/* --- HISTORY DRAWER --- */}
       <AnimatePresence>
         {isHistoryOpen && (
-          <MotionDiv 
+          <MotionDiv
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] overflow-hidden flex justify-end"
+            className="fixed inset-0 z-[100] flex justify-end overflow-hidden"
           >
             <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs" onClick={() => toggleHistory(false)} />
-            
-            <MotionDiv 
+
+            <MotionDiv
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="relative w-full max-w-md bg-white h-full shadow-2xl z-10 flex flex-col border-l border-slate-200"
+              transition={{ type: 'spring', damping: 28, stiffness: 240 }}
+              role="dialog"
+              aria-modal="true"
+              aria-label={isMilk ? 'Milk intake log' : 'Supplies purchase log'}
+              className="relative z-10 flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
             >
-              {/* Drawer Header */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white flex justify-between items-center border-b border-slate-200 dark:border-slate-700 shrink-0">
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base flex items-center gap-2 text-slate-900 dark:text-white">
-                    <History size={16} className="text-lime-600 dark:text-lime-400" />
-                    {activeTab === PurchaseType.MILK ? 'Milk Intake Log' : 'Supplies Purchase Log'}
-                  </h3>
-                  <div className="mt-2 flex items-center gap-1">
-                    <button type="button" onClick={() => setLogScope('today')} className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${logScope === 'today' ? 'bg-lime-600 text-white' : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'}`}>Today</button>
-                    <button type="button" onClick={() => setLogScope('all')} className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${logScope === 'all' ? 'bg-lime-600 text-white' : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'}`}>All dates</button>
+              <div className="shrink-0 space-y-3 border-b border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-9 w-9 place-items-center rounded-xl bg-lime-100 text-lime-700"><History size={16} /></span>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">{isMilk ? 'Milk intake log' : 'Supplies purchase log'}</h3>
+                      <p className="text-[11px] text-slate-400">Galat entry ho to yahan se supplier ko return karein</p>
+                    </div>
+                  </div>
+                  <button aria-label="Band karein" type="button" onClick={() => toggleHistory(false)} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <PillGroup label="Log range" size="sm" options={[{ value: 'today', label: 'Today' }, { value: 'all', label: 'All dates' }]} value={logScope} onChange={setLogScope} className="w-44 shrink-0" />
+                  <div className="relative min-w-0 flex-1">
+                    <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder={isMilk ? 'Farmer dhoondein…' : 'Vendor ya item…'}
+                      value={historySearch}
+                      onChange={e => setHistorySearch(e.target.value)}
+                      className="h-full w-full rounded-xl border border-slate-200 bg-white pl-8 pr-7 text-xs font-medium outline-none focus:border-lime-500"
+                    />
+                    {historySearch && (
+                      <button aria-label="Hatayen" type="button" onClick={() => setHistorySearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={12} /></button>
+                    )}
                   </div>
                 </div>
-                <button aria-label="Band karein" onClick={() => toggleHistory(false)} className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors">
-                  <X size={16} />
-                </button>
               </div>
 
-              {/* Search filter in drawer */}
-              <div className="p-2.5 bg-slate-50 border-b border-slate-200">
-                <div className="relative">
-                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search logs by supplier..."
-                    value={historySearch}
-                    onChange={e => setHistorySearch(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-medium outline-none focus:border-lime-500"
-                  />
-                  {historySearch && (
-                    <button aria-label="Hatayen" onClick={() => setHistorySearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Drawer Body */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              <div className="flex-1 overflow-y-auto px-3 pb-4">
                 {(() => {
-                  const baseList = (activeTab === PurchaseType.MILK ? milkHistory : productHistory).filter((entry: any) => {
-                    if (logScope !== 'today') return true;
-                    return businessDate(entry.date) === todayKey;
-                  });
+                  const baseList = (isMilk ? milkHistory : productHistory).filter((entry: any) => logScope !== 'today' || businessDate(entry.date) === todayKey);
                   const displayList = baseList.filter((entry: any) => {
                     if (!historySearch.trim()) return true;
                     const supplier = suppliers.find(s => s.id === entry.supplier_id);
@@ -2291,80 +1974,79 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
                   if (displayList.length === 0) {
                     return (
-                      <div className="p-8 text-center text-slate-400 italic text-xs">
-                        No entries matched.
+                      <div className="px-6 py-14 text-center">
+                        <span className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-2xl bg-slate-100 text-slate-400"><Search size={16} /></span>
+                        <p className="text-xs font-semibold text-slate-600">Koi entry nahi mili</p>
+                        <p className="mt-0.5 text-[11px] text-slate-400">{logScope === 'today' ? 'All dates par switch kar ke dekhein.' : 'Search badal kar dekhein.'}</p>
                       </div>
                     );
                   }
 
+                  let lastDay = '';
                   return displayList.map((entry: any) => {
                     const supplier = suppliers.find(s => s.id === entry.supplier_id);
                     const displayName = supplier ? supplier.name : 'Spot Cash Purchase';
                     const isReturned = entry.status === 'Returned';
-                    
-                    return (
-                      <div key={entry.id} className={`p-3 rounded-lg border transition-all text-xs ${
-                        isReturned 
-                          ? 'border-red-200 bg-red-50/40 opacity-80' 
-                          : 'border-slate-200 bg-white hover:border-lime-400'
-                      }`}>
-                        <div className="flex justify-between items-start mb-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-slate-900">{displayName}</span>
-                            {isReturned && (
-                              <span className="text-[9px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold">
-                                Returned
-                              </span>
-                            )}
-                          </div>
-                          <span className={`font-bold font-mono ${isReturned ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
-                            {formatCurrency(entry.total_amount)}
-                          </span>
-                        </div>
+                    const day = businessDate(entry.date);
+                    const showDay = day !== lastDay;
+                    lastDay = day;
+                    const paid = Number(entry.paid_amount ?? entry.details?.paid_amount ?? 0);
+                    const due = Math.max(0, (Number(entry.total_amount) || 0) - paid);
 
-                        <div className="flex justify-between items-end text-slate-500">
-                          <div>
-                            <p className="font-mono text-slate-400 text-[10px]">{new Date(entry.date).toLocaleDateString()}</p>
-                            {activeTab === PurchaseType.MILK ? (
-                              <>
-                                <p className={`font-medium ${isReturned ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                                  {formatQty(entry.quantity)}L • {entry.milk_type} • {entry.shift}
-                                </p>
-                                <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                                  {entry.paid_amount > 0 ? (
-                                    <span className="text-xs bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-bold border border-emerald-200">
-                                      Paid: {formatCurrency(entry.paid_amount)} ({entry.payment_mode || 'Cash'})
-                                    </span>
-                                  ) : (
-                                    <span className="text-[9px] bg-rose-50 text-rose-700 px-1.5 py-0.2 rounded font-semibold border border-rose-100">
-                                      On Khata (Due)
+                    return (
+                      <React.Fragment key={entry.id}>
+                        {showDay && (
+                          <p className="sticky top-0 z-10 -mx-3 bg-white/95 px-4 pb-1.5 pt-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 backdrop-blur">
+                            {day === todayKey ? 'Today' : new Date(`${day}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                        )}
+                        <div className={`mb-2 rounded-xl border p-3 text-xs transition-colors ${isReturned ? 'border-red-200 bg-red-50/40 opacity-75' : 'border-slate-200 bg-white hover:border-lime-300'}`}>
+                          <div className="flex items-start gap-2.5">
+                            <Avatar name={displayName} owed={!isReturned && due > 0.5} size="sm" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  <span className="truncate font-bold text-slate-900">{displayName}</span>
+                                  {isReturned && <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700">Returned</span>}
+                                </span>
+                                <span className={`shrink-0 font-mono font-bold ${isReturned ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{formatCurrency(entry.total_amount)}</span>
+                              </div>
+                              <p className={`mt-0.5 flex items-center gap-1.5 ${isReturned ? 'text-slate-400 line-through' : 'text-slate-600'}`}>
+                                {isMilk ? (
+                                  <>
+                                    <span className={`h-1.5 w-1.5 rounded-full ${varietyDot(entry.milk_type)}`} />
+                                    {formatQty(entry.quantity)} L · {entry.milk_type} · {entry.shift}
+                                  </>
+                                ) : (
+                                  <>{entry.item_name} · {formatQty(entry.quantity)} {entry.unit}</>
+                                )}
+                              </p>
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {paid > 0 && (
+                                    <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                                      Paid {formatCurrency(paid)}{entry.payment_mode || entry.details?.payment_mode ? ` · ${entry.payment_mode || entry.details?.payment_mode}` : ''}
                                     </span>
                                   )}
-                                  {entry.due_amount > 0 && entry.paid_amount > 0 && (
-                                    <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.2 rounded font-semibold border border-amber-200">
-                                      Due: {formatCurrency(entry.due_amount)}
-                                    </span>
+                                  {due > 0.5 && (
+                                    <span className="rounded-md border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">Khata {formatCurrency(due)}</span>
                                   )}
                                 </div>
-                              </>
-                            ) : (
-                              <p className={`font-medium ${isReturned ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
-                                {entry.item_name} ({formatQty(entry.quantity)} {entry.unit})
-                              </p>
-                            )}
+                                {!isReturned && (
+                                  <button
+                                    type="button"
+                                    onClick={() => isMilk ? handleOpenReturnMilk(entry) : handleOpenReturnMaterial(entry)}
+                                    className="flex shrink-0 items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700 transition-colors hover:bg-amber-100"
+                                    title="Return to supplier"
+                                  >
+                                    <RotateCcw size={11} /> Return
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           </div>
-
-                          {!isReturned && (
-                            <button 
-                              onClick={() => activeTab === PurchaseType.MILK ? handleOpenReturnMilk(entry) : handleOpenReturnMaterial(entry)}
-                              className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded text-[10px] font-semibold flex items-center gap-1 transition-all"
-                              title="Return to supplier"
-                            >
-                              <RotateCcw size={11}/> Return
-                            </button>
-                          )}
                         </div>
-                      </div>
+                      </React.Fragment>
                     );
                   });
                 })()}
@@ -2374,163 +2056,99 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
         )}
       </AnimatePresence>
 
-      {/* 4. RETURN TO SUPPLIER MODAL */}
-      <AnimatePresence>
+      {/* --- RETURN TO SUPPLIER --- */}
+      <Modal
+        open={Boolean(returnModalEntry)}
+        onClose={() => setReturnModalEntry(null)}
+        dismissible={!isProcessingReturn}
+        size="md"
+        icon={<span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-100 text-amber-700"><RotateCcw size={18} /></span>}
+        title="Return to supplier"
+        description={returnModalEntry ? (suppliers.find(s => s.id === returnModalEntry.supplier_id)?.name || 'Spot vendor') : undefined}
+      >
         {returnModalEntry && (
-          <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center z-[100] p-4">
-            <MotionDiv
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md overflow-hidden"
-            >
-              {/* Header */}
-              <div className="px-5 py-3.5 border-b bg-slate-50 flex justify-between items-center">
-                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                  <RotateCcw size={15} className="text-amber-600" /> Return to Supplier
-                </h3>
-                <button aria-label="Band karein" onClick={() => setReturnModalEntry(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
-                  <X size={16} />
-                </button>
+          <form onSubmit={handleConfirmReturnPurchase} className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs">
+              <span className="text-slate-500">Original entry</span>
+              <span className="font-mono font-bold text-slate-900">
+                {returnModalType === 'milk'
+                  ? `${formatQty(returnModalEntry.quantity)} L · ${returnModalEntry.milk_type}`
+                  : `${formatQty(returnModalEntry.quantity)} ${returnModalEntry.unit} · ${returnModalEntry.item_name}`}
+              </span>
+            </div>
+
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className={`${labelClass} mb-0`}>Return quantity *</label>
+                <span className="text-[11px] font-semibold text-slate-500">Max <b className="font-mono text-lime-700">{formatQty(maxReturnQty)}</b></span>
               </div>
+              <div className="flex items-center gap-1.5">
+                <input type="number" min="0.1" max={maxReturnQty} step="any" required className={`${inputClass} h-10 font-mono font-bold`} value={returnQty} onChange={e => setReturnQty(e.target.value)} />
+                <button type="button" onClick={() => setReturnQty(maxReturnQty)} className="h-10 whitespace-nowrap rounded-xl bg-slate-100 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-200">Full</button>
+              </div>
+            </div>
 
-              {/* Form */}
-              <form onSubmit={handleConfirmReturnPurchase} className="p-4 sm:p-5 space-y-3">
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Supplier:</span>
-                    <span className="font-semibold text-slate-900">
-                      {suppliers.find(s => s.id === returnModalEntry.supplier_id)?.name || 'Spot Vendor'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500">Original Qty:</span>
-                    <span className="font-semibold text-slate-900">
-                      {returnModalType === 'milk' 
-                        ? `${formatQty(returnModalEntry.quantity)} L (${returnModalEntry.milk_type})` 
-                        : `${formatQty(returnModalEntry.quantity)} ${returnModalEntry.unit}`}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Return Quantity */}
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className={labelClass}>Return Quantity *</label>
-                    <span className="text-[11px] font-semibold text-slate-500">
-                      Max: <strong className="font-mono text-lime-700">{formatQty(maxReturnQty)}</strong>
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min="0.1"
-                      max={maxReturnQty}
-                      step="any"
-                      required
-                      className={`${inputClass} font-bold font-mono`}
-                      value={returnQty}
-                      onChange={e => setReturnQty(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setReturnQty(maxReturnQty)}
-                      className="h-9 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg whitespace-nowrap"
-                    >
-                      Full
-                    </button>
-                  </div>
-                </div>
-
-                {/* Reason */}
-                <div>
-                  <label className={labelClass}>Reason *</label>
-                  <select
-                    className={inputClass}
-                    value={returnReason}
-                    onChange={e => setReturnReason(e.target.value)}
-                  >
-                    {returnModalType === 'milk' ? (
-                      <>
-                        <option value="Substandard Quality / Curdled">Substandard Quality / Curdled</option>
-                        <option value="Data Entry Error / Cancel Intake">Data Entry Error / Cancel</option>
-                        <option value="Other">Other Reason...</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="Defective / Damaged Material">Defective / Damaged</option>
-                        <option value="Quality Substandard">Quality Substandard</option>
-                        <option value="Data Entry Error">Data Entry Error</option>
-                        <option value="Other">Other Reason...</option>
-                      </>
-                    )}
-                  </select>
-                </div>
-
-                {returnReason === 'Other' && (
-                  <div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Specify reason..."
-                      className={inputClass}
-                      value={customReturnReason}
-                      onChange={e => setCustomReturnReason(e.target.value)}
-                    />
-                  </div>
+            <div>
+              <label className={labelClass}>Reason *</label>
+              <select className={`${inputClass} h-10 py-0`} value={returnReason} onChange={e => setReturnReason(e.target.value)}>
+                {returnModalType === 'milk' ? (
+                  <>
+                    <option value="Substandard Quality / Curdled">Substandard Quality / Curdled</option>
+                    <option value="Data Entry Error / Cancel Intake">Data Entry Error / Cancel</option>
+                    <option value="Other">Other Reason...</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="Defective / Damaged Material">Defective / Damaged</option>
+                    <option value="Quality Substandard">Quality Substandard</option>
+                    <option value="Data Entry Error">Data Entry Error</option>
+                    <option value="Other">Other Reason...</option>
+                  </>
                 )}
+              </select>
+              {returnReason === 'Other' && (
+                <input type="text" required placeholder="Wajah likhein…" className={`${inputClass} mt-2`} value={customReturnReason} onChange={e => setCustomReturnReason(e.target.value)} />
+              )}
+            </div>
 
-                {/* Refund: cash back vs khata. Preview shows exactly where the money goes. */}
-                {(() => {
-                  const entryTotal = Number(returnModalEntry.total_amount || 0) || (Number(returnModalEntry.quantity || 0) * Number(returnModalEntry.rate || 0));
-                  const entryPaid = Number(returnModalEntry.paid_amount ?? returnModalEntry.details?.paid_amount ?? 0);
-                  const hasAccount = Boolean(returnModalEntry.details?.account_id || returnModalEntry.account_id);
-                  const returnValue = roundCurrency((parseFloat(String(returnQty)) || 0) * Number(returnModalEntry.rate || 0));
-                  const cashPart = refundAs === 'cash' && hasAccount && entryTotal > 0 ? roundCurrency(Math.min(entryPaid, returnValue * (entryPaid / entryTotal))) : 0;
-                  const khataPart = roundCurrency(Math.max(0, returnValue - cashPart));
-                  return (
-                    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs dark:border-slate-700 dark:bg-slate-800/50">
-                      {entryPaid > 0 && hasAccount && (
-                        <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Refund kaise hoga">
-                          <button type="button" role="radio" aria-checked={refundAs === 'cash'} onClick={() => setRefundAs('cash')} className={`rounded-md border px-2 py-1.5 font-semibold ${refundAs === 'cash' ? 'border-red-500 bg-white text-red-700 dark:bg-slate-900' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Supplier ne cash wapas diya</button>
-                          <button type="button" role="radio" aria-checked={refundAs === 'khata'} onClick={() => setRefundAs('khata')} className={`rounded-md border px-2 py-1.5 font-semibold ${refundAs === 'khata' ? 'border-red-500 bg-white text-red-700 dark:bg-slate-900' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}>Sirf khaata kam karein</button>
-                        </div>
-                      )}
-                      <p className="text-slate-600 dark:text-slate-300">Return value: <b className="font-mono">{formatCurrency(returnValue)}</b></p>
-                      {cashPart > 0 && <p className="text-emerald-700 dark:text-emerald-400">{formatCurrency(cashPart)} account mein wapas aayenge</p>}
-                      {khataPart > 0 && <p className="text-amber-700 dark:text-amber-400">{formatCurrency(khataPart)} supplier ke khaate se kam honge</p>}
-                    </div>
-                  );
-                })()}
-
-                {/* Buttons */}
-                <div className="pt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setReturnModalEntry(null)}
-                    className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isProcessingReturn}
-                    className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-xs shadow-sm flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    {isProcessingReturn ? (
-                      <>
-                        <Loader2 size={14} className="animate-spin" /> Processing...
-                      </>
-                    ) : (
-                      'Confirm Return'
-                    )}
-                  </button>
+            {/* Refund: cash back vs khata. Preview shows exactly where the money goes. */}
+            {(() => {
+              const entryTotal = Number(returnModalEntry.total_amount || 0) || (Number(returnModalEntry.quantity || 0) * Number(returnModalEntry.rate || 0));
+              const entryPaid = Number(returnModalEntry.paid_amount ?? returnModalEntry.details?.paid_amount ?? 0);
+              const hasAccount = Boolean(returnModalEntry.details?.account_id || returnModalEntry.account_id);
+              const returnValue = roundCurrency((parseFloat(String(returnQty)) || 0) * Number(returnModalEntry.rate || 0));
+              const cashPart = refundAs === 'cash' && hasAccount && entryTotal > 0 ? roundCurrency(Math.min(entryPaid, returnValue * (entryPaid / entryTotal))) : 0;
+              const khataPart = roundCurrency(Math.max(0, returnValue - cashPart));
+              return (
+                <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                  {entryPaid > 0 && hasAccount && (
+                    <PillGroup
+                      label="Refund kaise hoga"
+                      size="sm"
+                      options={[{ value: 'cash', label: 'Cash wapas mila' }, { value: 'khata', label: 'Sirf khata kam' }]}
+                      value={refundAs}
+                      onChange={setRefundAs}
+                    />
+                  )}
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-slate-500">Return value</span>
+                    <b className="font-mono text-base text-slate-900">{formatCurrency(returnValue)}</b>
+                  </div>
+                  {cashPart > 0 && <p className="flex items-center gap-1.5 text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />{formatCurrency(cashPart)} account mein wapas aayenge</p>}
+                  {khataPart > 0 && <p className="flex items-center gap-1.5 text-amber-700"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" />{formatCurrency(khataPart)} supplier ke khaate se kam honge</p>}
                 </div>
-              </form>
-            </MotionDiv>
-          </div>
+              );
+            })()}
+
+            <div className="flex gap-2 pt-1">
+              <button type="button" disabled={isProcessingReturn} onClick={() => setReturnModalEntry(null)} className="h-10 flex-1 rounded-xl bg-slate-100 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50">Cancel</button>
+              <button type="submit" disabled={isProcessingReturn} className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-red-600 text-xs font-bold text-white shadow-sm hover:bg-red-700 disabled:opacity-60">
+                {isProcessingReturn ? (<><Loader2 size={14} className="animate-spin" /> Processing…</>) : (<><RotateCcw size={13} /> Confirm return</>)}
+              </button>
+            </div>
+          </form>
         )}
-      </AnimatePresence>
+      </Modal>
 
     </div>
   );
