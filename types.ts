@@ -90,43 +90,42 @@ export enum AttendanceStatus {
 
 export type AccountType = 'Cash' | 'Bank' | 'Wallet' | 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense';
 
+export interface SecuritySettings {
+  /** Books are closed on and before this date (YYYY-MM-DD): no new, edited or deleted entries. */
+  lockDate?: string;
+  /** Lock the terminal after this many idle minutes; 0 or empty = never. */
+  autoLockMinutes?: number;
+  /** Highest bill discount (% of the bill) a cashier may give without a manager PIN; empty = no limit. */
+  maxDiscountPercent?: number;
+  /** Every sales return needs a manager PIN, even from staff who may process returns. */
+  returnNeedsApproval?: boolean;
+}
+
 export interface SystemSettings {
   general: {
     companyName: string;
     address: string;
     phone: string;
     email: string;
+    /** NTN / sales-tax registration, printed on receipts when set. */
     taxId: string;
-    fiscalYearStart: string;
-    currencySymbol: string;
-    showOnboarding: boolean;
     shifts?: string[];
   };
   financial: {
-    enabledPaymentModes: string[];
-    visibleAccountIds: string[];
     defaultCashAccountId: string;
     defaultDigitalAccountId: string;
-    defaultSalesAccount: string;
-    defaultPurchaseAccount: string;
-    defaultInventoryAccount: string;
-    defaultCostOfGoodsSoldAccount: string;
   };
   sales: {
     invoicePrefix: string;
-    defaultTaxRate: number;
-    enableTax: boolean;
-    termsAndConditions: string;
     invoiceFooter: string;
     showPosSearch?: boolean;
     showPosCategories?: boolean;
   };
   inventory: {
     allowNegativeStock: boolean;
-    lowStockThreshold: number;
-    enableBatchTracking: boolean;
     customUnits?: UnitDefinition[];
   };
+  security?: SecuritySettings;
   expenses?: {
     inactiveCategories?: string[];
     inactiveSubcategories?: string[];
@@ -570,7 +569,7 @@ export interface CashVariance {
   shift_id?: string;
   handover_id?: string;
   remittance_id?: string;
-  variance_type: 'Opening Handover' | 'Shift Closing' | 'Head Remittance';
+  variance_type: 'Opening Handover' | 'Opening Mismatch' | 'Shift Closing' | 'Head Remittance';
   expected_amount: number;
   counted_amount: number;
   variance: number;

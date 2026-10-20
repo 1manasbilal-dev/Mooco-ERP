@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
     "build:zip": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node scripts/package-build.mjs",
+    "build:hostinger": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build && node scripts/package-hostinger.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

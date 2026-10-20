@@ -39,9 +39,16 @@ const BankCash: React.FC = () => {
     addAccount, updateAccount, deleteAccount,
     recordBankTransaction, transferFunds,
     manualAccounts, updateManualAccount,
-    getDeleteAssessment, safeDeleteAccount, reactivateEntity
+    getDeleteAssessment, safeDeleteAccount, reactivateEntity,
+    canPerform
   } = useDairy();
   const { showToast } = useToast();
+  const canManage = canPerform('bank_cash', 'create');
+  const denyIfNoAccess = () => {
+    if (canManage) return false;
+    showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+    return true;
+  };
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -561,6 +568,7 @@ const BankCash: React.FC = () => {
 
   // Handlers
   const handleOpenTransaction = (type: 'Deposit' | 'Withdrawal') => {
+    if (denyIfNoAccess()) return;
     setTransactionType(type);
     
     // Auto-select the most relevant default account:
@@ -595,6 +603,7 @@ const BankCash: React.FC = () => {
 
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (denyIfNoAccess()) return;
     if (!transactionData.accountId || !transactionData.amount || isSubmitting) return;
 
     const amount = parseFloat(transactionData.amount);
@@ -651,6 +660,7 @@ const BankCash: React.FC = () => {
 
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (denyIfNoAccess()) return;
     if (!transferData.fromId || !transferData.toId || !transferData.amount || isSubmittingTransfer) return;
     if (transferData.fromId === transferData.toId) { showToast("Jis account se aur jis mein bhej rahe hain, dono alag hone chahiyen", "error"); return; }
     
@@ -691,6 +701,7 @@ const BankCash: React.FC = () => {
 
   const handleAddAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (denyIfNoAccess()) return;
     if (!accountData.name?.trim() || isSubmittingAccount) return;
     
     setIsSubmittingAccount(true);
@@ -708,6 +719,7 @@ const BankCash: React.FC = () => {
   };
 
   const handleOpenEditAccount = (acc: FinancialAccount) => {
+    if (denyIfNoAccess()) return;
     setEditingAccount(acc);
     setEditAccountFormData({
       name: acc.name,
@@ -722,7 +734,8 @@ const BankCash: React.FC = () => {
 
   const handleEditAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingAccount || !editAccountFormData.name?.trim() || isSubmittingAccount) return;
+    if (denyIfNoAccess()) return;
+    if (!editingAccount ||!editAccountFormData.name?.trim() || isSubmittingAccount) return;
 
     setIsSubmittingAccount(true);
     try {
@@ -742,6 +755,7 @@ const BankCash: React.FC = () => {
   };
 
   const handleDeleteAccount = async (acc: FinancialAccount) => {
+    if (denyIfNoAccess()) return;
     const assessment = getDeleteAssessment('account', acc.id);
     
     if (assessment.balance !== 0) {
@@ -822,14 +836,14 @@ const BankCash: React.FC = () => {
                   <h3 className="font-black text-sm text-slate-900">My Wallets</h3>
                   <p className="text-[10px] text-slate-400 font-medium">Select account to view entries</p>
                </div>
-               <button 
+               {canManage && <button
                  onClick={() => setIsAddAccountOpen(true)}
                  className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs transition-all shrink-0 cursor-pointer active:scale-95"
                  title="Add New Bank / Wallet"
                >
                   <Plus size={14} />
                   <span>Add</span>
-               </button>
+               </button>}
             </div>
 
             {/* Search Input */}
@@ -1031,7 +1045,7 @@ const BankCash: React.FC = () => {
                </div>
 
                 {/* Edit / Delete / Reactivate Buttons for Single Account */}
-                {selectedAccountId !== 'all' && selectedAccount && (
+                {canManage && selectedAccountId !== 'all' && selectedAccount && (
                    <div className="flex items-center gap-1 shrink-0">
                       {selectedAccount.isActive === false && (
                         <button
@@ -1109,7 +1123,7 @@ const BankCash: React.FC = () => {
             )}
 
             {/* Quick Action Buttons */}
-            <div className="grid grid-cols-3 gap-2 pt-1">
+            {canManage && <div className="grid grid-cols-3 gap-2 pt-1">
                <button 
                   onClick={() => setIsTransferOpen(true)}
                   className="py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
@@ -1131,7 +1145,7 @@ const BankCash: React.FC = () => {
                   <ArrowUpRight size={14} /> 
                   <span>Withdraw</span>
                </button>
-            </div>
+            </div>}
          </div>
 
          {/* Bottom: Transaction Activity Feed & Ledger */}

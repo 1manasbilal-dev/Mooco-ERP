@@ -12,6 +12,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { isDateOnlyOrMidnight, formatCurrency, formatMoneyRaw } from '../lib/formatters';
 import { saleLineStock } from '../lib/sellUnits';
+import { useManagerApproval } from '../components/ui/ManagerApproval';
 
 const MotionDiv = motion.div as any;
 
@@ -219,8 +220,9 @@ const matchSaleWithToken = (
 };
 
 const SalesHistory: React.FC = () => {
-  const { sales, customers, accounts, settings, items, processSalesReturn, updateSalePaymentMode, canPerform, activeShiftSession, cashDrawers } = useDairy();
+  const { sales, customers, accounts, settings, items, processSalesReturn, updateSalePaymentMode, canPerform, activeShiftSession, cashDrawers, currentUser } = useDairy();
   const { showToast } = useToast();
+  const { requestApproval, approvalDialog } = useManagerApproval();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -663,6 +665,18 @@ const SalesHistory: React.FC = () => {
       ? (customReturnReason.trim() || 'Other return') 
       : returnReason;
 
+    // Staff without the return right, or every return when the owner asks for it, needs a manager PIN.
+    const isApprover = currentUser?.role_id === 'role_super_admin' || canPerform('approvals', 'return');
+    if (!isApprover && (!canReturn || settings.security?.returnNeedsApproval)) {
+      const approvedBy = await requestApproval({
+        permission: 'approvals:return',
+        title: 'Return ke liye manager approval',
+        reason: `Bill ${returnModalSale.bill_number || ''} — ${finalReason}`,
+      });
+      if (!approvedBy) return;
+      showToast(`Return ${approvedBy} ne approve kiya.`, 'success');
+    }
+
     setIsProcessingReturn(true);
     const success = await processSalesReturn(
       returnModalSale.id, 
@@ -695,6 +709,7 @@ const SalesHistory: React.FC = () => {
 
   return (
     <div className="space-y-3 sm:space-y-4 pb-20 max-w-7xl mx-auto">
+      {approvalDialog}
       
       {/* 1. Micro KPI Stats Overview - Exactly 1 Single Row on Mobile */}
       <div className="grid grid-cols-4 gap-1.5 sm:gap-3">
@@ -1134,7 +1149,7 @@ const SalesHistory: React.FC = () => {
                         </button>
                       )}
 
-                      {canReturn && !isReturned && (
+                      {!isReturned && (
                         <button
                           onClick={() => openReturnModal(sale)}
                           className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
@@ -1380,7 +1395,7 @@ const SalesHistory: React.FC = () => {
                           </button>
                         )}
 
-                        {canReturn && !isReturned && (
+                        {!isReturned && (
                           <button
                             onClick={() => openReturnModal(sale)}
                             className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
@@ -2047,6 +2062,7 @@ const SalesHistory: React.FC = () => {
                 <h2 className="font-black text-sm tracking-tight text-slate-900">{settings.general?.companyName || 'MOOCO DAIRY'}</h2>
                 <p className="text-[10px] text-slate-500">{settings.general?.address || 'Fresh & Pure Farm Dairy'}</p>
                 <p className="text-[10px] text-slate-500">Tel: {settings.general?.phone || '0300-1234567'}</p>
+                {settings.general?.taxId && <p className="text-[10px] text-slate-500">NTN: {settings.general.taxId}</p>}
                 {selectedReceiptSale.status === 'Returned' && (
                   <div className="inline-block mt-1 px-2 py-0.5 bg-red-100 text-red-700 font-bold rounded text-[9px] uppercase">
                     *** RETURNED ***

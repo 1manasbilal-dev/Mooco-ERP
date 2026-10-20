@@ -78,7 +78,7 @@ const CustomerOrders: React.FC = () => {
   const busyRef = useRef(false);
   const loadCounter = useRef(0);
   const today = localOrderDate();
-  const money = (value: number) => formatCurrency(value, `${settings.general.currencySymbol || 'Rs'} `);
+  const money = (value: number) => formatCurrency(value, 'Rs ');
   const canCreate = canPerform('customer_orders', 'create');
   const canEdit = canPerform('customer_orders', 'edit');
   const canCancel = canPerform('customer_orders', 'cancel');
@@ -182,7 +182,7 @@ const CustomerOrders: React.FC = () => {
         }
       };
     });
-  }, [catalog, inventory, customers, draft.customer_id, settings.general.currencySymbol]);
+  }, [catalog, inventory, customers, draft.customer_id]);
   const amounts = orderAmounts(draft.items || [], Number(draft.discount) || 0, Number(draft.advance_paid) || 0);
   const customerRows = customerFilter ? orders.filter(order => order.customer_id === customerFilter) : orders;
   const openOrders = customerRows.filter(orderIsOpen);
@@ -555,7 +555,7 @@ const CustomerOrders: React.FC = () => {
             </div>
             <div className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-2 dark:border-slate-800">
               <label htmlFor="order-discount-input" className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                Discount ({settings.general.currencySymbol || 'Rs'})
+                Discount (Rs)
               </label>
               <input id="order-discount-input" type="number" min="0" max={amounts.subtotal} step="0.01" className="w-28 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-right font-mono text-sm font-bold text-slate-900 shadow-sm outline-none transition-all focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={draft.discount} onChange={e => setDraft(previous => ({ ...previous, discount: e.target.value === '' ? 0 : Number(e.target.value) }))} />
             </div>

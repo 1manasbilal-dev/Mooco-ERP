@@ -798,33 +798,6 @@ select option {
    Mooco Enterprise Print & PDF Engine Styles
    ========================================================================== */
 @media print {
-  body:has(.stock-profit-report) #root,
-  body:has(.stock-profit-report) .mooco-app,
-  body:has(.stock-profit-report) [data-sidebar-content],
-  body:has(.stock-profit-report) main,
-  .reports-workspace[data-report="stock_profit"],
-  .reports-workspace[data-report="stock_profit"] main,
-  .reports-workspace[data-report="stock_profit"] main > div:last-child {
-    display: block !important;
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: none !important;
-    overflow: visible !important;
-  }
-  .stock-profit-report,
-  .stock-profit-report .mooco-card,
-  .stock-profit-report .mooco-panel {
-    background: white !important;
-    color: #0f172a !important;
-    box-shadow: none !important;
-    border-color: #cbd5e1 !important;
-  }
-  .stock-profit-report * { color: #0f172a !important; }
-  .stock-profit-report table { min-width: 0 !important; break-inside: auto !important; page-break-inside: auto !important; }
-  .stock-profit-report .overflow-x-auto { overflow: visible !important; }
-  .stock-profit-report thead { display: table-header-group; }
-  .stock-profit-report th, .stock-profit-report td { font-size: 8px !important; padding: 5px !important; }
-  .stock-profit-report svg { display: none; }
   @page {
     size: A4 portrait;
     margin: 10mm 12mm;
@@ -1722,7 +1695,7 @@ select option {
 .mooco-app[data-workspace="inventory"], .mooco-app[data-workspace="bank-cash"],
 .mooco-app[data-workspace="cash-control"] { --workspace-accent:var(--glass-cyan); }
 .mooco-app[data-workspace="production"], .mooco-app[data-workspace="items"],
-.mooco-app[data-workspace="reports"], .mooco-app[data-workspace="accounts"] { --workspace-accent:var(--glass-violet); }
+.mooco-app[data-workspace="accounts"] { --workspace-accent:var(--glass-violet); }
 .mooco-app[data-workspace="expenses"] { --workspace-accent:var(--glass-rose); }
 .workspace-pane { overscroll-behavior-y:contain; scrollbar-gutter:stable; }
 .workspace-page { min-width:0; color:var(--text-primary); }

@@ -31,20 +31,24 @@ import {
   BusinessDay, CashDrawer, CashHandover, CashHandoverStatus, CashRemittance, CashVariance, ShiftCashEvent
 } from '../types';
 
+const isTerminalLockedAtBoot = (): boolean => {
+  try { return localStorage.getItem('mooco_terminal_locked') === '1'; } catch { return false; }
+};
+
 export const DEFAULT_SYSTEM_ROLES: AppRole[] = [
   {
     id: 'role_super_admin',
     name: 'Super Admin / Owner',
-    description: 'Full unrestricted access to all modules, settings, reports, and user administration.',
+    description: 'Full unrestricted access to all modules, settings, and user administration.',
     is_system: true,
     permissions: ['dashboard', 'purchase', 'allocation', 'pos', 'sales_history', 'customer_orders', 'retail_stock', 'cash_control', 'production', 'items', 'inventory', 'customers', 'suppliers', 'expenses', 'bank_cash', 'accounts', 'reports', 'settings', 'user_management']
   },
   {
     id: 'role_manager',
     name: 'Manager / Accountant',
-    description: 'Access to financial management, bills, khata ledgers, and reports.',
+    description: 'Access to financial management, bills, and khata ledgers.',
     is_system: true,
-    permissions: ['dashboard', 'purchase', 'allocation', 'pos', 'sales_history', 'customer_orders', 'retail_stock', 'cash_control', 'production', 'items', 'inventory', 'customers', 'suppliers', 'expenses', 'bank_cash', 'accounts', 'reports']
+    permissions: ['dashboard', 'purchase', 'allocation', 'pos', 'sales_history', 'customer_orders', 'retail_stock', 'cash_control', 'production', 'items', 'inventory', 'customers', 'suppliers', 'expenses', 'bank_cash', 'accounts', 'reports', 'approvals']
   },
   {
     id: 'role_cashier',
@@ -184,6 +188,9 @@ interface DairyContextType {
   dataLoadError: string | null;
   retryLoading: () => Promise<void>;
   setIsUserSwitcherOpen: (open: boolean) => void;
+  /** Idle auto-lock: the login screen stays up until someone enters a PIN. */
+  isTerminalLocked: boolean;
+  lockTerminalNow: () => void;
   loginWithCredentials: (username: string, pin: string) => Promise<{ success: boolean; message?: string; user?: AppUser }>;
   switchUserWithPin: (pin: string) => Promise<{ success: boolean; message?: string; user?: AppUser }>;
   switchUserByIdAndPin: (userId: string, pin: string) => Promise<{ success: boolean; message?: string; user?: AppUser }>;
@@ -252,7 +259,9 @@ interface DairyContextType {
     all_bills_list?: Array<{ id: string; invoice_no: string; customer_name?: string; total: number; payment_mode: string; status: string; time?: string }>;
   };
   startCashierShift: (data: { drawerId: string; openingCounted: number; denominations?: Record<string | number, number>; handoverId?: string }) => Promise<boolean>;
-  closeCashierShift: (data: { countedCash: number; leaveInDrawer: number; remitToHead: number; denominations?: Record<string | number, number>; differenceReason?: string; notes?: string }) => Promise<boolean>;
+  /** receiveIntoAccountId: a head closing the shift receives the remitted cash straight into that account (no Head Inbox step). */
+  /** approveDifferenceNow: the Owner closing their own shift approves its cash difference in the same step. */
+  closeCashierShift: (data: { countedCash: number; leaveInDrawer: number; remitToHead: number; denominations?: Record<string | number, number>; differenceReason?: string; notes?: string; receiveIntoAccountId?: string; approveDifferenceNow?: boolean }) => Promise<boolean>;
   acceptHeadRemittance: (remittanceId: string, countedAmount: number, denominations?: Record<string | number, number>, destinationAccountId?: string, notes?: string) => Promise<boolean>;
   resolveCashVariance: (varianceId: string, status: 'Approved' | 'Adjusted' | 'Rejected', notes: string) => Promise<boolean>;
   resolveCashHandover: (handoverId: string, action: 'Accept' | 'Resolve' | 'Cancel', notes?: string) => Promise<boolean>;
@@ -345,9 +354,15 @@ interface DairyContextType {
   updateManualAccount: (id: string, data: any) => Promise<boolean>;
   addJournalEntry: (entry: any) => Promise<boolean>;
 
-  updateSettings: (newSettings: Partial<SystemSettings>) => Promise<void>;
+  updateSettings: (newSettings: Partial<SystemSettings>) => Promise<boolean>;
   resetSystem: () => Promise<void>;
-  clearData: (module: string) => Promise<void>;
+  clearData: (module: string | string[]) => Promise<void>;
+  /** True when the date is on or before the books lock date. */
+  isPeriodLocked: (dateStr: string) => boolean;
+  /** Asks the server to check another operator's PIN for a manager-only action. */
+  requestManagerApproval: (approverId: string, pin: string, permission: string) => Promise<{ approved: boolean; approverName?: string; message?: string }>;
+  /** Every record this terminal holds, as one JSON-ready object (owner backup). */
+  buildBackup: () => Record<string, unknown>;
   addCategory: (name: string) => void;
   removeCategory: (name: string) => void;
   
@@ -398,6 +413,26 @@ const parsePostgresArray = (val: any): string[] => {
   return [];
 };
 
+const OPEN_SHIFT_STATUSES = ['Pending Acceptance', 'Active', 'Closing'];
+
+// The shift a user sells on: their own open shift (today's first, then an older one that the
+// overnight rollover will carry forward). Only the Owner may sell on another cashier's shift
+// that is open today, so one cashier's bills never land in a colleague's drawer.
+const findUsableShift = (
+  sessions: ShiftSession[],
+  user: { id: string; role_id?: string } | null | undefined,
+  businessDate: string
+): ShiftSession | null => {
+  if (!user) return null;
+  const open = sessions.filter(shift => Boolean(shift.drawer_id) && OPEN_SHIFT_STATUSES.includes(shift.status));
+  const isToday = (shift: ShiftSession) => !shift.business_date || shift.business_date === businessDate;
+  const own = open.filter(shift => shift.user_id === user.id);
+  return own.find(isToday)
+    || own[0]
+    || (user.role_id === 'role_super_admin' ? open.find(isToday) : undefined)
+    || null;
+};
+
 export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { showToast } = useToast(); 
 
@@ -419,11 +454,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [manualAccounts, setManualAccounts] = useState<ManualAccount[]>([]);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [settings, setSettings] = useState<SystemSettings>({
-    general: { companyName: 'My Dairy', address: '', phone: '', email: '', taxId: '', fiscalYearStart: '01-01', currencySymbol: 'Rs', showOnboarding: false, shifts: ['Morning', 'Evening'] },
-    financial: { enabledPaymentModes: ['Cash'], visibleAccountIds: [], defaultCashAccountId: '', defaultDigitalAccountId: '', defaultSalesAccount: '', defaultPurchaseAccount: '', defaultInventoryAccount: '', defaultCostOfGoodsSoldAccount: '' },
-    sales: { invoicePrefix: 'INV-', defaultTaxRate: 0, enableTax: false, termsAndConditions: '', invoiceFooter: '' },
-    inventory: { allowNegativeStock: true, lowStockThreshold: 10, enableBatchTracking: false, customUnits: [] },
-    expenses: { inactiveCategories: [], inactiveSubcategories: [] }
+    general: { companyName: 'My Dairy', address: '', phone: '', email: '', taxId: '', shifts: ['Morning', 'Evening'] },
+    financial: { defaultCashAccountId: '', defaultDigitalAccountId: '' },
+    sales: { invoicePrefix: 'INV-', invoiceFooter: '' },
+    inventory: { allowNegativeStock: true, customUnits: [] },
+    expenses: { inactiveCategories: [], inactiveSubcategories: [] },
+    security: {}
   });
   const [categories, setCategories] = useState<string[]>(['Milk', 'Yogurt', 'Ghee', 'Packaging']);
   const [unitGroups, setUnitGroups] = useState<UnitGroup[]>([]);
@@ -497,9 +533,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (typeof window === 'undefined') return true;
     return !localStorage.getItem('mooco_active_user_data');
   });
+  const [isTerminalLocked, setIsTerminalLocked] = useState<boolean>(() => {
+    try { return typeof window !== 'undefined' && localStorage.getItem('mooco_terminal_locked') === '1'; } catch { return false; }
+  });
   const [isUserSwitcherOpen, setIsUserSwitcherOpen] = useState<boolean>(
-    () => typeof window !== 'undefined' && !localStorage.getItem('mooco_active_user_id')
+    () => typeof window !== 'undefined' && (!localStorage.getItem('mooco_active_user_id') || isTerminalLockedAtBoot())
   );
+  const setTerminalLocked = (locked: boolean) => {
+    setIsTerminalLocked(locked);
+    try {
+      if (locked) localStorage.setItem('mooco_terminal_locked', '1');
+      else localStorage.removeItem('mooco_terminal_locked');
+    } catch (_) {}
+  };
+  const lockTerminalNow = () => {
+    setTerminalLocked(true);
+    setIsUserSwitcherOpen(true);
+  };
 
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isDataLoading, setIsDataLoading] = useState(true);
@@ -846,6 +896,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               sales: { ...prev.sales, ...dbSettings.sales },
               inventory: { ...prev.inventory, ...dbSettings.inventory },
               expenses: { ...prev.expenses, ...dbSettings.expenses },
+              security: { ...prev.security, ...(dbSettings.security || {}) },
            }));
         }
         
@@ -1597,28 +1648,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       localStorage.removeItem('mooco_active_shift_session');
       return;
     }
-    const currentBizDate = getBusinessDate();
-    // Prioritize active shift matching current user and today's business date,
-    // then fallback to ANY active/closing shift for this user/admin,
-    // then fallback to any active shift on the system.
-    const active = shiftSessions.find(shift =>
-      (shift.user_id === currentUser.id || currentUser.role_id === 'role_super_admin') &&
-      Boolean(shift.drawer_id) &&
-      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status) &&
-      (!shift.business_date || shift.business_date === currentBizDate)
-    ) || shiftSessions.find(shift =>
-      Boolean(shift.drawer_id) &&
-      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status) &&
-      (!shift.business_date || shift.business_date === currentBizDate)
-    ) || shiftSessions.find(shift =>
-      (shift.user_id === currentUser.id || currentUser.role_id === 'role_super_admin') &&
-      Boolean(shift.drawer_id) &&
-      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status)
-    ) || shiftSessions.find(shift =>
-      Boolean(shift.drawer_id) &&
-      ['Pending Acceptance', 'Active', 'Closing'].includes(shift.status)
-    ) || null;
-
+    const active = findUsableShift(shiftSessions, currentUser, getBusinessDate());
     setActiveShiftSession(active);
     if (active) localStorage.setItem('mooco_active_shift_session', JSON.stringify(active));
     else localStorage.removeItem('mooco_active_shift_session');
@@ -1887,6 +1917,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     payment_mode_arg?: string, 
     account_id_arg?: string
   ): Promise<boolean> => {
+    if (!guardOpenPeriod(entry.date)) return false;
     const lockResult = await actionLock.runExclusive(`add_purchase_${entry.supplier_id}_${entry.date}_${entry.shift}`, async () => {
       try {
         const id = generateUUID();
@@ -1924,44 +1955,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           average_rate: Number(entry.rate) || 0
         };
 
-        const dbPurchase = {
-          id,
-          supplier_id: entry.supplier_id,
-          date: normalizedPurchaseDate,
-          shift: entry.shift,
-          milk_type: entry.milk_type,
-          quantity: Number(entry.quantity) || 0,
-          rate: Number(entry.rate) || 0,
-          fat: entry.fat !== undefined ? Number(entry.fat) || 0 : 0,
-          snf: entry.snf !== undefined ? Number(entry.snf) || 0 : 0,
-          total_amount,
-          status: 'Completed',
-          business_day_id: activeShiftSession?.business_day_id,
-          shift_session_id: activeShiftSession?.id,
-          drawer_id: activeShiftSession?.drawer_id,
-          cashier_id: activeShiftSession?.user_id,
-          details: {
-            paid_amount,
-            due_amount,
-            payment_mode: paid_amount > 0 ? payment_mode : undefined,
-            account_id,
-            business_day_id: activeShiftSession?.business_day_id,
-            shift_session_id: activeShiftSession?.id,
-            drawer_id: activeShiftSession?.drawer_id,
-            cashier_id: activeShiftSession?.user_id
-          }
-        };
-
-        const purchaseData: PurchaseEntry = {
-          ...dbPurchase,
-          supplier_name: supplierName,
-          shift: entry.shift,
-          paid_amount,
-          due_amount,
-          payment_mode: paid_amount > 0 ? payment_mode : undefined,
-          account_id
-        };
-
         // Resolve payment account if paid_amount > 0
         let targetAccId: string | null = null;
         if (paid_amount > 0) {
@@ -1977,6 +1970,58 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             throw new Error("Payment account nahi mila! Pehle 'Bank & Cash' module men Cash Drawer ya Bank Account banayein, ya phir is purchase ko Khata (Unpaid) per record karein.");
           }
         }
+
+        const matchedDrawerShift = (
+          activeShiftSession?.status === 'Active' &&
+          (!targetAccId || targetAccId === activeShiftSession.drawer_id || targetAccId === resolveDrawerAccountId(activeShiftSession.drawer_id))
+            ? activeShiftSession
+            : null
+        ) || (
+          targetAccId
+            ? shiftSessions.find(s =>
+                s.status === 'Active' &&
+                (s.drawer_id === targetAccId || resolveDrawerAccountId(s.drawer_id) === targetAccId)
+              ) || null
+            : activeShiftSession
+        );
+
+        const dbPurchase = {
+          id,
+          supplier_id: entry.supplier_id,
+          date: normalizedPurchaseDate,
+          shift: entry.shift,
+          milk_type: entry.milk_type,
+          quantity: Number(entry.quantity) || 0,
+          rate: Number(entry.rate) || 0,
+          fat: entry.fat !== undefined ? Number(entry.fat) || 0 : 0,
+          snf: entry.snf !== undefined ? Number(entry.snf) || 0 : 0,
+          total_amount,
+          status: 'Completed',
+          business_day_id: matchedDrawerShift?.business_day_id,
+          shift_session_id: matchedDrawerShift?.id,
+          drawer_id: matchedDrawerShift?.drawer_id,
+          cashier_id: matchedDrawerShift?.user_id,
+          details: {
+            paid_amount,
+            due_amount,
+            payment_mode: paid_amount > 0 ? payment_mode : undefined,
+            account_id: targetAccId || account_id,
+            business_day_id: matchedDrawerShift?.business_day_id,
+            shift_session_id: matchedDrawerShift?.id,
+            drawer_id: matchedDrawerShift?.drawer_id,
+            cashier_id: matchedDrawerShift?.user_id
+          }
+        };
+
+        const purchaseData: PurchaseEntry = {
+          ...dbPurchase,
+          supplier_name: supplierName,
+          shift: entry.shift,
+          paid_amount,
+          due_amount,
+          payment_mode: paid_amount > 0 ? payment_mode : undefined,
+          account_id: targetAccId || account_id
+        };
 
         const intakePayload = {
           purchase_id: id,
@@ -1994,10 +2039,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           due_amount,
           payment_mode: paid_amount > 0 ? payment_mode : undefined,
           account_id: targetAccId,
-          business_day_id: activeShiftSession?.business_day_id,
-          shift_session_id: activeShiftSession?.id,
-          drawer_id: activeShiftSession?.drawer_id,
-          cashier_id: activeShiftSession?.user_id
+          business_day_id: matchedDrawerShift?.business_day_id,
+          shift_session_id: matchedDrawerShift?.id,
+          drawer_id: matchedDrawerShift?.drawer_id,
+          cashier_id: matchedDrawerShift?.user_id
         };
 
         noteLocalWrite();
@@ -2037,10 +2082,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               type: 'Expense',
               category: 'Milk Purchase',
               description: `Milk Intake Payment - ${supplierName} (${entry.quantity}L ${entry.milk_type})`,
-              business_day_id: activeShiftSession?.business_day_id,
-              shift_session_id: activeShiftSession?.id,
-              drawer_id: activeShiftSession?.drawer_id,
-              cashier_id: activeShiftSession?.user_id
+              business_day_id: matchedDrawerShift?.business_day_id,
+              shift_session_id: matchedDrawerShift?.id,
+              drawer_id: matchedDrawerShift?.drawer_id,
+              cashier_id: matchedDrawerShift?.user_id
             } as any, ...prev]);
           }
         }
@@ -2066,6 +2111,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const addSale = async (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number): Promise<string | false> => {
     try {
       const currentBusinessDate = getBusinessDate();
+      if (!guardOpenPeriod(currentBusinessDate)) return false;
       if (businessDays.some(day => day.business_date === currentBusinessDate && day.status === 'Closed')) {
         showToast("Business Day has been closed & locked! Reopen day or contact Owner to punch bills.", "error");
         return false;
@@ -2078,17 +2124,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         (shiftToUse.date && shiftToUse.date !== currentBusinessDate) ||
         (shiftToUse.business_date && shiftToUse.business_date !== currentBusinessDate);
 
-      // Attempt to resolve real active shift from live shiftSessions state
-      const liveActiveShift = shiftSessions.find(s =>
-        (s.user_id === (currentUser?.id || shiftToUse?.user_id) || currentUser?.role_id === 'role_super_admin') &&
-        Boolean(s.drawer_id) &&
-        ['Pending Acceptance', 'Active', 'Closing'].includes(s.status) &&
-        (!s.business_date || s.business_date === currentBusinessDate)
-      ) || shiftSessions.find(s =>
-        Boolean(s.drawer_id) &&
-        ['Pending Acceptance', 'Active', 'Closing'].includes(s.status) &&
-        (!s.business_date || s.business_date === currentBusinessDate)
-      );
+      // Resolve the seller's own shift from live state (same rule as the shift shown in POS).
+      const usableShift = findUsableShift(shiftSessions, currentUser, currentBusinessDate);
+      const liveActiveShift = usableShift && (!usableShift.business_date || usableShift.business_date === currentBusinessDate)
+        ? usableShift
+        : null;
 
       if (liveActiveShift) {
         shiftToUse = liveActiveShift;
@@ -2100,16 +2140,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       } else if (isShiftStale) {
         // If a shift was left unclosed overnight, automatically roll it over to today's business day
-        const staleActiveShift = (shiftToUse && shiftToUse.status === 'Active' && Boolean(shiftToUse.drawer_id) ? shiftToUse : null)
-          || shiftSessions.find(s =>
-            (s.user_id === (currentUser?.id || shiftToUse?.user_id) || currentUser?.role_id === 'role_super_admin') &&
-            Boolean(s.drawer_id) &&
-            ['Pending Acceptance', 'Active', 'Closing'].includes(s.status)
-          )
-          || shiftSessions.find(s =>
-            Boolean(s.drawer_id) &&
-            ['Pending Acceptance', 'Active', 'Closing'].includes(s.status)
-          );
+        const staleActiveShift = usableShift
+          || (shiftToUse && shiftToUse.status === 'Active' && Boolean(shiftToUse.drawer_id) && shiftToUse.user_id === currentUser?.id ? shiftToUse : null);
 
         if (staleActiveShift) {
           const rolledShift = await rolloverStaleShift(staleActiveShift);
@@ -2278,6 +2310,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       // Customer Balance in-memory
       if (customer.id && dueAmount > 0) {
+        const saleShift = shiftToUse;
         setCustomers(prev => prev.map(c => c.id === customer.id ? { ...c, balance: (c.balance || 0) + dueAmount } : c));
         setCustomerTransactions(prev => [{
           id: `ctx_${saleId}`,
@@ -2286,9 +2319,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           type: 'Charge',
           amount: dueAmount,
           note: `Sale #${invoiceNumber}`,
-          business_day_id: activeShiftSession.business_day_id,
-          shift_session_id: activeShiftSession.id,
-          drawer_id: activeShiftSession.drawer_id,
+          // The shift this bill was saved on (activeShiftSession can still be null or stale here).
+          business_day_id: saleShift.business_day_id,
+          shift_session_id: saleShift.id,
+          drawer_id: saleShift.drawer_id,
           cashier_id: currentUser?.id
         }, ...prev]);
       }
@@ -3076,6 +3110,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         showToast("Purchase record not found", "error");
         return false;
       }
+      if (reason === 'Deleted by user' && !guardOpenPeriod(purchase.date)) return false;
 
       if (purchase.status === 'Returned') {
         showToast("This purchase entry is already fully returned", "warning");
@@ -3304,6 +3339,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         showToast("Material purchase record not found", "error");
         return false;
       }
+      if (reason === 'Deleted by user' && !guardOpenPeriod(mp.date)) return false;
 
       if (mp.status === 'Returned') {
         showToast("This material purchase is already returned", "warning");
@@ -3526,6 +3562,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const addBulkMaterialPurchase = async (data: any) => { 
       try {
           const { supplier_id, date, items: cartItems, purchase_type, paid_amount, payment_mode, account_id } = data;
+          if (!guardOpenPeriod(date)) return false;
           const totalBill = roundCurrency(cartItems.reduce((sum: number, item: any) => sum + (Number(item.quantity) || 0) * (Number(item.rate) || 0), 0));
           const requestedPaid = roundCurrency(paid_amount !== undefined ? Math.max(0, Number(paid_amount) || 0) : (!supplier_id ? totalBill : 0));
           if (requestedPaid > totalBill + 0.01) {
@@ -4490,6 +4527,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   const recordDailySupply = async (entries: any[]) => { 
       try {
+          if (!entries.every(entry => guardOpenPeriod(entry.date))) return false;
           const dbEntries = entries.map((entry: any) => {
               const { id, date, customer_id, total_amount, ...extraDetails } = entry;
               return {
@@ -5013,7 +5051,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const totals = getShiftTotals(activeShiftSession.id);
         const expectedCash = Math.max(0, roundCurrency(Number(totals.expectedCash || activeShiftSession.opening_counted || activeShiftSession.opening_float || 0)));
         const autoHandoverId = `handover_${generateUUID()}`;
-        await supabase.rpc('cash_control_close_shift', {
+        const { error: autoCloseError } = await supabase.rpc('cash_control_close_shift', {
           p_shift_id: activeShiftSession.id,
           p_expected_cash: expectedCash,
           p_counted_cash: expectedCash,
@@ -5026,6 +5064,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           p_handover_id: autoHandoverId,
           p_remittance_id: `remit_${generateUUID()}`
         });
+        if (autoCloseError) {
+          showToast(`Pichli shift (${activeShiftSession.business_date}) close nahi hui: ${autoCloseError.message}`, 'error');
+          return false;
+        }
         if (!effectiveHandoverId && expectedCash > 0 && activeShiftSession.drawer_id === data.drawerId) {
           effectiveHandoverId = autoHandoverId;
         }
@@ -5043,7 +5085,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const totals = getShiftTotals(conflictingShift.id);
         const expectedCash = Math.max(0, roundCurrency(Number(totals.expectedCash || conflictingShift.opening_counted || conflictingShift.opening_float || 0)));
         const autoHandoverId = `handover_${generateUUID()}`;
-        await supabase.rpc('cash_control_close_shift', {
+        const { error: autoCloseError } = await supabase.rpc('cash_control_close_shift', {
           p_shift_id: conflictingShift.id,
           p_expected_cash: expectedCash,
           p_counted_cash: expectedCash,
@@ -5056,6 +5098,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           p_handover_id: autoHandoverId,
           p_remittance_id: `remit_${generateUUID()}`
         });
+        if (autoCloseError) {
+          showToast(`Is drawer ki pichli shift (${conflictingShift.business_date}) close nahi hui: ${autoCloseError.message}`, 'error');
+          return false;
+        }
         if (!effectiveHandoverId && expectedCash > 0) {
           effectiveHandoverId = autoHandoverId;
         }
@@ -5193,10 +5239,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return sum + Math.max(0, Number(sale.total || 0) - salePaidAmount(sale));
     }, 0));
 
-    const ledgerCashCollections = roundCurrency(customerTransactions
-      .filter(t => t.shift_session_id === shiftId && t.type === 'Payment' && String(t.mode || '').toLowerCase().includes('cash'))
-      .filter(t => !t.account_id || !drawerAccountId || t.account_id === drawerAccountId)
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0));
+    const isDrawerTxInShiftWindow = (row: any, rowAccountId?: string | null) => {
+      if (row.shift_session_id === shiftId) {
+        return !rowAccountId || !drawerAccountId || rowAccountId === drawerAccountId || rowAccountId === shift?.drawer_id;
+      }
+      if (row.shift_session_id) return false;
+      if (!drawerAccountId || !rowAccountId || (rowAccountId !== drawerAccountId && rowAccountId !== shift?.drawer_id)) {
+        return false;
+      }
+      const rawTime = row.created_at || row.date;
+      if (!rawTime || shiftStartTime <= 0) return false;
+      const t = new Date(rawTime).getTime();
+      return Number.isFinite(t) && t >= (shiftStartTime - 60000) && t <= (shiftEndTime + 60000);
+    };
+
+    const validLedgerCollections = customerTransactions
+      .filter(t => t.type === 'Payment' && String(t.mode || '').toLowerCase().includes('cash'))
+      .filter(t => isDrawerTxInShiftWindow(t, t.account_id || (t.details as any)?.account_id));
+
+    const ledgerCashCollections = roundCurrency(validLedgerCollections.reduce((sum, t) => sum + Number(t.amount || 0), 0));
 
     const deliveryCashCollections = roundCurrency(dailySupplyEntries
       .filter(entry => entry.shift_session_id === shiftId && String(entry.payment_mode || '').toLowerCase().includes('cash'))
@@ -5205,15 +5266,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // Material, Supplier, and Expense Vendor Cash In (Refunds / Returns / Advance Returns) received specifically into THIS drawer
     const validMaterialAndSupplierRefundBtx = bankTransactions
       .filter((t: any) =>
-        (t.shift_session_id === shiftId || (
-          !t.shift_session_id && shiftStartTime > 0 &&
-          new Date(t.date).getTime() >= (shiftStartTime - 60000) &&
-          new Date(t.date).getTime() <= (shiftEndTime + 60000)
-        )) &&
+        isDrawerTxInShiftWindow(t, t.account_id) &&
         (t.type === 'Income' || t.type === 'Deposit') &&
         ['Vendor / Staff Refund', 'Supplier Refund', 'Vendor Refund'].includes(t.category)
-      )
-      .filter((t: any) => !drawerAccountId || t.account_id === drawerAccountId);
+      );
 
     const vendorAndSupplierRefundCashIn = roundCurrency(validMaterialAndSupplierRefundBtx.reduce((sum, t: any) => sum + Number(t.amount || 0), 0));
 
@@ -5221,17 +5277,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     // Cash expenses paid specifically from THIS drawer
     const validShiftExpenses = expenses
-      .filter(e => e.shift_session_id === shiftId && String(e.paymentMode || '').toLowerCase().includes('cash'))
-      .filter(e => !e.account_id || !drawerAccountId || e.account_id === drawerAccountId);
+      .filter(e => String(e.paymentMode || '').toLowerCase().includes('cash'))
+      .filter(e => isDrawerTxInShiftWindow(e, e.account_id || (e as any).details?.account_id));
     const cashExpenses = roundCurrency(validShiftExpenses.reduce((sum, e) => sum + Number(e.paidAmount || 0), 0));
 
     // Direct Cash Purchases (Milk Purchases) paid specifically from THIS drawer
     const validMilkPurchases = purchases
-      .filter(p => p.shift_session_id === shiftId && String(p.payment_mode || '').toLowerCase().includes('cash'))
-      .filter(p => {
-        const pAcc = p.account_id || (p as any).details?.account_id;
-        return !pAcc || !drawerAccountId || pAcc === drawerAccountId;
-      })
+      .filter(p => String(p.payment_mode || '').toLowerCase().includes('cash'))
+      .filter(p => isDrawerTxInShiftWindow(p, p.account_id || (p as any).details?.account_id))
       .filter(p => Number(p.paid_amount ?? (p as any).amount_paid ?? (p as any).total_amount ?? 0) > 0);
     const directCashPurchases = roundCurrency(validMilkPurchases.reduce((sum, p: any) => sum + Number(p.paid_amount ?? p.amount_paid ?? p.total_amount ?? 0), 0));
 
@@ -5240,8 +5293,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     // Material, Supplier, and Expense Vendor Cash Out paid specifically out of THIS drawer
     const validMaterialAndSupplierBtx = bankTransactions
-      .filter((t: any) => t.shift_session_id === shiftId && t.type === 'Expense' && ['Purchase', 'Supplier Payment', 'Vendor / Staff Payment'].includes(t.category))
-      .filter((t: any) => !drawerAccountId || t.account_id === drawerAccountId)
+      .filter((t: any) =>
+        isDrawerTxInShiftWindow(t, t.account_id) &&
+        t.type === 'Expense' &&
+        ['Purchase', 'Supplier Payment', 'Vendor / Staff Payment', 'Milk Purchase'].includes(t.category)
+      )
       .filter((t: any) => !t.reference_id || (!countedPurchaseIds.has(t.reference_id) && !countedExpenseIds.has(t.reference_id)));
 
     const materialAndSupplierCashOut = roundCurrency(validMaterialAndSupplierBtx.reduce((sum, t: any) => sum + Number(t.amount || 0), 0));
@@ -5329,10 +5385,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const netCashPurchases = roundCurrency(Math.max(0, cashPurchases - purchaseReturnNet.netted));
 
     // Itemized Collections list for UI detail dialog
-    const validLedgerCollections = customerTransactions
-      .filter(t => t.shift_session_id === shiftId && t.type === 'Payment' && String(t.mode || '').toLowerCase().includes('cash'))
-      .filter(t => !t.account_id || !drawerAccountId || t.account_id === drawerAccountId);
-
     const validDeliveryCollections = dailySupplyEntries
       .filter(entry => entry.shift_session_id === shiftId && String(entry.payment_mode || '').toLowerCase().includes('cash') && Number(entry.payment_received || 0) > 0);
 
@@ -5634,11 +5686,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     denominations?: Record<string | number, number>;
     differenceReason?: string;
     notes?: string;
+    receiveIntoAccountId?: string;
+    approveDifferenceNow?: boolean;
   }): Promise<boolean> => {
     if (!activeShiftSession || activeShiftSession.status !== 'Active') {
       showToast('No active shift found.', 'warning');
       return false;
     }
+    const canReceiveAsHead = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const receiveIntoAccountId = canReceiveAsHead && data.receiveIntoAccountId && data.receiveIntoAccountId !== resolveDrawerAccountId(activeShiftSession.drawer_id)
+      ? data.receiveIntoAccountId
+      : undefined;
     const counted = roundCurrency(data.countedCash);
     const leave = roundCurrency(data.leaveInDrawer);
     const remit = roundCurrency(data.remitToHead);
@@ -5724,12 +5782,42 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       } catch (err) {}
     }
 
-    await refreshCashControl();
+    // The Owner reviews differences anyway; on their own shift they can approve it right here,
+    // so the business day is not left blocked by a difference nobody else will review.
+    if (Math.abs(variance) >= 0.01 && data.approveDifferenceNow && currentUser?.role_id === 'role_super_admin' && activeShiftSession.user_id === currentUser.id) {
+      const resolvedAt = new Date().toISOString();
+      const { error: approveError } = await supabase.from('cash_variances').update({
+        status: 'Approved',
+        resolution_notes: `Approved by owner at shift close: ${data.differenceReason || ''}`.trim(),
+        resolved_by: currentUser.id,
+        resolved_at: resolvedAt
+      }).eq('id', `var_close_${closingShiftId}`).eq('status', 'Open');
+      if (!approveError) {
+        await supabase.from('cash_shifts').update({ status: 'Closed' }).eq('id', closingShiftId).eq('status', 'Pending Review');
+      } else {
+        console.warn('[closeCashierShift] Difference could not be approved:', approveError.message);
+      }
+    }
+
+    // A head closing the shift already holds the cash: receive it into the chosen account now,
+    // so it never sits "in transit" waiting for the same person to accept it in Head Inbox.
+    let receivedNow = false;
+    if (remit > 0 && receiveIntoAccountId) {
+      const remitDenominations = (data.denominations as any)?.remit_to_head || {};
+      receivedNow = await acceptHeadRemittance(remittanceId, remit, remitDenominations, receiveIntoAccountId, 'Received by head at shift close', { silent: true });
+    }
+
+    if (!receivedNow) await refreshCashControl();
+    const receivedAccountName = accounts.find(a => a.id === receiveIntoAccountId)?.name || 'account';
     showToast(
-      remit > 0
-        ? `Shift closed. Rs ${remit.toLocaleString()} remitted to Head Office (pending acceptance in Head Inbox).`
-        : 'Shift closed. Drawer cash and records updated successfully.',
-      'success'
+      remit <= 0
+        ? 'Shift closed. Drawer cash and records updated successfully.'
+        : receivedNow
+          ? `Shift closed. Rs ${remit.toLocaleString()} received into ${receivedAccountName}.`
+          : receiveIntoAccountId
+            ? `Shift closed, lekin Rs ${remit.toLocaleString()} abhi receive nahi hua — Cash Control → Head Inbox se accept karein.`
+            : `Shift closed. Rs ${remit.toLocaleString()} sent to Head Inbox (pending until accepted).`,
+      remit > 0 && receiveIntoAccountId && !receivedNow ? 'warning' : 'success'
     );
     return true;
   };
@@ -5739,7 +5827,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     countedAmount: number,
     denominations: Record<string | number, number> = {},
     destinationAccountId?: string,
-    notes: string = ''
+    notes: string = '',
+    opts: { silent?: boolean } = {}
   ): Promise<boolean> => {
     if (!currentUser) return false;
     const pendingRemittance = cashRemittances.find(remittance => remittance.id === remittanceId);
@@ -5808,7 +5897,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     }
     await refreshCashControl();
-    showToast('Remittance received — darmiyan cash ab account mein aa gaya.', 'success');
+    if (!opts.silent) showToast('Remittance received — darmiyan cash ab account mein aa gaya.', 'success');
     return true;
   };
 
@@ -6417,14 +6506,31 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
+  const businessDayOf = (dateStr: string): string =>
+    /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+
+  const isPeriodLocked = (dateStr: string): boolean => {
+    const lockDate = settings.security?.lockDate;
+    if (!lockDate || !dateStr) return false;
+    return businessDayOf(dateStr) <= lockDate;
+  };
+
+  // Shared guard for anything that writes a dated entry: refuses dates inside the closed books.
+  const guardOpenPeriod = (dateStr?: string): boolean => {
+    if (!dateStr || !isPeriodLocked(dateStr)) return true;
+    showToast(`Books ${settings.security?.lockDate} tak band hain. Is tareekh ki entry add, edit ya delete nahi ho sakti.`, 'error');
+    return false;
+  };
+
   const isDayLocked = (dateStr: string): boolean => {
-    // A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
-    const d = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+    if (isPeriodLocked(dateStr)) return true;
+    const d = businessDayOf(dateStr);
     return businessDays.some(day => day.business_date === d && day.status === 'Closed');
   };
 
   const reopenDayClosing = async (dayClosingId: string): Promise<boolean> => {
-    if (!canPerform('settings', 'delete') && currentUser?.role_id !== 'role_super_admin') {
+    if (!canPerform('cash_control', 'reopen')) {
       showToast('Only Owner / Super Admin can reopen a locked business day!', 'error');
       return false;
     }
@@ -6745,6 +6851,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       const id = `exp_${generateUUID()}`;
       const { date, category, amount, paidAmount, paymentStatus, description, account_id, account_name, vendor_id, vendor_name, ...extraDetails } = e as any;
+      if (!guardOpenPeriod(date)) return false;
       
       const totalAmt = amount || 0;
       const actualPaidAmount = paymentStatus === 'Unpaid' 
@@ -6754,16 +6861,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const unpaidPortion = Math.max(0, totalAmt - actualPaidAmount);
       const selectedAccount = accounts.find(a => a.id === account_id);
 
-      const isDrawerExpenseAccount = Boolean(
-        activeShiftSession?.status === 'Active' &&
-        activeShiftSession?.drawer_id &&
-        account_id &&
-        (account_id === activeShiftSession.drawer_id || account_id === resolveDrawerAccountId(activeShiftSession.drawer_id))
-      );
-      const activeDrawerId = isDrawerExpenseAccount ? activeShiftSession?.drawer_id : null;
-      const shiftSessionId = isDrawerExpenseAccount ? (activeShiftSession?.id || null) : null;
-      const businessDayId = isDrawerExpenseAccount ? (activeShiftSession?.business_day_id || null) : null;
-      const cashierId = isDrawerExpenseAccount ? activeShiftSession?.user_id : (currentUser?.id || null);
+      const matchedExpenseShift = account_id ? (
+        (activeShiftSession?.status === 'Active' &&
+          activeShiftSession?.drawer_id &&
+          (account_id === activeShiftSession.drawer_id || account_id === resolveDrawerAccountId(activeShiftSession.drawer_id))
+          ? activeShiftSession
+          : null) ||
+        shiftSessions.find(s =>
+          s.status === 'Active' &&
+          Boolean(s.drawer_id) &&
+          (account_id === s.drawer_id || account_id === resolveDrawerAccountId(s.drawer_id))
+        ) || null
+      ) : null;
+      const activeDrawerId = matchedExpenseShift ? matchedExpenseShift.drawer_id : null;
+      const shiftSessionId = matchedExpenseShift ? (matchedExpenseShift.id || null) : null;
+      const businessDayId = matchedExpenseShift ? (matchedExpenseShift.business_day_id || null) : null;
+      const cashierId = matchedExpenseShift ? matchedExpenseShift.user_id : (currentUser?.id || null);
       const normalizedDate = normalizeTransactionTimestamp(date);
 
       const expensePayload = {
@@ -7170,6 +7283,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     transactionType: 'payment' | 'refund' = 'payment'
   ): Promise<boolean> => {
     try {
+      if (!guardOpenPeriod(date)) return false;
       const vendor = expenseVendors.find(v => v.id === vendorId);
       if (!vendor) {
         showToast("Vendor not found", "error");
@@ -7338,6 +7452,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deleteExpenseVendorTransaction = async (id: string): Promise<boolean> => {
     try {
       const tx = expenseVendorTransactions.find(t => t.id === id);
+      if (tx && !guardOpenPeriod(tx.date)) return false;
       if (tx) {
         const vendor = expenseVendors.find(v => v.id === tx.vendor_id);
         const isRefund = tx.type === 'Refund';
@@ -7501,6 +7616,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   const recordBankTransaction = async (data: any) => {
       try {
+          if (!guardOpenPeriod(data.date)) return false;
           const taggedTransaction = {
             ...data,
             date: normalizeTransactionTimestamp(data.date),
@@ -7520,6 +7636,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   const transferFunds = async (fromId: string, toId: string, amount: number, date: string, description: string) => {
       try {
+          if (!guardOpenPeriod(date)) return false;
           // Single atomic RPC: locks both rows, moves the money, writes both
           // bank_transactions in one transaction.
           const normalizedDate = normalizeTransactionTimestamp(date);
@@ -7584,6 +7701,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       const id = entry.id || `je_${generateUUID()}`;
       const { date, totalAmount, lines, ...extraDetails } = entry;
+      if (!guardOpenPeriod(date)) return false;
       const entryLines: Array<{ account_id: string; debit: number; credit: number; description?: string }> = lines || extraDetails.lines || [];
 
       // Validate double entry debit === credit
@@ -8172,14 +8290,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
   
-  const updateSettings = async (newSettings: Partial<SystemSettings>) => { 
+  const updateSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
+    const previous = settings;
     try {
       const mergedSettings = {
         general: { ...settings.general, ...(newSettings.general || {}) },
         financial: { ...settings.financial, ...(newSettings.financial || {}) },
         sales: { ...settings.sales, ...(newSettings.sales || {}) },
         inventory: { ...settings.inventory, ...(newSettings.inventory || {}) },
-        expenses: { ...(settings.expenses || {}), ...(newSettings.expenses || {}) }
+        expenses: { ...(settings.expenses || {}), ...(newSettings.expenses || {}) },
+        security: { ...(settings.security || {}), ...(newSettings.security || {}) }
       };
 
       setSettings(mergedSettings);
@@ -8190,13 +8310,51 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         .eq('id', 'global_settings');
 
       if (error) throw error;
+      return true;
     } catch (err) {
       console.error("Failed to save settings:", err);
-      showToast("Failed to save settings", "error");
+      setSettings(previous);
+      showToast("Settings save nahi huin. Internet check karke dobara koshish karein.", "error");
+      return false;
     }
   };
+
+  const requestManagerApproval = async (approverId: string, pin: string, permission: string) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { approved: false, message: 'Manager PIN check karne ke liye internet zaroori hai.' };
+    }
+    const { data, error } = await supabase.rpc('app_approve_override', {
+      p_user_id: approverId,
+      p_pin: pin,
+      p_permission: permission
+    });
+    if (error || !data?.approved) {
+      return { approved: false, message: error?.message || 'Ghalat PIN code!' };
+    }
+    return { approved: true, approverName: String(data.name || '') };
+  };
+
+  const buildBackup = (): Record<string, unknown> => ({
+    app: 'mooco-erp',
+    exportedAt: new Date().toISOString(),
+    exportedBy: currentUser?.name || '',
+    settings,
+    roles,
+    users,
+    customers, suppliers, items, inventory, inventoryLogs, categories,
+    sales, dailySupplyEntries, customerTransactions,
+    purchases, materialPurchases, supplierTransactions, allocations, productionBatches,
+    expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
+    accounts, bankTransactions, manualAccounts, journalEntries,
+    retailClosings, shiftSessions, dayClosings, businessDays, cashDrawers, cashHandovers,
+    cashRemittances, cashVariances, shiftCashEvents
+  });
   
   const resetSystem = async () => {
+    if (currentUser?.role_id !== 'role_super_admin') {
+      showToast('Sirf Owner / Super Admin data delete kar sakta hai.', 'error');
+      return;
+    }
     try {
       showToast("Resetting system, please wait...", "info");
       const sentinel = '00000000-0000-0000-0000-000000000000';
@@ -8299,6 +8457,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const clearData = async (moduleOrModules: string | string[]) => {
     const modules = Array.isArray(moduleOrModules) ? moduleOrModules : [moduleOrModules];
     if (modules.length === 0) return;
+    if (currentUser?.role_id !== 'role_super_admin') {
+      showToast('Sirf Owner / Super Admin data delete kar sakta hai.', 'error');
+      return;
+    }
 
     try {
       showToast(`Clearing ${modules.length > 1 ? `${modules.length} selected modules` : modules[0]}...`, "info");
@@ -8496,6 +8658,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   });
 
   const applyLogin = (matchedUser: AppUser) => {
+    setTerminalLocked(false);
     setUsers(prev => prev.some(u => u.id === matchedUser.id)
       ? prev.map(u => (u.id === matchedUser.id ? matchedUser : u))
       : [...prev, matchedUser]);
@@ -8559,6 +8722,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const logoutUser = () => {
+    setTerminalLocked(false);
     setCurrentUser(null);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('mooco_active_user_id');
@@ -8680,6 +8844,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateRole = async (id: string, updates: Partial<AppRole>): Promise<boolean> => {
+    if (id === 'role_super_admin') {
+      showToast('Owner role hamesha full access rakhta hai.', 'warning');
+      return false;
+    }
     try {
       const { error } = await supabase.from('app_roles').update(updates).eq('id', id);
       if (error) throw error;
@@ -8739,7 +8907,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const contextValue = useMemo(() => ({
-    users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
+    users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isTerminalLocked, lockTerminalNow, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
     loginWithCredentials, switchUserWithPin, switchUserByIdAndPin, setCurrentUserDirectly, logoutUser,
     addUser, updateUser, deleteUser, createRole, updateRole, deleteRole, hasPermission, canPerform,
     purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
@@ -8750,7 +8918,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     refreshCashControl, getShiftTotals, startCashierShift, closeCashierShift, acceptHeadRemittance, resolveCashVariance,
     resolveCashHandover, closeBusinessDay, reopenBusinessDay, upsertCashDrawer, getBusinessDate, submitDayCloseStockCount, addDrawerOpeningCash, closeDayCash, closeDayStock,
     inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries,
-    openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, isDayLocked,
+    openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, isDayLocked, isPeriodLocked, requestManagerApproval, buildBackup,
     addPurchase, returnPurchase, deletePurchase, returnMaterialPurchase, deleteMaterialPurchase, addBulkMaterialPurchase, recordSupplierPayment,
     addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
     allocateBulkMilk, allocateFromRetailStock, setAllocations,
@@ -8767,7 +8935,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     getDeleteAssessment, safeDeleteCustomer, safeDeleteSupplier, safeDeleteItem,
     safeDeleteExpense, safeDeleteAccount, reactivateEntity
   }), [
-    users, roles, currentUser, currentRole, isUserSwitcherOpen, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError,
+    users, roles, currentUser, currentRole, isUserSwitcherOpen, isTerminalLocked, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError,
     purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
     productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
     accounts, bankTransactions, manualAccounts, journalEntries, settings, 

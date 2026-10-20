@@ -8,13 +8,15 @@ import ToastContainer from './components/ToastContainer';
 import ErrorBoundary from './components/ErrorBoundary';
 import SyncStatusBadge from './components/SyncStatusBadge';
 import PageLoadingFallback from './components/PageLoadingFallback';
-import { Search, Menu, Sun, Moon, Lock, LogOut, ChevronDown, ChevronRight, Home } from 'lucide-react';
+import { Search, Menu, Sun, Moon, Lock, LogOut, ChevronDown, ChevronRight, Home, Minus, Plus } from 'lucide-react';
+import { useIdleLock } from './hooks/useIdleLock';
 
 const UserSwitcherModal = lazy(() => import('./components/UserSwitcherModal'));
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(module => ({ default: module.CommandPalette })));
 
 const UserSwitcherHost: React.FC = () => {
   const { isUserSwitcherOpen } = useDairy();
+  useIdleLock();
   if (!isUserSwitcherOpen) return null;
   return <Suspense fallback={<PageLoadingFallback variant="overlay" message="Opening secure user access" submessage="Getting your sign-in ready" />}>
     <UserSwitcherModal />
@@ -27,6 +29,17 @@ const HeaderUserButton: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
   const initials = currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : 'OW';
+  // Screen size is a per-device choice (a POS touch screen vs an office laptop), so it lives here.
+  const [zoom, setZoom] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem('app_zoom_scale') || '', 10);
+    return saved >= 80 && saved <= 150 ? saved : 100;
+  });
+  const changeZoom = (step: number) => {
+    const next = Math.min(150, Math.max(80, zoom + step));
+    setZoom(next);
+    localStorage.setItem('app_zoom_scale', String(next));
+    document.documentElement.style.fontSize = `${(next / 100) * 16}px`;
+  };
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -65,7 +78,16 @@ const HeaderUserButton: React.FC = () => {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-[calc(100%+0.35rem)] w-48 p-2 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl z-50 space-y-1 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute right-0 top-[calc(100%+0.35rem)] w-52 p-2 bg-white dark:bg-slate-850 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl z-50 space-y-1 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
+            <span>Screen size</span>
+            <div className="flex items-center gap-1">
+              <button type="button" aria-label="Screen chhoti karein" disabled={zoom <= 80} onClick={() => changeZoom(-10)} className="p-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"><Minus size={12} /></button>
+              <span className="w-10 text-center font-mono text-[11px]">{zoom}%</span>
+              <button type="button" aria-label="Screen bari karein" disabled={zoom >= 150} onClick={() => changeZoom(10)} className="p-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"><Plus size={12} /></button>
+            </div>
+          </div>
+          <div className="h-px bg-slate-100 dark:bg-slate-800 mx-2" />
           <button
             type="button"
             onClick={() => {

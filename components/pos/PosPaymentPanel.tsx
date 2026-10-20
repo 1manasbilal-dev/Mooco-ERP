@@ -1,5 +1,5 @@
 import React from 'react';
-import { Banknote, Wallet, ChevronDown, Check, Tag, Loader2, BookOpen } from 'lucide-react';
+import { Banknote, Wallet, ChevronDown, Check, Tag, Loader2, BookOpen, Clock } from 'lucide-react';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { formatCurrency } from '../../lib/formatters';
 
@@ -27,6 +27,9 @@ interface PosPaymentPanelProps {
   activeShiftSession: any;
   handleCheckout: () => void;
   lockDiscount?: boolean;
+  /** Opens the shift dialog; the pay button turns into "Start shift" while no shift is open. */
+  onStartShift?: () => void;
+  isDayLocked?: boolean;
 }
 
 export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
@@ -52,8 +55,11 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   isSubmitting,
   activeShiftSession,
   handleCheckout,
-  lockDiscount = false
+  lockDiscount = false,
+  onStartShift,
+  isDayLocked = false
 }) => {
+  const noShift = !activeShiftSession || activeShiftSession.status !== 'Active';
   // A walk-in has no khata to carry the unpaid part, so a short cash payment cannot be completed.
   const walkInShort = !selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal
     ? Math.round((grandTotal - cashGiven) * 100) / 100
@@ -395,27 +401,39 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
         </p>
       )}
 
-      {/* Confirm & Pay Action Button */}
+      {/* Confirm & Pay Action Button. With no open shift it starts one instead of sitting disabled. */}
+      {noShift && onStartShift && !isDayLocked ? (
+        <button
+          type="button"
+          onClick={onStartShift}
+          className="w-full py-3.5 rounded-xl font-black text-xs sm:text-sm text-slate-950 bg-amber-400 hover:bg-amber-300 flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98] cursor-pointer"
+        >
+          <Clock size={17} />
+          <span>Start shift to sell</span>
+        </button>
+      ) : (
       <button
         type="button" aria-label="Complete sale"
         onClick={handleCheckout}
-        disabled={cart.length === 0 || isSubmitting || walkInShort > 0 || !activeShiftSession || activeShiftSession.status !== 'Active'}
+        disabled={cart.length === 0 || isSubmitting || walkInShort > 0 || noShift || isDayLocked}
         className={`
           w-full py-3.5 rounded-xl font-black text-xs sm:text-sm text-white flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98]
-          ${cart.length > 0 && !isSubmitting && walkInShort === 0 && activeShiftSession && activeShiftSession.status === 'Active'
+          ${cart.length > 0 && !isSubmitting && walkInShort === 0 && !noShift && !isDayLocked
             ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-600/25 cursor-pointer'
             : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none'}
         `}
       >
         {isSubmitting ? (
           <>
-            <Loader2 size={17} className="animate-spin" /> Saving Sale to Database...
+            <Loader2 size={17} className="animate-spin" /> Saving sale...
           </>
         ) : (
           <>
             {paymentMode === 'Online' ? <Wallet size={17} /> : <Banknote size={17} />}
             <span>
-              {!activeShiftSession || activeShiftSession.status !== 'Active'
+              {isDayLocked
+                ? 'Business day closed — sale band'
+                : noShift
                 ? 'Start Shift First — Sale Blocked'
                 : selectedCustomerId && customerDueAmount > 0
                 ? `Confirm & Post to Ledger (${paymentMode})`
@@ -425,6 +443,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
           </>
         )}
       </button>
+      )}
     </div>
   );
 };

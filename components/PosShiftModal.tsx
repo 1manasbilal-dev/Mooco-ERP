@@ -26,19 +26,22 @@ import {
 import { PosShiftActivityDialog, ShiftActivityTab } from './PosShiftActivityDialog';
 import { SmartNumberInput } from './SmartNumberInput';
 import { ShiftCashFlow } from './ShiftCashFlow';
+import { confirmAction } from './ui/ConfirmDialog';
+import { syncService } from '../lib/syncService';
 
 interface PosShiftModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+// Specific reasons the head can act on. "Other" needs the cashier's own words.
 const QUICK_DIFFERENCE_REASONS = [
+  'Wrong change given',
+  'Expense paid but not entered',
+  'Sale not punched',
   'Counting error',
-  'Change discrepancy',
-  'Unrecorded petty expense',
-  'Incorrect change given',
-  'Other'
 ];
+const RECEIVE_ACCOUNT_KEY = 'mooco_shift_receive_account';
 
 export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose }) => {
   const {
@@ -111,10 +114,13 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
 
   const [openingCashInput, setOpeningCashInput] = useState<string>('');
   const [isEditingOpening, setIsEditingOpening] = useState<boolean>(false);
+  const [openingDenominations, setOpeningDenominations] = useState<Record<string | number, number>>({});
+  const [isOpeningDenomOpen, setIsOpeningDenomOpen] = useState(false);
 
   useEffect(() => {
     setOpeningCashInput('');
     setIsEditingOpening(false);
+    setOpeningDenominations({});
   }, [activeAccount?.id, pendingHandover?.id]);
 
   const openingAmount = useMemo(() => {
@@ -128,11 +134,14 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
   // --- Close Shift State ---
   const [countedCash, setCountedCash] = useState<string>('');
   const [leaveInDrawer, setLeaveInDrawer] = useState<string>('');
+  // Until the cashier types a float, "keep in drawer" follows the drawer's default float, capped at the count.
+  const [leaveTouched, setLeaveTouched] = useState(false);
   const [closingDenominations, setClosingDenominations] = useState<Record<string | number, number>>({});
   const [isClosingDenomOpen, setIsClosingDenomOpen] = useState(false);
   const [differenceReason, setDifferenceReason] = useState<string>('');
   const [closeNotes, setCloseNotes] = useState<string>('');
   const [isClosing, setIsClosing] = useState(false);
+  const [approveDifferenceNow, setApproveDifferenceNow] = useState(true);
   const [detailModalTab, setDetailModalTab] = useState<ShiftActivityTab | null>(null);
   const [detailModalCategory, setDetailModalCategory] = useState<string | undefined>(undefined);
   const openDetailDialog = (tab: ShiftActivityTab, category?: string) => {
@@ -140,19 +149,74 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     setDetailModalTab(tab);
   };
 
-  // Initialize Close Shift inputs when shift becomes active
+  const drawerAccountId = activeShiftSession
+    ? (cashDrawers.find(d => d.id === activeShiftSession.drawer_id)?.account_id || activeShiftSession.account_id || activeShiftSession.drawer_id)
+    : undefined;
+  const defaultLeave = useMemo(() => {
+    if (!activeShiftSession) return 0;
+    const drawer = cashDrawers.find(d => d.id === activeShiftSession.drawer_id || d.account_id === drawerAccountId);
+    const float = Number(drawer?.default_float || 0);
+    return float > 0 ? float : 5000;
+  }, [activeShiftSession, cashDrawers, drawerAccountId]);
+
+  // Fresh inputs for each shift only. Keyed on the id: accounts and drawers refresh after every
+  // sale sync, and that must not wipe a count the cashier is typing.
   useEffect(() => {
-    if (activeShiftSession) {
-      const drawer = cashDrawers.find(d => d.id === activeShiftSession.drawer_id)
-        || accounts.find(a => a.id === activeShiftSession.drawer_id || a.id === activeShiftSession.account_id);
-      const defaultLeave = (drawer as any)?.default_float ? Number((drawer as any).default_float) : 5000;
-      setLeaveInDrawer(String(defaultLeave));
-      setCountedCash('');
-      setClosingDenominations({});
-      setDifferenceReason('');
-      setCloseNotes('');
-    }
-  }, [activeShiftSession, cashDrawers, accounts]);
+    setLeaveInDrawer('');
+    setLeaveTouched(false);
+    setCountedCash('');
+    setClosingDenominations({});
+    setDifferenceReason('');
+    setCloseNotes('');
+  }, [activeShiftSession?.id]);
+
+  // A head who closes the shift is holding the cash already: receive it straight into an account.
+  const isHead = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager'
+    || Boolean(currentRole?.permissions?.includes('cash_control:approve' as any))
+    || Boolean((currentUser?.permissions || []).includes('cash_control:approve'));
+  const receivingAccounts = useMemo(
+    () => accounts.filter(a =>
+      a.isActive !== false &&
+      a.id !== drawerAccountId &&
+      a.id !== activeShiftSession?.drawer_id &&
+      ['Cash', 'Bank', 'Wallet'].includes(a.type) &&
+      !(a.type === 'Cash' && a.isDrawer === true)
+    ),
+    [accounts, drawerAccountId, activeShiftSession?.drawer_id]
+  );
+  const [receiveAccountId, setReceiveAccountId] = useState<string>(() => {
+    try { return localStorage.getItem(RECEIVE_ACCOUNT_KEY) || ''; } catch { return ''; }
+  });
+  const effectiveReceiveAccountId = useMemo(() => {
+    if (!isHead) return '';
+    if (receiveAccountId === 'inbox') return '';
+    if (receiveAccountId && receivingAccounts.some(a => a.id === receiveAccountId)) return receiveAccountId;
+    const preferred = settings.financial?.defaultCashAccountId;
+    return receivingAccounts.find(a => a.id === preferred)?.id
+      || receivingAccounts.find(a => a.type === 'Cash')?.id
+      || '';
+  }, [isHead, receiveAccountId, receivingAccounts, settings.financial?.defaultCashAccountId]);
+
+  // Bills still waiting to reach the server, and bills left in the cart, at close time.
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  useEffect(() => {
+    if (!isOpen || !activeShiftSession) return;
+    return syncService.subscribe(state => setPendingSyncCount(state.pendingCount + state.failedCount));
+  }, [isOpen, activeShiftSession?.id]);
+  const unfinishedCounter = useMemo(() => {
+    if (!isOpen) return { cartLines: 0, parked: 0 };
+    let cartLines = 0;
+    let parked = 0;
+    try {
+      const draft = JSON.parse(sessionStorage.getItem('mooco_pos_cart_draft') || 'null');
+      cartLines = Array.isArray(draft?.cart) ? draft.cart.length : 0;
+    } catch {}
+    try {
+      const held = JSON.parse(localStorage.getItem('pos_held_orders') || '[]');
+      parked = Array.isArray(held) ? held.length : 0;
+    } catch {}
+    return { cartLines, parked };
+  }, [isOpen]);
 
   // Active shift live totals
   const shiftTotals = useMemo(() => {
@@ -244,22 +308,40 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     [closingDenominations]
   );
   const effectiveCountedCash = closingDenomTotal > 0 ? closingDenomTotal : Number(countedCash || 0);
-  const effectiveLeaveInDrawer = Math.max(0, Number(leaveInDrawer || 0));
-  const effectiveRemitToHead = Math.max(0, effectiveCountedCash - effectiveLeaveInDrawer);
+  const hasCount = countedCash.trim() !== '' || closingDenomTotal > 0;
+  const effectiveLeaveInDrawer = leaveTouched
+    ? Math.max(0, Number(leaveInDrawer || 0))
+    : (hasCount ? Math.min(defaultLeave, effectiveCountedCash) : defaultLeave);
+  const effectiveRemitToHead = Math.max(0, Math.round((effectiveCountedCash - effectiveLeaveInDrawer) * 100) / 100);
 
   // Variance calculation
   const variance = useMemo(() => {
     if (!activeShiftSession) return 0;
-    return effectiveCountedCash - shiftTotals.expectedCash;
+    return Math.round((effectiveCountedCash - shiftTotals.expectedCash) * 100) / 100;
   }, [activeShiftSession, effectiveCountedCash, shiftTotals.expectedCash]);
 
   const hasVariance = Math.abs(variance) >= 0.01;
+  // Only the Owner, on their own shift, may approve the difference while closing.
+  const canApproveOwnDifference = currentUser?.role_id === 'role_super_admin' && activeShiftSession?.user_id === currentUser?.id;
+  // "Other" on its own tells the head nothing; it needs the cashier's own words.
+  const reasonOk = (() => {
+    const reason = differenceReason.trim();
+    return reason.length >= 3 && !/^other\.?$/i.test(reason);
+  })();
+  const closeBlocker = !hasCount
+    ? 'Drawer ki cash gin kar likhein.'
+    : effectiveCountedCash < effectiveLeaveInDrawer
+      ? 'Drawer mein rakhi raqam gini hui cash se zyada nahi ho sakti.'
+      : hasVariance && !reasonOk
+        ? 'Farq ki wajah likhein.'
+        : '';
 
-  // Escape key handler
+  // Escape key handler (a confirm dialog on top owns its own Escape)
   useEffect(() => {
-    if (!isOpen || isClosingDenomOpen || Boolean(detailModalTab)) return;
+    if (!isOpen || isClosingDenomOpen || isOpeningDenomOpen || Boolean(detailModalTab)) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (document.querySelector('[data-app-modal="true"]')) return;
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -267,7 +349,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isClosingDenomOpen, detailModalTab, onClose]);
+  }, [isOpen, isClosingDenomOpen, isOpeningDenomOpen, detailModalTab, onClose]);
 
   // --- Handlers ---
   const handleStartShift = async () => {
@@ -281,6 +363,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
       const ok = await startCashierShift({
         drawerId: activeAccount.id,
         openingCounted: openingAmount,
+        denominations: isEditingOpening ? openingDenominations : {},
         handoverId: pendingHandover?.id
       });
       if (ok) {
@@ -294,23 +377,46 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
   const handleCloseShift = async () => {
     if (!activeShiftSession) return;
 
-    if (effectiveCountedCash <= 0 && !countedCash.trim()) {
-      showToast('Please enter the closing counted cash amount.', 'warning');
+    if (closeBlocker) {
+      showToast(closeBlocker, 'warning');
       return;
     }
 
-    if (hasVariance && !differenceReason.trim()) {
-      showToast('A difference reason is required when counted cash does not match expected cash.', 'warning');
-      return;
+    const receiveAccount = accounts.find(a => a.id === effectiveReceiveAccountId);
+    const consequences: React.ReactNode[] = [
+      `Gini hui cash: ${money(effectiveCountedCash)} (expected ${money(shiftTotals.expectedCash)})`,
+      `Drawer mein agli shift ke liye: ${money(effectiveLeaveInDrawer)}`,
+    ];
+    if (effectiveRemitToHead > 0) {
+      consequences.push(receiveAccount
+        ? `${money(effectiveRemitToHead)} abhi "${receiveAccount.name}" mein receive ho jayenge`
+        : `${money(effectiveRemitToHead)} Head Inbox mein jayenge (accept hone tak pending)`);
     }
-
-    if (effectiveCountedCash < effectiveLeaveInDrawer) {
-      showToast('Counted cash cannot be less than the amount left in drawer.', 'warning');
-      return;
+    if (hasVariance) {
+      consequences.push(canApproveOwnDifference && approveDifferenceNow
+        ? `${variance < 0 ? 'Kami' : 'Zyada'} ${money(Math.abs(variance))} — record ho kar abhi approve ho jayega`
+        : `${variance < 0 ? 'Kami' : 'Zyada'} ${money(Math.abs(variance))} — manager review ke liye record hoga`);
     }
+    if (unfinishedCounter.cartLines > 0 || unfinishedCounter.parked > 0) {
+      consequences.push(`Cart/parked bills (${unfinishedCounter.cartLines + unfinishedCounter.parked}) is shift ki sale mein shamil nahi honge`);
+    }
+    if (pendingSyncCount > 0) {
+      consequences.push(`${pendingSyncCount} entry abhi server par nahi gayi — internet check kar lein`);
+    }
+    const confirmed = await confirmAction({
+      tone: hasVariance || pendingSyncCount > 0 ? 'warning' : 'info',
+      title: 'Shift close karein?',
+      message: 'Close ke baad is shift mein sale nahi ho sakegi. Agli sale ke liye nayi shift start karni hogi.',
+      consequences,
+      confirmLabel: 'Haan, shift close karein',
+    });
+    if (!confirmed) return;
 
     setIsClosing(true);
     try {
+      if (isHead) {
+        try { localStorage.setItem(RECEIVE_ACCOUNT_KEY, effectiveReceiveAccountId || 'inbox'); } catch {}
+      }
       const ok = await closeCashierShift({
         countedCash: effectiveCountedCash,
         leaveInDrawer: effectiveLeaveInDrawer,
@@ -320,8 +426,10 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
           leave_in_drawer: splitDenominations(closingDenominations, effectiveLeaveInDrawer),
           remit_to_head: splitDenominations(closingDenominations, effectiveRemitToHead)
         },
-        differenceReason: differenceReason.trim(),
-        notes: closeNotes.trim()
+        differenceReason: hasVariance ? differenceReason.trim() : '',
+        notes: closeNotes.trim(),
+        receiveIntoAccountId: effectiveReceiveAccountId || undefined,
+        approveDifferenceNow: hasVariance && canApproveOwnDifference && approveDifferenceNow
       });
 
       if (ok) {
@@ -398,6 +506,11 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
                 <User size={15} className="text-slate-400 shrink-0" />
                 <span>Cashier: <strong className="text-slate-900 dark:text-white font-bold">{currentUser?.name || 'Cashier'}</strong> ({currentRole?.name || 'Staff'})</span>
+                {activeShiftSession && activeShiftSession.user_id !== currentUser?.id && (
+                  <span className="rounded-full bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 text-[10px] font-black text-amber-800 dark:text-amber-300">
+                    Shift of {activeShiftSession.user_name || 'another cashier'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 shrink-0 font-mono text-[11px]">
                 <Calendar size={13} className="text-slate-400" />
@@ -468,27 +581,45 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                             <button
                               type="button"
                               onClick={() => {
-                                setOpeningCashInput(String(defaultOpeningAmount));
+                                setOpeningCashInput('');
+                                setOpeningDenominations({});
                                 setIsEditingOpening(true);
                               }}
                               className="text-xs font-bold text-lime-700 dark:text-lime-400 hover:underline px-2 py-1 cursor-pointer"
                             >
-                              Edit Counted Float
+                              Cash alag hai? Gin kar likhein
                             </button>
                           </div>
+                          <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                            Shift start karne se pehle drawer ki cash gin lein. Raqam alag ho to upar se likhein — farq manager ke review mein jayega.
+                          </p>
                         </>
                       ) : (
                         <div className="mt-3 max-w-xs mx-auto space-y-2">
-                          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300">
-                            Physical Counted Opening Cash (Rs)
-                          </label>
+                          <div className="flex items-center justify-between gap-2">
+                            <label htmlFor="shift-opening-cash" className="block text-xs font-bold text-slate-600 dark:text-slate-300">
+                              Drawer mein gini hui cash (Rs)
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsOpeningDenomOpen(true)}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-lime-100 dark:bg-lime-950/60 border border-lime-300 dark:border-lime-800 text-lime-800 dark:text-lime-300 cursor-pointer"
+                            >
+                              <Banknote size={11} /> Count notes
+                            </button>
+                          </div>
                           <div className="relative">
                             <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono font-bold text-slate-400 text-sm z-10 pointer-events-none">Rs</span>
                             <SmartNumberInput
+                              id="shift-opening-cash"
                               min="0"
                               step="1"
                               value={openingCashInput}
-                              onChange={val => setOpeningCashInput(val)}
+                              placeholder={String(defaultOpeningAmount)}
+                              onChange={val => {
+                                setOpeningCashInput(val);
+                                setOpeningDenominations({});
+                              }}
                               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-lime-400 dark:border-lime-500/60 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono font-bold text-lg text-center outline-none focus:ring-2 focus:ring-lime-500/30"
                               autoFocus
                             />
@@ -498,13 +629,19 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                               type="button"
                               onClick={() => {
                                 setOpeningCashInput('');
+                                setOpeningDenominations({});
                                 setIsEditingOpening(false);
                               }}
                               className="text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-3 py-1 cursor-pointer"
                             >
-                              Reset to Live Balance ({money(defaultOpeningAmount)})
+                              Wapas {money(defaultOpeningAmount)} rakhein
                             </button>
                           </div>
+                          {openingCashInput.trim() !== '' && Math.abs(openingAmount - defaultOpeningAmount) >= 0.01 && (
+                            <p role="status" className="text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                              {openingAmount < defaultOpeningAmount ? 'Kami' : 'Zyada'} {money(Math.abs(openingAmount - defaultOpeningAmount))} — manager review ke liye record hoga.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -526,12 +663,20 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                     {/* Single 1-Click Action Button */}
                     <button
                       type="button"
-                      disabled={isStarting || !activeAccount || Boolean(drawerActiveShift)}
+                      disabled={isStarting || !activeAccount || Boolean(drawerActiveShift) || (isEditingOpening && openingCashInput.trim() === '')}
                       onClick={handleStartShift}
                       className="w-full inline-flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl bg-lime-500 hover:bg-lime-400 active:scale-[0.99] text-slate-950 font-black text-sm shadow-lg shadow-lime-500/25 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
                     >
                       <CheckCircle2 size={18} />
-                      <span>{drawerActiveShift ? 'Close Active Shift First' : isStarting ? 'Starting Shift...' : 'Start Shift'}</span>
+                      <span>
+                        {drawerActiveShift
+                          ? 'Close Active Shift First'
+                          : isStarting
+                            ? 'Starting Shift...'
+                            : isEditingOpening
+                              ? (openingCashInput.trim() === '' ? 'Gini hui cash likhein' : `Start Shift with ${money(openingAmount)}`)
+                              : `Cash ${money(openingAmount)} theek hai — Start Shift`}
+                      </span>
                     </button>
                   </>
                 )}
@@ -566,16 +711,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                         1. Count your physical cash
                       </label>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCountedCash(String(shiftTotals.expectedCash));
-                            setClosingDenominations({});
-                          }}
-                          className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-200/80 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 cursor-pointer"
-                        >
-                          Use expected
-                        </button>
+                        {/* No "use expected" shortcut: the close is only worth something when the cash is really counted. */}
                         <button
                           type="button"
                           onClick={() => setIsClosingDenomOpen(true)}
@@ -613,16 +749,19 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                       <SmartNumberInput
                         id="shift-leave-cash"
                         min="0"
-                        value={leaveInDrawer}
-                        onChange={val => setLeaveInDrawer(val)}
+                        value={leaveTouched ? leaveInDrawer : String(effectiveLeaveInDrawer)}
+                        onChange={val => {
+                          setLeaveTouched(true);
+                          setLeaveInDrawer(val);
+                        }}
                         className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold text-slate-900 dark:text-white focus:border-emerald-500 outline-hidden"
-                        placeholder="5000"
+                        placeholder={String(defaultLeave)}
                       />
                     </div>
                     <p className="text-[11px] text-slate-400 mt-1">
-                      This amount will remain in the drawer as the opening float for the next shift.
+                      This stays in the drawer as the next shift's opening cash{leaveTouched ? '' : ` (default ${money(defaultLeave)})`}.
                     </p>
-                    {(countedCash.trim() !== '' || closingDenomTotal > 0) && effectiveCountedCash < effectiveLeaveInDrawer && (
+                    {hasCount && effectiveCountedCash < effectiveLeaveInDrawer && (
                       <p role="alert" className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-400">Keep an amount equal to or below your counted cash.</p>
                     )}
                   </div>
@@ -651,17 +790,39 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                     </div>
                   </div>
 
-                  {effectiveRemitToHead > 0 && (
+                  {effectiveRemitToHead > 0 && (isHead ? (
+                    <div>
+                      <label htmlFor="shift-receive-account" className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        3. Receive {money(effectiveRemitToHead)} into
+                      </label>
+                      <select
+                        id="shift-receive-account"
+                        value={effectiveReceiveAccountId || 'inbox'}
+                        onChange={e => setReceiveAccountId(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-emerald-500 cursor-pointer"
+                      >
+                        {receivingAccounts.map(acc => (
+                          <option key={acc.id} value={acc.id}>{acc.name} ({acc.type})</option>
+                        ))}
+                        <option value="inbox">Keep pending in Head Inbox</option>
+                      </select>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        {effectiveReceiveAccountId
+                          ? 'Aap head hain — cash close ke sath hi is account mein aa jayegi.'
+                          : 'Cash "in transit" rahegi jab tak Cash Control → Head Inbox se accept na ho.'}
+                      </p>
+                    </div>
+                  ) : (
                     <p className="text-[11px] font-bold text-violet-600 dark:text-violet-400 flex items-start gap-1.5">
                       <Info size={13} className="shrink-0 mt-0.5" />
                       <span>
                         Sent to head office when you close. Pending until they accept it.
                       </span>
                     </p>
-                  )}
+                  ))}
 
                   {/* Variance Indicator & Difference Reason */}
-                  {(countedCash.trim() !== '' || closingDenomTotal > 0) && (
+                  {hasCount && (
                     <div>
                       {!hasVariance ? (
                         <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center gap-2 text-xs font-bold text-emerald-800 dark:text-emerald-300">
@@ -689,23 +850,48 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                               type="text"
                               value={differenceReason}
                               onChange={e => setDifferenceReason(e.target.value)}
-                              placeholder="Reason for cash difference..."
+                              placeholder="Kya hua? e.g. Rs 500 ka khula galat diya"
                               className="w-full px-3 py-2 text-xs rounded-lg border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:border-rose-500 outline-hidden"
                             />
-                            
-                            {/* Quick reason suggestions */}
+
+                            {/* Quick reason suggestions — "Other" means typing your own reason */}
                             <div className="flex flex-wrap gap-1 mt-1.5">
-                              {QUICK_DIFFERENCE_REASONS.map((r, idx) => (
+                              {QUICK_DIFFERENCE_REASONS.map(r => (
                                 <button
-                                  key={idx}
+                                  key={r}
                                   type="button"
+                                  aria-pressed={differenceReason === r}
                                   onClick={() => setDifferenceReason(r)}
-                                  className="text-[10px] px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800/60 text-slate-700 dark:text-slate-300 hover:border-rose-400 cursor-pointer"
+                                  className={`text-[10px] px-2 py-0.5 rounded-md border cursor-pointer ${differenceReason === r ? 'bg-rose-600 border-rose-600 text-white' : 'bg-white dark:bg-slate-900 border-rose-200 dark:border-rose-800/60 text-slate-700 dark:text-slate-300 hover:border-rose-400'}`}
                                 >
                                   {r}
                                 </button>
                               ))}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDifferenceReason('');
+                                  document.getElementById('shift-difference-reason')?.focus();
+                                }}
+                                className="text-[10px] px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800/60 text-slate-700 dark:text-slate-300 hover:border-rose-400 cursor-pointer"
+                              >
+                                Other — likhein
+                              </button>
                             </div>
+                            {differenceReason.trim() !== '' && !reasonOk && (
+                              <p role="alert" className="mt-1 text-[11px] font-medium text-rose-700 dark:text-rose-300">Wajah thori wazeh likhein — sirf "Other" kaafi nahi.</p>
+                            )}
+                            {canApproveOwnDifference && (
+                              <label className="mt-2 flex items-start gap-2 text-[11px] text-rose-900 dark:text-rose-200 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={approveDifferenceNow}
+                                  onChange={e => setApproveDifferenceNow(e.target.checked)}
+                                  className="mt-0.5 accent-rose-600"
+                                />
+                                <span>Farq abhi approve karein (aap owner hain). Warna Audit Trail mein review ke liye pending rahega aur din close nahi hoga.</span>
+                              </label>
+                            )}
                           </div>
                         </div>
                       )}
@@ -727,11 +913,23 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                     />
                   </div>
 
+                  {/* Things that will not be part of this shift if it closes now */}
+                  {(pendingSyncCount > 0 || unfinishedCounter.cartLines > 0 || unfinishedCounter.parked > 0) && (
+                    <div role="status" className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-0.5">
+                      {unfinishedCounter.cartLines > 0 && <p>Cart mein {unfinishedCounter.cartLines} item hain — pehle bill karein ya cart khali karein.</p>}
+                      {unfinishedCounter.parked > 0 && <p>{unfinishedCounter.parked} parked bill hain — ye is shift ki sale mein nahi ginay jayenge.</p>}
+                      {pendingSyncCount > 0 && <p>{pendingSyncCount} entry abhi server par nahi gayi. Internet check karein.</p>}
+                    </div>
+                  )}
+
                   {/* Submit Button */}
+                  {closeBlocker && hasCount && (
+                    <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{closeBlocker}</p>
+                  )}
                   <button
                     type="button"
                     // A count of 0 is allowed once it is typed (an honest empty drawer); a blank field is not a count.
-                    disabled={isClosing || effectiveCountedCash < 0 || (closingDenomTotal <= 0 && countedCash.trim() === '') || effectiveCountedCash < effectiveLeaveInDrawer || (hasVariance && !differenceReason.trim())}
+                    disabled={isClosing || Boolean(closeBlocker)}
                     onClick={handleCloseShift}
                     className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-black text-sm shadow-md shadow-emerald-500/15 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
                   >
@@ -772,6 +970,19 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
         }}
         title="Closing Cash Denominations"
         subtitle="Enter physical count for closing cash"
+      />
+
+      {/* Opening Cash Denomination Counter */}
+      <DenominationDialog
+        open={isOpeningDenomOpen}
+        onClose={() => setIsOpeningDenomOpen(false)}
+        value={openingDenominations}
+        onChange={setOpeningDenominations}
+        onApply={total => {
+          setOpeningCashInput(String(total));
+        }}
+        title="Opening Cash Denominations"
+        subtitle="Drawer ke notes gin kar likhein"
       />
 
       {/* Interactive Shift Activity & Breakdown Dialog (Bills, Sales, Collections, Expenses) */}

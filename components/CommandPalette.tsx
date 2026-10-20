@@ -4,7 +4,7 @@ import { useDairy } from '../context/DairyContext';
 import { useTabs } from '../context/TabContext';
 import {
   Search, LayoutDashboard, ShoppingCart, GitBranch, Factory, Package,
-  Archive, Users, Truck, Receipt, Wallet, Landmark, FileText, Settings,
+  Archive, Users, Truck, Receipt, Wallet, Landmark, Settings, BarChart3,
   Store, History, ClipboardCheck, Moon, Sun, Plus, ArrowRight, CornerDownLeft
 } from 'lucide-react';
 import { formatCurrency } from '../lib/formatters';
@@ -186,10 +186,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       },
       {
         id: 'nav-reports',
-        title: 'Financial Reports & Audits',
-        subtitle: 'P&L, balance sheet, trial balance and audit logs',
+        title: 'Reports Centre',
+        subtitle: 'Sales, profit, khata, milk, stock and cash reports',
         category: 'Navigation',
-        icon: FileText,
+        icon: BarChart3,
         action: () => { openTab('reports'); onClose(); }
       },
       {

@@ -54,10 +54,17 @@ const Accounts: React.FC = () => {
     purchases, materialPurchases, sales, dailySupplyEntries, expenses, expenseVendors,
     bankTransactions, manualAccounts, addManualAccount, deleteManualAccount, updateManualAccount,
     addAccount, 
-    addJournalEntry, journalEntries
+    addJournalEntry, journalEntries,
+    canPerform
   } = useDairy();
-  
+
   const { showToast } = useToast();
+  const canCreate = canPerform('accounts', 'create');
+  const denyIfNoAccess = () => {
+    if (canCreate) return false;
+    showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+    return true;
+  };
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -291,6 +298,7 @@ const Accounts: React.FC = () => {
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (denyIfNoAccess()) return;
     if (!newAccount.name?.trim() || isSubmitting) return;
     
     const isCashOrBank = newAccount.parentId === '1100' || (!newAccount.parentId && newAccount.type === 'Asset' && (
@@ -328,11 +336,13 @@ const Accounts: React.FC = () => {
   };
 
   const handleOpenAddSub = (parent: COANode) => {
+    if (denyIfNoAccess()) return;
     setNewAccount({ name: '', type: parent.type, balance: 0, description: '', parentId: parent.id, isActive: true });
     setIsAddOpen(true);
   };
 
   const handleDelete = async (node: COANode) => {
+    if (denyIfNoAccess()) return;
     if (node.isSystem) { showToast(`System account delete nahi ho sakta.`, 'warning'); return; }
     if (node.children && node.children.length > 0) { showToast("Is account ke neeche sub-accounts hain, pehle unhein hatayen.", 'error'); return; }
 
@@ -354,6 +364,7 @@ const Accounts: React.FC = () => {
 
   const toggleActiveStatus = (node: COANode) => {
      if (node.isSystem) return;
+     if (denyIfNoAccess()) return;
      const newStatus = !node.isActive;
      updateManualAccount(node.id, { isActive: newStatus });
      showToast(`Account ${newStatus ? "Active" : "Inactive"} kar diya gaya`, "info");
@@ -396,6 +407,7 @@ const Accounts: React.FC = () => {
   };
 
   const handlePostJournal = async () => {
+    if (denyIfNoAccess()) return;
     if (!isBalanced) { showToast("Journal entry balance nahi: Debit aur Credit barabar hone chahiyen", "error"); return; }
     if (journalLines.some(l => !l.accountId)) { showToast("Har line mein account chunein", "error"); return; }
     if (isSubmittingJournal) return;
@@ -529,7 +541,7 @@ const Accounts: React.FC = () => {
               {node.balance < 0 ? `(${formatMoneyRaw(Math.abs(node.balance))})` : `${formatCurrency(node.balance)}`}
             </div>
 
-            {!isHeader && (
+            {!isHeader && canCreate && (
               <div className="flex items-center gap-0.5">
                 {/* Add sub-account */}
                 {(node.isGroup || !node.isSystem || ['inc_sales_group'].includes(node.id)) && (
@@ -647,15 +659,15 @@ const Accounts: React.FC = () => {
                   )}
                </div>
 
-               <button 
-                 onClick={() => { 
-                   setNewAccount({ name: '', type: 'Liability', balance: 0, description: '', parentId: '', isActive: true }); 
-                   setIsAddOpen(true); 
-                 }} 
+               {canCreate && <button
+                 onClick={() => {
+                   setNewAccount({ name: '', type: 'Liability', balance: 0, description: '', parentId: '', isActive: true });
+                   setIsAddOpen(true);
+                 }}
                  className="bg-lime-600 hover:bg-lime-700 text-white px-3.5 py-2 rounded-xl font-bold text-xs shadow-xs flex items-center gap-1.5 transition-all active:scale-95 shrink-0 cursor-pointer"
                >
                   <Plus size={14} /> <span>New Account</span>
-               </button>
+               </button>}
             </div>
             
             {/* COA Tree Container */}
@@ -792,9 +804,10 @@ const Accounts: React.FC = () => {
 
                   <button 
                      onClick={handlePostJournal}
-                     disabled={!isBalanced || totalDebit === 0 || isSubmittingJournal}
+                     disabled={!canCreate || !isBalanced || totalDebit === 0 || isSubmittingJournal}
+                     title={!canCreate ? 'Aap ko journal entry post karne ki ijazat nahi hai' : undefined}
                      className={`w-full py-2.5 rounded-xl font-bold text-xs sm:text-sm text-white shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                        isBalanced && totalDebit > 0 && !isSubmittingJournal ? 'bg-lime-600 hover:bg-lime-700' : 'bg-slate-300 cursor-not-allowed shadow-none'
+                        canCreate && isBalanced && totalDebit > 0 && !isSubmittingJournal ? 'bg-lime-600 hover:bg-lime-700' : 'bg-slate-300 cursor-not-allowed shadow-none'
                      }`}
                   >
                      {isSubmittingJournal ? (

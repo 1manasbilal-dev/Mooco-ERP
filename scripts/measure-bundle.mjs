@@ -24,8 +24,7 @@ function size(files) {
   }, { bytes: 0, gzipBytes: 0 });
 }
 const assets = fs.readdirSync(path.join(dir, 'assets'));
-const reports = assets.find(file => /^Reports-.*\.js$/.test(file));
-const result = { entryJavaScript: { files: [...visited], ...size([...visited]) }, reportsPage: size([`assets/${reports}`]), totalJavaScript: size(assets.filter(file => file.endsWith('.js')).map(file => `assets/${file}`)) };
+const result = { entryJavaScript: { files: [...visited], ...size([...visited]) }, totalJavaScript: size(assets.filter(file => file.endsWith('.js')).map(file => `assets/${file}`)) };
 const output = process.argv[2] || 'screenshots/global-theme/bundle-after.json';
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, JSON.stringify(result, null, 2));

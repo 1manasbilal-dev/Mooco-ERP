@@ -15,7 +15,6 @@ import {
   Truck,
   Receipt,
   Wallet,
-  FileText,
   Settings,
   Lock,
   ChevronDown,
@@ -24,6 +23,7 @@ import {
   ClipboardCheck,
   History,
   Landmark,
+  BarChart3,
   LogOut,
   X,
   PanelLeftClose,
@@ -103,13 +103,13 @@ const MENU_ITEMS: NavItem[] = [
   { type: "section", label: "Finance & Accounts" },
   { id: "bank-cash", label: "Bank & Cash", icon: Wallet, type: "link" },
   { id: "accounts", label: "Chart of Accounts", icon: Landmark, type: "link" },
-  { id: "reports", label: "Reports & Audits", icon: FileText, type: "link" },
+  { id: "reports", label: "Reports Centre", icon: BarChart3, type: "link" },
 ];
 
 const ACCENTS: Record<string, string> = {
   dashboard: 'lime', 'sale-group': 'amber', 'procurement-group': 'cyan', purchase: 'cyan', 'purchase-supplies': 'cyan', 'purchase-details': 'cyan', allocation: 'cyan',
   production: 'violet', inventory: 'cyan', items: 'violet', customers: 'violet',
-  suppliers: 'violet', expenses: 'rose', 'bank-cash': 'cyan', accounts: 'amber', reports: 'violet',
+  suppliers: 'violet', expenses: 'rose', 'bank-cash': 'cyan', accounts: 'amber', reports: 'lime',
 };
 const permissionFor = (id = '') => ({
   'sales-history': 'sales_history', 'retail-stock': 'retail_stock',

@@ -14,9 +14,11 @@ const MotionDiv = motion.div as any;
 const UserSwitcherModal: React.FC = () => {
   const navigate = useNavigate();
   const {
-    currentUser, users, roles, isUserSwitcherOpen,
+    currentUser, users, roles, isUserSwitcherOpen, isTerminalLocked,
     setIsUserSwitcherOpen, loginWithCredentials, switchUserByIdAndPin
   } = useDairy();
+  // An idle-locked terminal only opens with a PIN.
+  const canDismiss = !!currentUser && !isTerminalLocked;
   const { showToast } = useToast();
 
   const [mode, setMode] = useState<'select' | 'pin' | 'form'>('select');
@@ -171,7 +173,7 @@ const UserSwitcherModal: React.FC = () => {
           className="absolute inset-0 bg-slate-950/75 backdrop-blur-md"
           onClick={() => {
             // Only allow closing if there's already an active logged-in user
-            if (currentUser) setIsUserSwitcherOpen(false);
+            if (canDismiss) setIsUserSwitcherOpen(false);
           }}
         />
 
@@ -206,7 +208,7 @@ const UserSwitcherModal: React.FC = () => {
               </div>
             </div>
 
-            {currentUser && (
+            {canDismiss && (
               <button
                 type="button"
                 onClick={() => setIsUserSwitcherOpen(false)}

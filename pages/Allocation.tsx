@@ -35,8 +35,10 @@ interface AllocateModalData {
 }
 
 const Allocation: React.FC = () => {
-  const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, items, inventory, suppliers } = useDairy();
+  const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, items, inventory, suppliers, canPerform } = useDairy();
   const { showToast } = useToast();
+  const canCreate = canPerform('allocation', 'create');
+  const canStartBatch = canPerform('production', 'create');
   const location = useLocation();
   const navigate = useNavigate();
   
@@ -293,6 +295,10 @@ const Allocation: React.FC = () => {
   const isSubmittingAllocRef = useRef(false);
 
   const handleProcessAllocation = async () => {
+    if (!canCreate) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     if (cart.length === 0 || isSubmitting || isSubmittingAllocRef.current) {
       if (cart.length === 0) showToast("Allocation cart is empty", "warning");
       return;
@@ -305,6 +311,11 @@ const Allocation: React.FC = () => {
 
     if (activeSource === 'retail' && destination === DestinationType.RETAIL) {
       showToast("Cannot allocate from Retail Stock back to Retail Counter.", "warning");
+      return;
+    }
+
+    if (destination === DestinationType.PRODUCTION && !canStartBatch) {
+      showToast("Aap ko production batch shuru karne ki ijazat nahi hai.", "warning");
       return;
     }
 
@@ -926,12 +937,14 @@ const Allocation: React.FC = () => {
             {(() => {
               const isInvalidProduction = destination === DestinationType.PRODUCTION && !selectedProduct;
               const isInvalidRetail = activeSource === 'retail' && destination === DestinationType.RETAIL;
-              const canConfirm = cart.length > 0 && !isSubmitting && totalVolume > 0 && !isInvalidProduction && !isInvalidRetail;
+              const isBatchBlocked = destination === DestinationType.PRODUCTION && !canStartBatch;
+              const canConfirm = canCreate && !isBatchBlocked && cart.length > 0 && !isSubmitting && totalVolume > 0 && !isInvalidProduction && !isInvalidRetail;
 
               return (
                 <button 
                   onClick={handleProcessAllocation}
                   disabled={!canConfirm}
+                  title={!canCreate ? 'Aap ko allocation ki ijazat nahi hai' : isBatchBlocked ? 'Aap ko production batch shuru karne ki ijazat nahi hai' : undefined}
                   className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm text-white flex items-center justify-center gap-2 shadow-sm transition-all active:scale-[0.98] ${
                     canConfirm
                       ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-200 cursor-pointer' 

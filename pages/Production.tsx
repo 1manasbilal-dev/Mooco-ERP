@@ -20,8 +20,9 @@ import { convertQuantity } from '../lib/unitConversion';
 const MotionDiv = motion.div as any;
 
 const Production: React.FC = () => {
-  const { productionBatches, updateBatchStage, cancelBatch, items, allocations, settings, isDayLocked, getBusinessDate } = useDairy();
+  const { productionBatches, updateBatchStage, cancelBatch, items, allocations, settings, isDayLocked, getBusinessDate, canPerform } = useDairy();
   const { showToast } = useToast();
+  const canEdit = canPerform('production', 'edit');
   const location = useLocation();
   const navigate = useNavigate();
   
@@ -336,6 +337,10 @@ const Production: React.FC = () => {
   }, [selectedBatch?.id]);
 
   const handleStageUpdate = (batch: ProductionBatch, nextStage: ProductionStage) => {
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     if (nextStage === ProductionStage.COMPLETED) {
        setSelectedBatch(batch);
        return;
@@ -347,6 +352,12 @@ const Production: React.FC = () => {
 
   const handleDropOnColumn = (targetStageId: string) => {
     if (!draggedBatchId) return;
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      setDraggedBatchId(null);
+      setDragOverColumnId(null);
+      return;
+    }
     const batch = productionBatches.find(b => b.id === draggedBatchId);
     if (!batch) return;
 
@@ -392,7 +403,11 @@ const Production: React.FC = () => {
 
   const handleCompleteBatch = async () => {
     if (!selectedBatch || isSubmitting || isCompletingRef.current) return;
-    
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
+
     isCompletingRef.current = true;
     setIsSubmitting(true);
     
@@ -434,6 +449,10 @@ const Production: React.FC = () => {
 
   const handleCancelBatch = async () => {
     if (!selectedBatch || !cancelReason || isSubmitting) return;
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     setIsSubmitting(true);
     try {
       await cancelBatch(selectedBatch.id, cancelReason);
@@ -462,7 +481,7 @@ const Production: React.FC = () => {
     return (
       <div 
         key={batch.id}
-        draggable
+        draggable={canEdit}
         onDragStart={(e) => {
           e.dataTransfer.setData('text/plain', batch.id);
           setDraggedBatchId(batch.id);
@@ -487,7 +506,7 @@ const Production: React.FC = () => {
             <div className="flex items-center gap-1.5">
               {/* Touch & Mouse Drag Handle */}
               <div 
-                onTouchStart={() => setDraggedBatchId(batch.id)}
+                onTouchStart={() => { if (canEdit) setDraggedBatchId(batch.id); }}
                 onTouchMove={(e) => handleTouchMove(e, batch.id)}
                 onTouchEnd={() => handleTouchEnd(batch.id)}
                 className="text-slate-400 hover:text-slate-600 p-1 -ml-1 rounded-md touch-none cursor-grab active:cursor-grabbing hover:bg-slate-100 transition-colors"
@@ -573,6 +592,8 @@ const Production: React.FC = () => {
                             handleStageUpdate(batch, col.id as ProductionStage);
                           }
                         }}
+                        disabled={!canEdit && !isCurrent}
+                        title={!canEdit ? 'Aap ko batch stage badalne ki ijazat nahi hai' : undefined}
                         className={`py-1.5 px-1 rounded-lg text-[10px] font-bold transition-all text-center border cursor-pointer ${
                           isCurrent 
                             ? 'bg-slate-900 text-white border-slate-900 shadow-2xs font-black' 
@@ -597,7 +618,7 @@ const Production: React.FC = () => {
                   className="flex-1 bg-lime-600 hover:bg-lime-700 text-white py-1.5 px-2 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 cursor-pointer"
                 >
                   <Package size={13} />
-                  <span>{batch.status === ProductionStage.PACKAGING ? 'Complete Batch' : 'Batch Details'}</span>
+                  <span>{canEdit && batch.status === ProductionStage.PACKAGING ? 'Complete Batch' : 'Batch Details'}</span>
                 </button>
               </div>
             </MotionDiv>
@@ -611,8 +632,8 @@ const Production: React.FC = () => {
               {batch.status === ProductionStage.PROCESSING ? 'Start' : batch.status === ProductionStage.QUALITY ? 'Processing' : 'Finish'}
             </span>
 
-            {nextStageId && (
-              <button 
+            {nextStageId && canEdit && (
+              <button
                 onClick={(e) => {
                   e.stopPropagation();
                   if (nextStageId === ProductionStage.COMPLETED) {
@@ -1027,7 +1048,7 @@ const Production: React.FC = () => {
                   )}
 
                   {/* 3. Completion Controls */}
-                  {selectedBatch.status !== ProductionStage.COMPLETED && selectedBatch.status !== ProductionStage.CANCELLED && (
+                  {canEdit && selectedBatch.status !== ProductionStage.COMPLETED && selectedBatch.status !== ProductionStage.CANCELLED && (
                       <div className="space-y-3 pt-2 border-t border-slate-100">
                           {isCancelMode ? (
                               <div className="bg-rose-50 p-3.5 rounded-2xl border border-rose-200 space-y-2.5">

@@ -30,7 +30,7 @@ export const MODULE_METADATA: Record<string, { title: string; iconName: string; 
   'expenses': { title: 'Expenses & Vendors', iconName: 'Receipt', module: 'expenses', section: 'Parties & Ledgers' },
   'bank-cash': { title: 'Bank & Cash', iconName: 'Wallet', module: 'bank_cash', section: 'Finance & Accounts' },
   'accounts': { title: 'Chart of Accounts', iconName: 'Landmark', module: 'accounts', section: 'Finance & Accounts' },
-  'reports': { title: 'Reports & Audits', iconName: 'FileText', module: 'reports', section: 'Finance & Accounts' },
+  'reports': { title: 'Reports Centre', iconName: 'BarChart3', module: 'reports', section: 'Finance & Accounts' },
   'settings': { title: 'Settings', iconName: 'Settings', module: 'settings', section: 'System' },
 };
 

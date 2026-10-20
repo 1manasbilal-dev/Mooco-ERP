@@ -181,6 +181,7 @@ export const PosReceiptModal: React.FC<PosReceiptModalProps> = ({
               <h2 className="font-black text-base uppercase tracking-tight">{settings?.general?.companyName || 'Mooco Dairy'}</h2>
               <p className="text-[10px] text-slate-500">{settings?.general?.address || 'Counter POS'}</p>
               <p className="text-[10px] text-slate-500">Ph: {settings?.general?.phone || 'N/A'}</p>
+              {settings?.general?.taxId && <p className="text-[10px] text-slate-500">NTN: {settings.general.taxId}</p>}
             </div>
 
             <div className="space-y-1 text-[11px] border-b border-dashed border-slate-300 pb-3">
@@ -228,7 +229,7 @@ export const PosReceiptModal: React.FC<PosReceiptModalProps> = ({
             </div>
 
             <div className="text-center pt-2 border-t border-dashed border-slate-300 text-[10px] text-slate-500">
-              Thank you for your visit!
+              {settings?.sales?.invoiceFooter || 'Thank you for your visit!'}
             </div>
           </div>
 

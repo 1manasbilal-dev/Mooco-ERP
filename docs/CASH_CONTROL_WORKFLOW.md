@@ -35,8 +35,21 @@ accountable from the moment a drawer opens until the day is closed.
      - **Remit to head** → goes to the **Head Inbox** as a *pending remittance*
        and the amount **leaves the drawer account at submit time** (drawer balance
        −remit + `Transfer_Out` ledger row, done inside `cash_control_close_shift`).
-   - Count ≠ expected → difference reason is mandatory; shift goes to
-     `Pending Review` and an open variance is created.
+   - Count ≠ expected → difference reason is mandatory (a bare "Other" is
+     not accepted); shift goes to `Pending Review` and an open variance is created.
+   - There is no "use expected" shortcut: the closing cash must be counted.
+   - "Keep in drawer" defaults to the drawer's default float, capped at the count.
+   - A confirm step lists the split, the difference, and anything that will not be
+     part of the shift (cart lines, parked bills, entries not yet synced).
+   - **Head closing a shift**: the remitted cash is received straight into the
+     chosen account (`cash_control_accept_remittance` right after the close), so it
+     never waits in Head Inbox for the same person. "Keep pending in Head Inbox"
+     is still an option. The **Owner** closing their own shift can also approve
+     the difference in the same step, so the day is not left blocked.
+
+   **Whose shift a user sells on**: their own open shift only. The Owner (Super
+   Admin) may sell on another cashier's shift that is open today; POS shows
+   "<name>'s shift" in that case. A cashier never posts bills into a colleague's drawer.
 
 4. **Head acceptance (next actions)**
    - Head/Manager recounts a remittance in the Head Inbox, selects a receiving

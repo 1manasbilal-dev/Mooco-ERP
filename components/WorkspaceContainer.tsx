@@ -85,7 +85,7 @@ interface ModuleContentProps {
 // sale or a sync only re-renders the page on screen; they catch up when reopened.
 const WorkspacePane = memo(({ isVisible, ...content }: ModuleContentProps & { isVisible: boolean }) => {
   const isPos = content.tab.id === 'pos';
-  const isContained = isPos || content.tab.id === 'reports';
+  const isContained = isPos;
 
   return (
     <div

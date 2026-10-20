@@ -385,15 +385,20 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
             type="button"
             onClick={() => setIsShiftModalOpen(true)}
             className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 hover:bg-lime-50 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-lime-400 dark:hover:border-lime-600 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-            title="Shift Active - Click to reconcile or close shift"
+            title={`Shift open${activeShiftSession.user_id !== currentUser?.id ? ` (${activeShiftSession.user_name})` : ''} · opening ${formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))} — click to see cash or close the shift`}
           >
             <span className="w-2 h-2 rounded-full bg-lime-500 animate-pulse shrink-0" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-100 max-w-[90px] truncate">
-              {activeShiftSession.shift_name || 'Shift'}
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-100 max-w-[110px] truncate">
+              {activeShiftSession.user_id !== currentUser?.id
+                ? `${activeShiftSession.user_name || 'Cashier'}'s shift`
+                : 'Shift open'}
             </span>
-            <span className="hidden sm:inline text-xs font-mono text-slate-500 dark:text-slate-400">
-              {formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))}
-            </span>
+            {activeShiftSession.started_at && !Number.isNaN(new Date(activeShiftSession.started_at).getTime()) && (
+              <span className="hidden sm:inline text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                since {new Date(activeShiftSession.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            <span className="hidden md:inline text-[10px] font-bold text-lime-700 dark:text-lime-400">Cash &amp; close</span>
           </button>
         ) : (
           <button

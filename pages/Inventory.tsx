@@ -16,8 +16,9 @@ import { itemStockValue } from '../lib/stockProfit';
 const MotionDiv = motion.div as any;
 
 const Inventory: React.FC = () => {
-  const { inventory, inventoryLogs, adjustStock, items } = useDairy();
+  const { inventory, inventoryLogs, adjustStock, items, canPerform } = useDairy();
   const { showToast } = useToast();
+  const canEdit = canPerform('inventory', 'edit');
   const location = useLocation();
   const navigate = useNavigate();
   
@@ -56,6 +57,7 @@ const Inventory: React.FC = () => {
   }, [location.search]);
 
   const openAudit = (tab: 'adjust' | 'history' = 'adjust', itemId: string = '') => {
+    if (!canEdit) tab = 'history';
     setIsAuditOpen(true);
     setActiveTab(tab);
     setSelectedItemId(itemId);
@@ -182,6 +184,10 @@ const Inventory: React.FC = () => {
 
   const handleAdjustSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     if (!selectedItemId || physicalCount === '' || isSubmitting) return;
     const newQty = parseFloat(physicalCount);
     if (isNaN(newQty) || newQty < 0) {
@@ -746,7 +752,7 @@ const Inventory: React.FC = () => {
                </div>
                
                <div className="flex border-b border-slate-200 shrink-0 bg-white">
-                  <button onClick={() => switchAuditTab('adjust')} className={`flex-1 py-3 text-xs sm:text-sm font-bold border-b-2 transition-all ${activeTab === 'adjust' ? 'border-blue-600 text-blue-700 bg-blue-50/40' : 'text-slate-400 hover:text-slate-600 border-transparent'}`}>New Adjustment</button>
+                  <button onClick={() => switchAuditTab('adjust')} disabled={!canEdit} title={!canEdit ? 'Aap ko stock adjust karne ki ijazat nahi hai' : undefined} className={`flex-1 py-3 text-xs sm:text-sm font-bold border-b-2 transition-all ${activeTab === 'adjust' ? 'border-blue-600 text-blue-700 bg-blue-50/40' : 'text-slate-400 hover:text-slate-600 border-transparent'}`}>New Adjustment</button>
                   <button onClick={() => switchAuditTab('history')} className={`flex-1 py-3 text-xs sm:text-sm font-bold border-b-2 transition-all ${activeTab === 'history' ? 'border-blue-600 text-blue-700 bg-blue-50/40' : 'text-slate-400 hover:text-slate-600 border-transparent'}`}>Audit History ({inventoryLogs.length})</button>
                </div>
 
@@ -883,9 +889,10 @@ const Inventory: React.FC = () => {
                   <div className="p-4 sm:p-6 border-t border-slate-100 bg-white shrink-0">
                      <button 
                        onClick={handleAdjustSubmit} 
-                       disabled={!selectedItemId || physicalCount === '' || isSubmitting} 
+                       disabled={!canEdit || !selectedItemId || physicalCount === '' || isSubmitting}
+                       title={!canEdit ? 'Aap ko stock adjust karne ki ijazat nahi hai' : undefined}
                        className={`w-full py-3.5 rounded-xl font-bold text-xs sm:text-sm text-white shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 ${
-                         !selectedItemId || physicalCount === '' || isSubmitting
+                         !canEdit || !selectedItemId || physicalCount === '' || isSubmitting
                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' 
                            : 'bg-lime-600 hover:bg-lime-700 shadow-lime-600/20'
                        }`}

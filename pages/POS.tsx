@@ -26,6 +26,7 @@ import {
   PosEditItemModal 
 } from '../components/pos/PosModals';
 import { confirmAction } from '../components/ui/ConfirmDialog';
+import { useManagerApproval } from '../components/ui/ManagerApproval';
 
 /** Packs of one packed variant already sitting in the cart, excluding one line. Packed twin of reservedBaseQty. */
 const reservedPackedQty = (cart: any[], productId: string, variantId: string, exceptCartItemId?: string): number => cleanQty(cart
@@ -37,7 +38,8 @@ const POS: React.FC = () => {
     inventory, customers, addSale, addCustomer, items, sales, settings, accounts,
     currentUser, activeShiftSession, isDayLocked, getBusinessDate, setIsUserSwitcherOpen, retryLoading, canPerform, hasPermission
   } = useDairy();
-  const { showToast } = useToast(); 
+  const { showToast } = useToast();
+  const { requestApproval, approvalDialog } = useManagerApproval(); 
   const navigate = useNavigate(); 
   const location = useLocation();
   const bookingId = new URLSearchParams(location.search).get('order');
@@ -624,6 +626,8 @@ const POS: React.FC = () => {
           void checkoutRef.current();
         }
       } else if (e.key === 'Escape') {
+        // A confirm dialog on top (e.g. "close shift?") handles its own Escape.
+        if (document.querySelector('[data-app-modal="true"]')) return;
         if (customerDropdownOpen) {
           setCustomerDropdownOpen(false);
         } else if (editingCartItem) {
@@ -1108,6 +1112,27 @@ const POS: React.FC = () => {
       return false;
     }
 
+    // Discounts (bill discount plus line price cuts) need the discount right and stay within the
+    // owner's limit; otherwise a manager approves with their PIN. Order discounts were set when booking.
+    const billDiscount = roundCurrency(discountAmount + totalItemDiscount);
+    if (!bookingId && billDiscount > 0 && currentUser?.role_id !== 'role_super_admin') {
+      const gross = roundCurrency(subtotal + totalItemDiscount);
+      const percent = gross > 0 ? (billDiscount / gross) * 100 : 0;
+      const limit = settings.security?.maxDiscountPercent;
+      const mayDiscount = canPerform('pos', 'discount');
+      const overLimit = typeof limit === 'number' && percent > limit + 0.01;
+      if (!mayDiscount || overLimit) {
+        const summary = `Discount ${formatCurrency(billDiscount)} (${percent.toFixed(1)}%)`;
+        const approvedBy = await requestApproval({
+          permission: 'approvals:discount',
+          title: 'Discount ke liye manager approval',
+          reason: mayDiscount ? `${summary} — aap ki limit ${limit}% hai.` : `${summary} — aap ko discount dene ki ijazat nahi.`,
+        });
+        if (!approvedBy) return false;
+        showToast(`Discount ${approvedBy} ne approve kiya.`, 'success');
+      }
+    }
+
     // A walk-in has no khata, so a short cash payment would leave the unpaid part recorded nowhere.
     if (!selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal) {
       showToast(`${formatCurrency(roundCurrency(grandTotal - cashGiven))} kam hain. Poori raqam lein ya customer select karein taake baqi khaate mein jaye.`, 'warning');
@@ -1125,7 +1150,7 @@ const POS: React.FC = () => {
 
     const customer = (customers || []).find(c => c.id === selectedCustomerId);
     const customerName = customer ? customer.name : 'Walk-in Customer';
-    let invoiceNo = `INV-${Date.now().toString().slice(-5)}`;
+    let invoiceNo = `${settings.sales.invoicePrefix || 'INV-'}${Date.now().toString().slice(-5)}`;
 
     const advancePaidOnBooking = booking ? Number(booking.advance_paid || 0) : 0;
     const billBalance = roundCurrency(Math.max(0, grandTotal - advancePaidOnBooking));
@@ -1354,7 +1379,7 @@ const POS: React.FC = () => {
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-black"><ClipboardCheck size={20} className="text-lime-600" />Customer Order Billing</h2><p className="mt-1 text-xs text-slate-500">{booking?.order_number || 'Loading booking'} · Products and prices are saved with the order.</p></div><button type="button" disabled={isSubmitting} onClick={() => { setCompletedSaleModalOpen(false); navigate('/customer-orders'); }} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900"><ArrowLeft size={16} />Customer Orders</button></div>
     {bookingLoading ? <div role="status" className="flex items-center justify-center gap-2 p-10 text-sm text-slate-500"><Loader2 size={20} className="animate-spin" />Loading order…</div> : bookingError ? <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"><p className="flex items-center gap-2"><AlertCircle size={18} />{bookingError}</p><button type="button" onClick={() => setBookingReload(value => value + 1)} className="mt-4 font-bold underline">Reload order</button></div> : booking && <>
       <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><h3 className="font-bold">{booking.customer_name}</h3><p className="mt-1 text-xs text-slate-500">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>{booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-slate-500">{booking.address}</p>}{booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{booking.notes}</p>}{Number(booking.advance_paid || 0) > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs dark:border-emerald-900/60 dark:bg-emerald-950/40"><div className="flex items-center justify-between font-bold text-emerald-800 dark:text-emerald-300"><span className="flex items-center gap-1.5"><Banknote size={15} /> Advance Paid on Booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span><span className="font-mono text-sm font-black">{formatCurrency(Number(booking.advance_paid))}</span></div><div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300"><span>Remaining Balance to Collect:</span><span className="font-mono font-bold text-amber-700 dark:text-amber-400">{formatCurrency(Math.max(0, Number(booking.total) - Number(booking.advance_paid)))}</span></div></div>}<div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{booking.items.map((line, index) => <div key={index} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p><p className="mt-1 text-xs text-slate-500">{line.qty} {line.unit} × {formatCurrency(line.price)}</p></div><span className="text-sm font-bold">{formatCurrency(roundCurrency(line.qty * line.price))}</span></div>)}</div></div>
-      {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} lockDiscount /></div>}
+      {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} lockDiscount onStartShift={() => setIsShiftModalOpen(true)} isDayLocked={isTodayLocked} /></div>}
     </>}
     <PosReceiptModal open={completedSaleModalOpen} onClose={() => setCompletedSaleModalOpen(false)} lastCompletedSale={lastCompletedSale} settings={settings} />
     <PosShiftModal isOpen={isShiftModalOpen} onClose={() => setIsShiftModalOpen(false)} />
@@ -1362,6 +1387,7 @@ const POS: React.FC = () => {
 
   return (
     <div data-pos-view={mobileTab} className="pos-workspace flex flex-col h-full gap-3 pb-2 relative overflow-hidden">
+      {approvalDialog}
       {/* Top Counter Shift Analytics Bar with Integrated Last Sales Dropdown */}
       <PosHeaderAnalytics
         todaySummary={todaySummary}
@@ -1377,6 +1403,27 @@ const POS: React.FC = () => {
         sales={sales || []}
         onOpenReceipt={handleOpenSaleReceipt}
       />
+
+      {/* Selling needs an open shift; say so before the cashier builds a cart, not at checkout. */}
+      {(isTodayLocked || !activeShiftSession || activeShiftSession.status !== 'Active') && (
+        <div role="status" className={`${mobileTab === 'cart' ? 'hidden lg:flex' : 'flex'} items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs shrink-0 ${isTodayLocked ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300' : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200'}`}>
+          <span className="flex items-center gap-2 font-semibold">
+            <AlertCircle size={15} className="shrink-0" />
+            {isTodayLocked
+              ? `Business day ${getBusinessDate()} band ho chuka hai — sale nahi ho sakti. Owner se day reopen karwayein.`
+              : 'Shift start nahi hui. Sale se pehle drawer ki cash gin kar shift start karein.'}
+          </span>
+          {!isTodayLocked && (
+            <button
+              type="button"
+              onClick={() => setIsShiftModalOpen(true)}
+              className="shrink-0 rounded-lg bg-amber-400 px-3 py-1.5 font-black text-slate-950 hover:bg-amber-300 cursor-pointer"
+            >
+              Start Shift
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main POS 2-Column Split */}
       <div className="flex flex-col lg:flex-row flex-1 min-h-0 gap-3 overflow-hidden relative">
@@ -1461,6 +1508,8 @@ const POS: React.FC = () => {
             isSubmitting={isSubmitting}
             activeShiftSession={activeShiftSession}
             handleCheckout={handleCheckout}
+            onStartShift={() => setIsShiftModalOpen(true)}
+            isDayLocked={isTodayLocked}
           />
         </div>
       </div>
