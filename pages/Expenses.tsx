@@ -3,9 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
 import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../types';
-import { 
-  Receipt, Users, FolderTree, Wallet, CreditCard, Plus 
+import {
+  FolderTree, Wallet, CreditCard, Plus, Bookmark, UserPlus, ArrowUpRight
 } from 'lucide-react';
+import { ExpensesHeader, PrimaryButton, ToolbarButton, paidOf } from '../components/expenses/ExpenseUI';
 import { RichSelectOption } from '../components/RichSelect';
 import { 
   CategoryStructure, SubcategoryStructure, LedgerRow, 
@@ -35,6 +36,7 @@ const Expenses: React.FC = () => {
 
   const canCreate = canPerform('expenses', 'create');
   const canDelete = canPerform('expenses', 'delete');
+  const canEdit = canPerform('expenses', 'edit');
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -59,6 +61,7 @@ const Expenses: React.FC = () => {
   const switchTab = (tab: 'transactions' | 'vendors') => {
     setActiveTab(tab);
     setIsMobileLedgerOpen(false);
+    setSearchTerm('');
     if (tab === 'vendors') {
       const q = selectedVendorId ? `?tab=vendors&vendorId=${encodeURIComponent(selectedVendorId)}` : '?tab=vendors';
       navigate(`/expenses${q}`);
@@ -468,7 +471,8 @@ const Expenses: React.FC = () => {
       const found = filteredVendors.find(v => v.id === selectedVendorId) || expenseVendors.find(v => v.id === selectedVendorId);
       if (found) return found;
     }
-    return filteredVendors[0] || undefined;
+    // Nothing picked yet: open the vendor we owe the most, matching the list's default order.
+    return [...filteredVendors].sort((a, b) => (b.pending_balance || 0) - (a.pending_balance || 0) || a.name.localeCompare(b.name))[0];
   }, [selectedVendorId, filteredVendors, expenseVendors]);
 
   // KPI Calculations
@@ -494,6 +498,15 @@ const Expenses: React.FC = () => {
       .filter(v => v.isActive !== false)
       .reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
   }, [expenseVendors]);
+
+  const expenseStats = {
+    total: totalExpense,
+    cash: cashExpense,
+    digital: onlineExpense,
+    onCredit: filteredExpenses.reduce((sum, e) => sum + Math.max(0, Number(e.amount || 0) - paidOf(e)), 0),
+    vendorDues: totalOutstandingVendorDues,
+    vendorDueCount: expenseVendors.filter(v => v.isActive !== false && (v.pending_balance || 0) > 0).length,
+  };
 
   // Rich Select Options
   const vendorRichOptions: RichSelectOption[] = useMemo(() => {
@@ -818,22 +831,23 @@ const Expenses: React.FC = () => {
     }
   };
 
-  const handleOpenAddModal = () => {
+  const openExpenseForm = (overrides: Partial<typeof formData> = {}) => {
     setEditingExpenseId(null);
     const defaultAcc = settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '';
-    setFormData({ 
-      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
-      category: '', 
+    setFormData({
+      date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
+      category: '',
       subcategory: '',
-      description: '', 
-      vendor_id: '', 
-      amount: 0, 
-      paidAmount: 0, 
+      description: '',
+      vendor_id: '',
+      amount: 0,
+      paidAmount: 0,
       paymentStatus: 'Paid',
       dueDate: '',
-      paymentMode: 'Cash', 
+      paymentMode: 'Cash',
       account_id: defaultAcc,
-      notes: '' 
+      notes: '',
+      ...overrides
     });
     setIsModalCreatingCat(false);
     setModalNewCatInput('');
@@ -845,6 +859,19 @@ const Expenses: React.FC = () => {
     setRememberExpense(false);
     setRememberName('');
     setIsAddMode(true);
+  };
+
+  const handleOpenAddModal = () => openExpenseForm();
+
+  // A vendor's bill usually arrives before it is paid, so it opens on credit.
+  const handleRecordVendorBill = (vendor: ExpenseVendor) => {
+    openExpenseForm({ vendor_id: vendor.id, paymentStatus: 'Unpaid', paidAmount: 0 });
+  };
+
+  const openVendorKhata = (vendorId: string) => {
+    setActiveTab('vendors');
+    setSearchTerm('');
+    selectVendor(vendorId);
   };
 
   const savedExpenses = settings.expenses?.savedExpenses || [];
@@ -935,6 +962,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleEditExpense = (exp: ExpenseEntry) => {
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     setEditingExpenseId(exp.id);
     setFormData({
       date: exp.date,
@@ -959,6 +990,10 @@ const Expenses: React.FC = () => {
 
   const handleSubmitExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingExpenseId ? !canEdit : !canCreate) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     if (!formData.amount || formData.amount <= 0 || !formData.description || isSubmitting || isSubmittingExpenseRef.current) {
       if (!formData.amount || formData.amount <= 0 || !formData.description) {
         showToast("Sahi amount aur tafseel likhein", "warning");
@@ -1552,86 +1587,62 @@ const Expenses: React.FC = () => {
     }
   };
 
+  const headerSubtitle = activeTab === 'transactions'
+    ? `${filteredExpenses.length} entries · ${formatCurrency(totalExpense)} spent`
+    : `${expenseVendors.length} vendors · ${formatCurrency(totalOutstandingVendorDues)} to pay`;
+
   return (
-    <div className="space-y-2.5 sm:space-y-4 pb-20 max-w-7xl mx-auto px-2 sm:px-4">
-      {/* Top Tab Switcher */}
-      <div className="flex bg-slate-200/70 dark:bg-slate-800 p-1 rounded-xl sm:rounded-2xl max-w-md mx-auto w-full border border-slate-300/60 dark:border-slate-700 shadow-2xs">
-        <button 
-          onClick={() => switchTab('transactions')} 
-          className={`flex-1 py-1.5 rounded-lg sm:rounded-xl text-xs font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer ${
-            activeTab === 'transactions' 
-              ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs' 
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Receipt size={14} className={activeTab === 'transactions' ? 'text-lime-600' : 'text-slate-400'} />
-          <span>Expense Entries</span>
-        </button>
-        <button 
-          onClick={() => switchTab('vendors')} 
-          className={`flex-1 py-1.5 rounded-lg sm:rounded-xl text-xs font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer ${
-            activeTab === 'vendors' 
-              ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs' 
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-          }`}
-        >
-          <Users size={14} className={activeTab === 'vendors' ? 'text-lime-600' : 'text-slate-400'} />
-          <span>Vendors Directory</span>
-        </button>
-      </div>
+    <div className="mx-auto max-w-7xl space-y-4 px-2 pb-24 sm:px-4 md:pb-8">
+      <ExpensesHeader
+        active={activeTab}
+        onChange={switchTab}
+        subtitle={headerSubtitle}
+        counts={{ vendors: expenseVendors.filter(v => (v.pending_balance || 0) > 0).length }}
+        actions={activeTab === 'transactions' ? (
+          <>
+            {canCreate && (
+              <ToolbarButton onClick={() => setIsSavedExpensesOpen(true)} title="Saved quick records" className="hidden sm:flex">
+                <Bookmark size={14} className="text-amber-500" />
+                <span className="hidden 2xl:inline">Saved</span>
+                {savedExpenses.length > 0 && <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">{savedExpenses.length}</span>}
+              </ToolbarButton>
+            )}
+            <ToolbarButton onClick={() => setIsCategoryModalOpen(true)} title="Manage categories" aria-label="Categories">
+              <FolderTree size={14} className="text-lime-600" />
+              <span className="hidden 2xl:inline">Categories</span>
+            </ToolbarButton>
+            {canCreate && (
+              <PrimaryButton onClick={handleOpenAddModal} title="Record expense (N)" className="hidden md:flex">
+                <Plus size={15} /> Record expense
+              </PrimaryButton>
+            )}
+          </>
+        ) : (
+          <>
+            <ToolbarButton onClick={handleOpenAddVendorModal} title="Add vendor">
+              <UserPlus size={14} className="text-lime-600" />
+              <span className="hidden 2xl:inline">New vendor</span>
+            </ToolbarButton>
+            <PrimaryButton
+              tone="emerald"
+              onClick={() => {
+                const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
+                if (target) handleOpenPaymentModal(target);
+                else handleOpenAddVendorModal();
+              }}
+            >
+              <ArrowUpRight size={15} /> <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
+            </PrimaryButton>
+          </>
+        )}
+      />
 
-      {/* Ultra-Compact 1-Row Summary Cards */}
-      {activeTab === 'transactions' && (
-        <div className="grid grid-cols-4 gap-1.5 sm:gap-3">
-          <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
-            <span className="text-[9px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wider truncate">Total</span>
-            <h3 className="text-xs sm:text-lg font-black text-slate-900 dark:text-slate-100 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(totalExpense > 99999 ? (totalExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(totalExpense))}</span>
-              <span className="hidden sm:inline">{formatCurrency(totalExpense)}</span>
-            </h3>
-            <span className="text-[9px] text-slate-400 font-medium hidden sm:block mt-0.5">{filteredExpenses.length} txns</span>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
-            <span className="text-[9px] sm:text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider truncate">Cash</span>
-            <h3 className="text-xs sm:text-lg font-black text-amber-800 dark:text-amber-300 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(cashExpense > 99999 ? (cashExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(cashExpense))}</span>
-              <span className="hidden sm:inline">{formatCurrency(cashExpense)}</span>
-            </h3>
-            <span className="text-[9px] text-amber-600 dark:text-amber-400 font-bold hidden sm:block mt-0.5">{totalExpense > 0 ? ((cashExpense/totalExpense)*100).toFixed(0) : 0}% total</span>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-center">
-            <span className="text-[9px] sm:text-[11px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider truncate">Digital</span>
-            <h3 className="text-xs sm:text-lg font-black text-blue-800 dark:text-blue-300 font-mono mt-0.5 truncate">
-              <span className="sm:hidden">Rs {(onlineExpense > 99999 ? (onlineExpense/1000).toFixed(0) + 'k' : formatMoneyRaw(onlineExpense))}</span>
-              <span className="hidden sm:inline">{formatCurrency(onlineExpense)}</span>
-            </h3>
-            <span className="text-[9px] text-blue-500 font-medium hidden sm:block mt-0.5">Accounts</span>
-          </div>
-
-          <div className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border shadow-2xs flex flex-col justify-center ${
-            totalOutstandingVendorDues > 0 ? 'bg-rose-50/40 dark:bg-rose-950/30 border-rose-200/80 dark:border-rose-900' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
-          }`}>
-            <span className={`text-[9px] sm:text-[11px] font-bold uppercase tracking-wider truncate ${totalOutstandingVendorDues > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-400'}`}>
-              Dues
-            </span>
-            <h3 className={`text-xs sm:text-lg font-black font-mono mt-0.5 truncate ${totalOutstandingVendorDues > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'}`}>
-              <span className="sm:hidden">Rs {(totalOutstandingVendorDues > 99999 ? (totalOutstandingVendorDues/1000).toFixed(0) + 'k' : formatMoneyRaw(totalOutstandingVendorDues))}</span>
-              <span className="hidden sm:inline">{formatCurrency(totalOutstandingVendorDues)}</span>
-            </h3>
-            <span className="text-[9px] text-rose-500 font-medium hidden sm:block mt-0.5">{expenseVendors.filter(v => (v.pending_balance || 0) > 0).length} parties</span>
-          </div>
-        </div>
-      )}
-
-      {/* 1. Transactions Tab */}
       {activeTab === 'transactions' && (
         <ExpenseTransactionsTab
-          expenses={expenses}
           filteredExpenses={filteredExpenses}
           expenseVendors={expenseVendors}
           categoryTree={categoryTree}
+          stats={expenseStats}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
           filterMonth={filterMonth}
@@ -1656,21 +1667,19 @@ const Expenses: React.FC = () => {
           setExpandedExpenseRowId={setExpandedExpenseRowId}
           canCreate={canCreate}
           canDelete={canDelete}
+          canEdit={canEdit}
           handleOpenAddModal={handleOpenAddModal}
           handleEditExpense={handleEditExpense}
           handleDeleteExpense={handleDeleteExpense}
           savedExpenses={savedExpenses}
           onOpenSavedExpenses={() => setIsSavedExpensesOpen(true)}
+          onUseSaved={handleUseSavedExpense}
           onSaveRecorded={saveRecordedExpense}
-          setIsCategoryModalOpen={setIsCategoryModalOpen}
-          setSelectedVendorId={setSelectedVendorId}
-          setActiveTab={setActiveTab}
-          setIsMobileLedgerOpen={setIsMobileLedgerOpen}
+          onOpenVendor={openVendorKhata}
           formatDateDisplay={formatDateDisplay}
         />
       )}
 
-      {/* 2. Vendors Tab */}
       {activeTab === 'vendors' && (
         <ExpenseVendorsTab
           expenseVendors={expenseVendors}
@@ -1688,6 +1697,7 @@ const Expenses: React.FC = () => {
           handleOpenEditVendorModal={handleOpenEditVendorModal}
           handleDeleteVendor={handleDeleteVendor}
           handleOpenPaymentModal={handleOpenPaymentModal}
+          onRecordBill={handleRecordVendorBill}
           handleShareWhatsAppStatement={handleShareWhatsAppStatement}
           handlePrintStatement={handlePrintStatement}
           showMobileVendorInfo={showMobileVendorInfo}
@@ -1702,6 +1712,7 @@ const Expenses: React.FC = () => {
           formatDateDisplay={formatDateDisplay}
           expenses={expenses}
           expenseVendorTransactions={expenseVendorTransactions}
+          canCreate={canCreate}
           canDelete={canDelete}
           handleDeleteVendorTransaction={handleDeleteVendorTx}
         />
@@ -1759,6 +1770,7 @@ const Expenses: React.FC = () => {
       <ExpenseFormModal
         isOpen={isAddMode}
         onClose={() => setIsAddMode(false)}
+        isEditing={Boolean(editingExpenseId)}
         formData={formData}
         setFormData={setFormData}
         handleSubmitExpense={handleSubmitExpense}
@@ -1824,12 +1836,13 @@ const Expenses: React.FC = () => {
       {/* Mobile Floating Action Button (FAB) for instant expense recording */}
       {canCreate && activeTab === 'transactions' && (
         <button
+          type="button"
           onClick={handleOpenAddModal}
-          className="md:hidden fixed bottom-6 right-4 z-40 bg-lime-600 hover:bg-lime-700 active:scale-95 text-white px-4 py-3 rounded-2xl shadow-xl shadow-lime-600/40 flex items-center gap-2 text-xs font-black cursor-pointer border border-lime-500/50 animate-in zoom-in-95 duration-150"
-          title="Record New Expense"
+          className="fixed bottom-6 right-4 z-40 flex items-center gap-2 rounded-2xl bg-gradient-to-br from-lime-500 to-lime-700 px-4 py-3 text-xs font-black text-white shadow-xl shadow-lime-600/40 transition-transform active:scale-95 animate-in zoom-in-95 duration-150 md:hidden print:hidden"
+          title="Record expense"
         >
           <Plus size={18} className="stroke-[3]" />
-          <span>Record Expense</span>
+          <span>Record expense</span>
         </button>
       )}
     </div>

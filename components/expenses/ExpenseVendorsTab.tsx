@@ -1,13 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  Search, Plus, X, Users, ArrowLeft, MessageCircle, Edit, Trash2, 
-  Wallet, Printer, Info, Phone, Receipt, ArrowDownUp, ArrowUpRight, 
-  ArrowDownLeft, Calendar, CalendarRange, Clock, CheckCircle2, 
-  Filter, ChevronRight, FileText, CornerDownRight, Tag, ChevronDown
+import React, { useMemo, useState } from 'react';
+import {
+  Search, X, Users, ArrowLeft, MessageCircle, Edit, Trash2, Printer, Phone, Receipt,
+  ArrowUpRight, ArrowDownLeft, ArrowDownUp, BookUser, Wallet, UserCheck, Plus, MapPin,
+  Landmark, Copy, StickyNote, ChevronDown, ChevronRight, CalendarRange, FileText, Scale,
 } from 'lucide-react';
 import { ExpenseEntry, ExpenseVendor, ExpenseVendorTransaction } from '../../types';
 import { LedgerRow, KhataDateRangeType, VendorPaymentLogRow, ExpenseDateFilterMode } from './ExpenseTypes';
 import { formatCurrency } from '../../lib/formatters';
+import { Avatar, PillGroup, PillOption, SettlementBar, StatTile } from '../procurement/ProcurementUI';
+import { RichSelect } from '../RichSelect';
+import { useProgressiveList } from '../../hooks/useProgressiveList';
+import { LoadMoreRow } from '../ui/LoadMoreRow';
+import { EmptyState, PrimaryButton, dayHeading, dayKey, paidOf, pkToday } from './ExpenseUI';
+import { offsetDate } from '../../lib/dashboardAnalytics';
+
+type VendorStatusFilter = 'All' | 'With Dues' | 'Advance' | 'Active' | 'Inactive';
 
 interface ExpenseVendorsTabProps {
   expenseVendors: ExpenseVendor[];
@@ -19,12 +26,13 @@ interface ExpenseVendorsTabProps {
   setIsMobileLedgerOpen: (open: boolean) => void;
   searchTerm: string;
   setSearchTerm: (s: string) => void;
-  filterVendorTabStatus: 'All' | 'With Dues' | 'Advance' | 'Active' | 'Inactive';
-  setFilterVendorTabStatus: (s: 'All' | 'With Dues' | 'Advance' | 'Active' | 'Inactive') => void;
+  filterVendorTabStatus: VendorStatusFilter;
+  setFilterVendorTabStatus: (s: VendorStatusFilter) => void;
   handleOpenAddVendorModal: () => void;
   handleOpenEditVendorModal: (v: ExpenseVendor) => void;
   handleDeleteVendor: (v: ExpenseVendor) => void;
-  handleOpenPaymentModal: (v: ExpenseVendor) => void;
+  handleOpenPaymentModal: (v?: ExpenseVendor, prefilledAmount?: number, type?: 'payment' | 'refund') => void;
+  onRecordBill?: (v: ExpenseVendor) => void;
   handleShareWhatsAppStatement: (v: ExpenseVendor) => void;
   handlePrintStatement: () => void;
   showMobileVendorInfo: boolean;
@@ -39,33 +47,41 @@ interface ExpenseVendorsTabProps {
   formatDateDisplay: (date: string) => string;
   expenses?: ExpenseEntry[];
   expenseVendorTransactions?: ExpenseVendorTransaction[];
+  canCreate?: boolean;
   canDelete?: boolean;
   handleDeleteVendorTransaction?: (id: string) => void;
 }
 
-const ALL_PAYMENTS_DATE_FILTERS: { value: ExpenseDateFilterMode; label: string }[] = [
-  { value: 'this_month', label: 'This Month' },
-  { value: 'today', label: 'Today (Aaj)' },
-  { value: 'yesterday', label: 'Yesterday (Kal)' },
-  { value: '7days', label: 'Last 7 Days' },
-  { value: '30days', label: 'Last 30 Days' },
-  { value: 'last_month', label: 'Last Month' },
-  { value: 'single_date', label: 'Specific Date 📅' },
-  { value: 'custom_range', label: 'Date Range (From - To) 📆' },
-  { value: 'all', label: 'All Dates (All Time)' },
+const KHATA_PERIODS: PillOption<KhataDateRangeType>[] = [
+  { value: 'today', label: 'Today' },
+  { value: '7days', label: '7 days' },
+  { value: 'this_month', label: 'Month' },
+  { value: 'last_month', label: 'Last month' },
+  { value: 'all', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
 ];
 
-const KHATA_STATEMENT_DATE_FILTERS: { value: KhataDateRangeType; label: string }[] = [
-  { value: 'this_month', label: 'This Month' },
-  { value: 'today', label: 'Today (Aaj)' },
-  { value: 'yesterday', label: 'Yesterday (Kal)' },
-  { value: '7days', label: '7 Days' },
-  { value: 'last_30_days', label: '30 Days' },
-  { value: 'last_month', label: 'Last Month' },
-  { value: 'single_date', label: 'Specific Date 📅' },
-  { value: 'custom', label: 'Custom Range 📆' },
-  { value: 'all', label: 'All Time' },
+type LogPeriod = 'today' | '7days' | 'this_month' | 'last_month' | 'all' | 'custom_range';
+const LOG_PERIODS: PillOption<LogPeriod>[] = [
+  { value: 'today', label: 'Today' },
+  { value: '7days', label: '7 days' },
+  { value: 'this_month', label: 'Month' },
+  { value: 'last_month', label: 'Last month' },
+  { value: 'all', label: 'All' },
+  { value: 'custom_range', label: 'Custom' },
 ];
+
+type SortKey = 'balance' | 'name' | 'recent';
+
+const ROW_KIND: Record<LedgerRow['type'], { icon: React.ElementType; tile: string; label: string }> = {
+  'Opening Balance': { icon: Scale, tile: 'bg-slate-100 text-slate-600', label: 'Opening' },
+  Bill: { icon: Receipt, tile: 'bg-rose-100 text-rose-700', label: 'Bill' },
+  Payment: { icon: ArrowUpRight, tile: 'bg-emerald-100 text-emerald-700', label: 'Paid' },
+  Refund: { icon: ArrowDownLeft, tile: 'bg-sky-100 text-sky-700', label: 'Received' },
+};
+
+const balanceWord = (bal: number) => (bal > 0 ? 'to pay' : bal < 0 ? 'advance' : 'settled');
+const balanceText = (bal: number) => (bal > 0 ? 'text-rose-600' : bal < 0 ? 'text-sky-700' : 'text-slate-400');
 
 export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
   expenseVendors,
@@ -83,6 +99,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
   handleOpenEditVendorModal,
   handleDeleteVendor,
   handleOpenPaymentModal,
+  onRecordBill,
   handleShareWhatsAppStatement,
   handlePrintStatement,
   showMobileVendorInfo,
@@ -97,38 +114,32 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
   formatDateDisplay,
   expenses = [],
   expenseVendorTransactions = [],
+  canCreate = true,
   canDelete = false,
-  handleDeleteVendorTransaction
+  handleDeleteVendorTransaction,
 }) => {
-  // Top View Mode: 'all_payments' (Kis Ko Di / Li Log) vs 'directory' (Individual Ledgers)
-  const [vendorViewMode, setVendorViewMode] = useState<'all_payments' | 'directory'>(() => {
-    return selectedVendorId ? 'directory' : 'all_payments';
-  });
+  const [view, setView] = useState<'directory' | 'payments'>('directory');
+  const [sortKey, setSortKey] = useState<SortKey>('balance');
 
-  // State for All Payments Log view
-  const [paymentsDateMode, setPaymentsDateMode] = useState<ExpenseDateFilterMode>('this_month');
-  const [paymentsSingleDate, setPaymentsSingleDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
-  const [paymentsStartDate, setPaymentsStartDate] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  });
-  const [paymentsEndDate, setPaymentsEndDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
-  const [paymentsActionFilter, setPaymentsActionFilter] = useState<'all' | 'Payment' | 'Refund' | 'Bill'>('all');
-  const [paymentsVendorFilter, setPaymentsVendorFilter] = useState<string>('All');
-  const [paymentsSearchTerm, setPaymentsSearchTerm] = useState<string>('');
-  const [paymentsModeFilter, setPaymentsModeFilter] = useState<string>('All');
+  // Payments log filters
+  const [logPeriod, setLogPeriod] = useState<LogPeriod>('this_month');
+  const [logStart, setLogStart] = useState(() => `${pkToday().slice(0, 7)}-01`);
+  const [logEnd, setLogEnd] = useState(() => pkToday());
+  const [logAction, setLogAction] = useState<'all' | 'Payment' | 'Refund' | 'Bill'>('all');
+  const [logVendor, setLogVendor] = useState('All');
+  const [logSearch, setLogSearch] = useState('');
+  const [logMode, setLogMode] = useState<'All' | 'Cash' | 'Online'>('All');
 
-  // Build unified vendor payments & receipts log
+  // One register of everything that moved money with a vendor: direct payments/refunds plus expense bills.
   const allVendorTransactions = useMemo<VendorPaymentLogRow[]>(() => {
     const rows: VendorPaymentLogRow[] = [];
     const vendorMap = new Map<string, ExpenseVendor>();
-    (expenseVendors || []).forEach(v => {
+    expenseVendors.forEach(v => {
       vendorMap.set(v.id, v);
       vendorMap.set(v.name.toLowerCase().trim(), v);
     });
 
-    // 1. Direct Vendor Payments & Refunds (from expenseVendorTransactions)
-    (expenseVendorTransactions || []).forEach(tx => {
+    expenseVendorTransactions.forEach(tx => {
       const v = vendorMap.get(tx.vendor_id) || (tx.vendor_name ? vendorMap.get(tx.vendor_name.toLowerCase().trim()) : undefined);
       const isRefund = tx.type === 'Refund';
       rows.push({
@@ -140,1238 +151,787 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
         vendorServiceType: v?.service_type || 'Vendor',
         vendorPhone: v?.phone,
         actionType: isRefund ? 'Refund' : 'Payment',
-        direction: isRefund ? 'in' : 'out', // Refund = Payment Li (received), Payment = Payment Di (paid)
+        direction: isRefund ? 'in' : 'out',
         amount: tx.amount,
         paidAmount: tx.paid_amount !== undefined ? tx.paid_amount : tx.amount,
         paymentMode: tx.payment_mode || 'Cash',
         accountName: tx.account_name || tx.payment_mode || 'Cash Drawer',
-        description: tx.note ? `Vendor Payment: ${tx.note}` : (isRefund ? 'Vendor Refund Received' : 'Payment to Vendor / Staff'),
+        description: tx.note || (isRefund ? 'Refund received from vendor' : 'Payment to vendor'),
         referenceNo: tx.reference_no,
         note: tx.note,
-        isDeletable: true
+        isDeletable: true,
       });
     });
 
-    // 2. Expenses linked to Vendors (from expenses)
-    (expenses || []).forEach(exp => {
+    expenses.forEach(exp => {
       if (!exp.vendor_id && !exp.vendor_name) return;
-      const v = (exp.vendor_id ? vendorMap.get(exp.vendor_id) : undefined) || 
-                (exp.vendor_name ? vendorMap.get(exp.vendor_name.toLowerCase().trim()) : undefined);
-      
-      // Prevent duplicates if already recorded in direct transactions
-      const isAlreadyRepresented = (expenseVendorTransactions || []).some(tx => tx.expense_id === exp.id || (exp.referenceNo && tx.reference_no === exp.referenceNo));
+      const v = (exp.vendor_id ? vendorMap.get(exp.vendor_id) : undefined)
+        || (exp.vendor_name ? vendorMap.get(exp.vendor_name.toLowerCase().trim()) : undefined);
+      const isAlreadyRepresented = expenseVendorTransactions.some(tx => tx.expense_id === exp.id || (exp.referenceNo && tx.reference_no === exp.referenceNo));
       if (isAlreadyRepresented) return;
 
       const billed = Number(exp.amount || 0);
-      const isUnpaid = exp.paymentStatus === 'Unpaid' || (exp as any).payment_status === 'Unpaid';
-      const paid = isUnpaid 
-        ? 0 
-        : (exp.paidAmount !== undefined && exp.paidAmount !== null 
-            ? Number(exp.paidAmount) 
-            : ((exp as any).paid_amount !== undefined && (exp as any).paid_amount !== null ? Number((exp as any).paid_amount) : billed));
+      const paid = paidOf(exp);
+      const base = {
+        sourceType: 'expense_bill' as const,
+        date: exp.date,
+        vendorId: exp.vendor_id || v?.id || '',
+        vendorName: exp.vendor_name || v?.name || 'Vendor',
+        vendorServiceType: v?.service_type || exp.category || 'Vendor',
+        vendorPhone: v?.phone,
+        direction: 'out' as const,
+        referenceNo: exp.referenceNo,
+        note: exp.notes,
+        isDeletable: false,
+      };
 
       if (paid > 0) {
         rows.push({
+          ...base,
           id: `exp_paid_${exp.id}`,
-          sourceType: 'expense_bill',
-          date: exp.date,
-          vendorId: exp.vendor_id || v?.id || '',
-          vendorName: exp.vendor_name || v?.name || 'Vendor',
-          vendorServiceType: v?.service_type || exp.category || 'Vendor',
-          vendorPhone: v?.phone,
           actionType: 'Payment',
-          direction: 'out',
           amount: paid,
           paidAmount: paid,
           paymentMode: exp.paymentMode || (exp as any).payment_mode || 'Cash',
           accountName: exp.account_name || exp.paymentMode || 'Cash Drawer',
-          description: exp.description ? `${exp.description}${exp.category ? ` (${exp.category})` : ''}` : (exp.category || 'Expense Payment'),
-          referenceNo: exp.referenceNo,
-          note: exp.notes,
-          isDeletable: false
+          description: exp.description ? `${exp.description}${exp.category ? ` · ${exp.category}` : ''}` : (exp.category || 'Expense payment'),
         });
       }
-
-      if (isUnpaid || (exp.paymentStatus === 'Partial' && billed > paid)) {
+      if (billed > paid) {
         rows.push({
+          ...base,
           id: `exp_bill_${exp.id}`,
-          sourceType: 'expense_bill',
-          date: exp.date,
-          vendorId: exp.vendor_id || v?.id || '',
-          vendorName: exp.vendor_name || v?.name || 'Vendor',
-          vendorServiceType: v?.service_type || exp.category || 'Vendor',
-          vendorPhone: v?.phone,
           actionType: 'Bill',
-          direction: 'out',
           amount: billed - paid,
           paidAmount: 0,
-          paymentMode: 'Credit (Payable)',
-          accountName: 'Vendor Khata (Payable)',
-          description: `${exp.description || 'Bill'} (Credit Due)`,
-          referenceNo: exp.referenceNo,
-          note: exp.notes,
-          isDeletable: false
+          paymentMode: 'Credit',
+          accountName: 'Vendor khata',
+          description: `${exp.description || 'Bill'} · on credit`,
         });
       }
     });
 
-    return rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return rows.sort((a, b) => dayKey(b.date).localeCompare(dayKey(a.date)) || String(b.date).localeCompare(String(a.date)));
   }, [expenseVendorTransactions, expenses, expenseVendors]);
 
-  // Filtered Payments for the All Payments Register
-  const filteredPaymentLogs = useMemo(() => {
-    // Filter edges and row dates are all compared on the Pakistan business day.
-    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    const todayStr = pkDay(new Date());
-    const yday = new Date();
-    yday.setDate(yday.getDate() - 1);
-    const ydayStr = pkDay(yday);
-
-    const d7 = new Date();
-    d7.setDate(d7.getDate() - 6);
-    const d7Str = pkDay(d7);
-
-    const d30 = new Date();
-    d30.setDate(d30.getDate() - 29);
-    const d30Str = pkDay(d30);
-
-    const now = new Date();
-    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const prevMonthStr = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
-
-    return allVendorTransactions.filter(row => {
-      // 1. Search Query
-      const q = paymentsSearchTerm.toLowerCase().trim();
-      if (q) {
-        const matchesQ = 
-          row.vendorName.toLowerCase().includes(q) ||
-          (row.description && row.description.toLowerCase().includes(q)) ||
-          (row.referenceNo && row.referenceNo.toLowerCase().includes(q)) ||
-          (row.accountName && row.accountName.toLowerCase().includes(q)) ||
-          (row.vendorPhone && row.vendorPhone.includes(q));
-        if (!matchesQ) return false;
-      }
-
-      // 2. Action Filter
-      if (paymentsActionFilter !== 'all' && row.actionType !== paymentsActionFilter) {
-        return false;
-      }
-
-      // 3. Vendor Filter
-      if (paymentsVendorFilter !== 'All' && row.vendorId !== paymentsVendorFilter) {
-        return false;
-      }
-
-      // 4. Payment Mode Filter
-      if (paymentsModeFilter !== 'All') {
-        if (paymentsModeFilter === 'Cash' && row.paymentMode !== 'Cash') return false;
-        if (paymentsModeFilter === 'Online' && row.paymentMode === 'Cash') return false;
-      }
-
-      // 5. Date Filter
-      const rawDate = row.date || '';
-      const rDate = rawDate.includes('T') ? pkDay(new Date(rawDate)) : rawDate.slice(0, 10);
-
-      if (paymentsDateMode === 'all') return true;
-      if (paymentsDateMode === 'today') return rDate === todayStr;
-      if (paymentsDateMode === 'yesterday') return rDate === ydayStr;
-      if (paymentsDateMode === '7days') return rDate >= d7Str && rDate <= todayStr;
-      if (paymentsDateMode === '30days') return rDate >= d30Str && rDate <= todayStr;
-      if (paymentsDateMode === 'this_month') return rDate.startsWith(currentMonthStr);
-      if (paymentsDateMode === 'last_month') return rDate.startsWith(prevMonthStr);
-      if (paymentsDateMode === 'single_date') return rDate === paymentsSingleDate;
-      if (paymentsDateMode === 'custom_range') {
-        if (paymentsStartDate && paymentsEndDate) return rDate >= paymentsStartDate && rDate <= paymentsEndDate;
-        if (paymentsStartDate) return rDate >= paymentsStartDate;
-        if (paymentsEndDate) return rDate <= paymentsEndDate;
-      }
-
-      return true;
+  const lastActivity = useMemo(() => {
+    const map = new Map<string, string>();
+    allVendorTransactions.forEach(row => {
+      const key = dayKey(row.date);
+      if (row.vendorId && (!map.has(row.vendorId) || key > map.get(row.vendorId)!)) map.set(row.vendorId, key);
     });
-  }, [
-    allVendorTransactions, paymentsSearchTerm, paymentsActionFilter, 
-    paymentsVendorFilter, paymentsModeFilter, paymentsDateMode, 
-    paymentsSingleDate, paymentsStartDate, paymentsEndDate
-  ]);
+    return map;
+  }, [allVendorTransactions]);
 
-  // KPI Metrics for All Payments
-  const paymentsStats = useMemo(() => {
-    let totalPaid = 0;      // Payment Di
-    let totalReceived = 0;  // Payment Li / Refund
-    let totalBilled = 0;    // Bills
+  const today = pkToday();
+  const currentMonth = today.slice(0, 7);
 
-    filteredPaymentLogs.forEach(r => {
-      if (r.actionType === 'Payment') {
-        totalPaid += r.amount;
-      } else if (r.actionType === 'Refund') {
-        totalReceived += r.amount;
-      } else if (r.actionType === 'Bill') {
-        totalBilled += r.amount;
-      }
+  const vendorStats = useMemo(() => {
+    let payable = 0, payableCount = 0, advance = 0, advanceCount = 0, active = 0;
+    expenseVendors.forEach(v => {
+      const bal = v.pending_balance || 0;
+      if (v.isActive !== false) active += 1;
+      if (bal > 0) { payable += bal; payableCount += 1; }
+      if (bal < 0) { advance += Math.abs(bal); advanceCount += 1; }
     });
+    const paidThisMonth = allVendorTransactions
+      .filter(row => row.actionType === 'Payment' && dayKey(row.date).startsWith(currentMonth))
+      .reduce((sum, row) => sum + row.amount, 0);
+    return { payable, payableCount, advance, advanceCount, active, paidThisMonth };
+  }, [expenseVendors, allVendorTransactions, currentMonth]);
 
-    return {
-      totalPaid,
-      totalReceived,
-      netPayout: totalPaid - totalReceived,
-      totalBilled,
-      count: filteredPaymentLogs.length
-    };
-  }, [filteredPaymentLogs]);
+  const sortedVendors = useMemo(() => {
+    const list = [...filteredVendors];
+    if (sortKey === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortKey === 'recent') list.sort((a, b) => (lastActivity.get(b.id) || '').localeCompare(lastActivity.get(a.id) || ''));
+    else list.sort((a, b) => (b.pending_balance || 0) - (a.pending_balance || 0) || a.name.localeCompare(b.name));
+    return list;
+  }, [filteredVendors, sortKey, lastActivity]);
 
-  // Jump from All Payments table directly to that vendor's ledger
-  const handleSelectVendorFromRow = (vendorId: string) => {
+  const statusCounts = useMemo(() => ({
+    All: expenseVendors.length,
+    'With Dues': expenseVendors.filter(v => (v.pending_balance || 0) > 0).length,
+    Advance: expenseVendors.filter(v => (v.pending_balance || 0) < 0).length,
+    Inactive: expenseVendors.filter(v => v.isActive === false).length,
+  }), [expenseVendors]);
+
+  const openLedger = (vendorId: string) => {
+    if (!vendorId) return;
     setSelectedVendorId(vendorId);
-    setVendorViewMode('directory');
+    setView('directory');
     setIsMobileLedgerOpen(true);
   };
 
+  // ---------------- Payments log ----------------
+  const filteredLog = useMemo(() => {
+    const q = logSearch.toLowerCase().trim();
+    const prevMonth = (() => {
+      const [y, m] = currentMonth.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 2, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    })();
+    const weekStart = offsetDate(today, -6);
+    return allVendorTransactions.filter(row => {
+      if (q) {
+        const hit = row.vendorName.toLowerCase().includes(q)
+          || row.description?.toLowerCase().includes(q)
+          || row.referenceNo?.toLowerCase().includes(q)
+          || row.accountName?.toLowerCase().includes(q)
+          || row.vendorPhone?.includes(q);
+        if (!hit) return false;
+      }
+      if (logAction !== 'all' && row.actionType !== logAction) return false;
+      if (logVendor !== 'All' && row.vendorId !== logVendor) return false;
+      if (logMode === 'Cash' && row.paymentMode !== 'Cash') return false;
+      if (logMode === 'Online' && (row.paymentMode === 'Cash' || row.actionType === 'Bill')) return false;
+      const day = dayKey(row.date);
+      switch (logPeriod) {
+        case 'today': return day === today;
+        case '7days': return day >= weekStart && day <= today;
+        case 'this_month': return day.startsWith(currentMonth);
+        case 'last_month': return day.startsWith(prevMonth);
+        case 'custom_range': return (!logStart || day >= logStart) && (!logEnd || day <= logEnd);
+        default: return true;
+      }
+    });
+  }, [allVendorTransactions, logSearch, logAction, logVendor, logMode, logPeriod, logStart, logEnd, today, currentMonth]);
+
+  const logStats = useMemo(() => {
+    let paid = 0, received = 0, billed = 0;
+    filteredLog.forEach(r => {
+      if (r.actionType === 'Payment') paid += r.amount;
+      else if (r.actionType === 'Refund') received += r.amount;
+      else billed += r.amount;
+    });
+    return { paid, received, billed, net: paid - received };
+  }, [filteredLog]);
+
+  const logWindow = useProgressiveList<VendorPaymentLogRow>(filteredLog, 60, `${logPeriod}|${logAction}|${logVendor}|${logMode}|${logSearch}|${logStart}|${logEnd}`);
+  const logGroups = useMemo(() => {
+    const groups: { day: string; rows: VendorPaymentLogRow[] }[] = [];
+    logWindow.visibleItems.forEach(row => {
+      const key = dayKey(row.date);
+      const last = groups[groups.length - 1];
+      if (last && last.day === key) last.rows.push(row);
+      else groups.push({ day: key, rows: [row] });
+    });
+    return groups;
+  }, [logWindow.visibleItems]);
+
+  const viewSwitch = (
+    <PillGroup
+      label="Vendor view"
+      value={view}
+      onChange={setView}
+      options={[
+        { value: 'directory', label: 'Khata', icon: <BookUser size={13} /> },
+        { value: 'payments', label: 'Payments log', icon: <ArrowDownUp size={13} /> },
+      ]}
+      className="w-full sm:w-auto"
+    />
+  );
+
   return (
-    <div className="space-y-3 sm:space-y-4 min-w-0">
-      {/* --- TOP VIEW SWITCHER: ALL PAYMENTS (KIS KO DI / LI) vs VENDOR LEDGERS --- */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-2 sm:p-2.5 shadow-2xs flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 min-w-0">
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-xl min-w-0">
-          <button
-            onClick={() => setVendorViewMode('all_payments')}
-            className={`flex-1 min-w-0 px-2 sm:px-3.5 py-2 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-              vendorViewMode === 'all_payments'
-                ? 'bg-white dark:bg-slate-900 text-lime-700 dark:text-lime-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <ArrowDownUp size={15} className={`shrink-0 ${vendorViewMode === 'all_payments' ? 'text-lime-600 dark:text-lime-400' : 'text-slate-400'}`} />
-            <span className="truncate">
-              <span className="sm:hidden">Payments</span>
-              <span className="hidden sm:inline">Tamam Payments (Kisko Di / Li)</span>
-            </span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-300 shrink-0">
-              {filteredPaymentLogs.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setVendorViewMode('directory')}
-            className={`flex-1 min-w-0 px-2 sm:px-3.5 py-2 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-              vendorViewMode === 'directory'
-                ? 'bg-white dark:bg-slate-900 text-lime-700 dark:text-lime-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Users size={15} className={`shrink-0 ${vendorViewMode === 'directory' ? 'text-lime-600 dark:text-lime-400' : 'text-slate-400'}`} />
-            <span className="truncate">
-              <span className="sm:hidden">Directory</span>
-              <span className="hidden sm:inline">Vendor Khata & Profiles</span>
-            </span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 shrink-0">
-              {expenseVendors.length}
-            </span>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleOpenAddVendorModal}
-            className="flex-1 sm:flex-initial justify-center px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Plus size={14} />
-            <span className="sm:hidden">New</span>
-            <span className="hidden sm:inline">New Vendor</span>
-          </button>
-
-          <button
-            onClick={() => {
-              const defaultV = selectedVendor || expenseVendors[0];
-              if (defaultV) handleOpenPaymentModal(defaultV);
-              else handleOpenAddVendorModal();
-            }}
-            className="flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-          >
-            <Wallet size={14} className="shrink-0" />
-            <span className="sm:hidden">Pay / Receive</span>
-            <span className="hidden sm:inline">Record Payment (Di / Li)</span>
-          </button>
-        </div>
+    <div className="min-w-0 space-y-4">
+      {/* KPI tiles */}
+      <div className={`grid-cols-2 gap-2.5 lg:grid-cols-4 print:hidden ${view === 'directory' && isMobileLedgerOpen ? 'hidden xl:grid' : 'grid'}`}>
+        <StatTile
+          icon={BookUser}
+          tone="rose"
+          valueTone={vendorStats.payable > 0 ? 'rose' : undefined}
+          label="You owe vendors"
+          value={formatCurrency(vendorStats.payable)}
+          hint={vendorStats.payableCount ? `${vendorStats.payableCount} vendors to pay` : 'Nothing pending'}
+        />
+        <StatTile
+          icon={ArrowDownLeft}
+          tone="cyan"
+          label="Advance given"
+          value={formatCurrency(vendorStats.advance)}
+          hint={vendorStats.advanceCount ? `${vendorStats.advanceCount} vendors hold advance` : 'No advances out'}
+        />
+        <StatTile
+          icon={Wallet}
+          tone="emerald"
+          label="Paid this month"
+          value={formatCurrency(vendorStats.paidThisMonth)}
+          hint="Bills + direct payments"
+        />
+        <StatTile
+          icon={UserCheck}
+          tone="lime"
+          label="Active vendors"
+          value={vendorStats.active}
+          hint={`${expenseVendors.length} total${statusCounts.Inactive ? ` · ${statusCounts.Inactive} inactive` : ''}`}
+        />
       </div>
 
-      {/* ========================================================================= */}
-      {/* MODE 1: ALL PAYMENTS JOURNAL (KISKO DI / LI) - JUST LIKE EXPENSES TABLE    */}
-      {/* ========================================================================= */}
-      {vendorViewMode === 'all_payments' && (
-        <div className="space-y-3.5">
-          {/* 1. KPI Summary Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex items-center gap-2 sm:gap-3 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                <ArrowUpRight size={18} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Payment Di</span>
-                <span className="text-base sm:text-xl font-black font-mono text-emerald-600 dark:text-emerald-400 block mt-0.5 truncate">
-                  {formatCurrency(paymentsStats.totalPaid)}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex items-center gap-2 sm:gap-3 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
-                <ArrowDownLeft size={18} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Payment Li</span>
-                <span className="text-base sm:text-xl font-black font-mono text-blue-600 dark:text-blue-400 block mt-0.5 truncate">
-                  {formatCurrency(paymentsStats.totalReceived)}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex items-center gap-2 sm:gap-3 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
-                <Wallet size={18} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Net Outflow</span>
-                <span className="text-base sm:text-xl font-black font-mono text-slate-900 dark:text-white block mt-0.5 truncate">
-                  {formatCurrency(paymentsStats.netPayout)}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-white dark:bg-slate-900 p-2.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex items-center gap-2 sm:gap-3 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
-                <Receipt size={18} />
-              </div>
-              <div className="min-w-0">
-                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wider block leading-tight">Total Billed</span>
-                <span className="text-base sm:text-xl font-black font-mono text-rose-600 dark:text-rose-400 block mt-0.5 truncate">
-                  {formatCurrency(paymentsStats.totalBilled)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Advanced Date & Search Filtering Bar */}
-          <div className="bg-white dark:bg-slate-900 p-3.5 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3">
-            {/* Date filter pills */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide text-xs font-semibold">
-              <div className="flex items-center gap-1 text-slate-400 mr-1 shrink-0">
-                <Calendar size={13} />
-                <span className="text-[11px] font-bold uppercase tracking-wider">Date:</span>
-              </div>
-              {ALL_PAYMENTS_DATE_FILTERS.map(f => (
-                <button
-                  key={f.value}
-                  onClick={() => setPaymentsDateMode(f.value)}
-                  className={`px-3 py-1.5 rounded-xl shrink-0 transition-all cursor-pointer ${
-                    paymentsDateMode === f.value
-                      ? 'bg-lime-600 text-white font-bold shadow-xs'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Live Date Inputs when specific date or range is active */}
-            {paymentsDateMode === 'single_date' && (
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 bg-slate-50 dark:bg-slate-850 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">Specific Date:</span>
+      {view === 'payments' ? (
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-2.5 shadow-xs print:hidden">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+              {viewSwitch}
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
                 <input
-                  type="date"
-                  value={paymentsSingleDate}
-                  onChange={e => setPaymentsSingleDate(e.target.value)}
-                  className="w-full sm:w-auto px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
+                  type="search"
+                  value={logSearch}
+                  onChange={e => setLogSearch(e.target.value)}
+                  placeholder="Search vendor, note, reference…"
+                  className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-400 focus:border-lime-500 focus:bg-white"
                 />
-              </div>
-            )}
-
-            {paymentsDateMode === 'custom_range' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 bg-slate-50 dark:bg-slate-850 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                <label className="flex flex-col gap-1 min-w-0">
-                  <span className="font-bold text-slate-700 dark:text-slate-300">From Date</span>
-                  <input
-                    type="date"
-                    value={paymentsStartDate}
-                    onChange={e => setPaymentsStartDate(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 min-w-0">
-                  <span className="font-bold text-slate-700 dark:text-slate-300">To Date</span>
-                  <input
-                    type="date"
-                    value={paymentsEndDate}
-                    onChange={e => setPaymentsEndDate(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                  />
-                </label>
-              </div>
-            )}
-
-            {/* Search, Action Filter, and Vendor Filter Controls */}
-            <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5 pt-1 border-t border-slate-100 dark:border-slate-800">
-              {/* Search Bar */}
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input
-                  type="text"
-                  placeholder="Search vendor name, voucher #, notes..."
-                  value={paymentsSearchTerm}
-                  onChange={e => setPaymentsSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:bg-white dark:focus:bg-slate-900 focus:outline-none focus:border-lime-500 transition-all"
-                />
-                {paymentsSearchTerm && (
-                  <button aria-label="Hatayen" onClick={() => setPaymentsSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
+                {logSearch && (
+                  <button type="button" aria-label="Search saaf karein" onClick={() => setLogSearch('')} className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-slate-400 hover:bg-slate-200">
                     <X size={13} />
                   </button>
                 )}
               </div>
-
-              {/* Action Filter Pills: Di vs Li vs Bill */}
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] sm:text-xs font-semibold overflow-x-auto scrollbar-hide w-full md:w-auto">
-                <button
-                  onClick={() => setPaymentsActionFilter('all')}
-                  className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer shrink-0 whitespace-nowrap ${
-                    paymentsActionFilter === 'all'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-bold shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                  }`}
-                >
-                  All ({allVendorTransactions.length})
-                </button>
-                <button
-                  onClick={() => setPaymentsActionFilter('Payment')}
-                  className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap ${
-                    paymentsActionFilter === 'Payment'
-                      ? 'bg-emerald-600 text-white font-bold shadow-xs'
-                      : 'text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
-                  }`}
-                >
-                  <ArrowUpRight size={13} />
-                  <span>Payment Di</span>
-                </button>
-                <button
-                  onClick={() => setPaymentsActionFilter('Refund')}
-                  className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap ${
-                    paymentsActionFilter === 'Refund'
-                      ? 'bg-blue-600 text-white font-bold shadow-xs'
-                      : 'text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40'
-                  }`}
-                >
-                  <ArrowDownLeft size={13} />
-                  <span>Payment Li</span>
-                </button>
-                <button
-                  onClick={() => setPaymentsActionFilter('Bill')}
-                  className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap ${
-                    paymentsActionFilter === 'Bill'
-                      ? 'bg-rose-600 text-white font-bold shadow-xs'
-                      : 'text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40'
-                  }`}
-                >
-                  <Receipt size={13} />
-                  <span>Bills</span>
-                </button>
-              </div>
-
-              {/* Vendor Selector Dropdown */}
-              <div className="w-full md:w-auto md:shrink-0">
-                <select
-                  value={paymentsVendorFilter}
-                  onChange={e => setPaymentsVendorFilter(e.target.value)}
-                  className="w-full md:w-auto px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                >
-                  <option value="All">All Vendors ({expenseVendors.length})</option>
-                  {expenseVendors.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} ({v.service_type || 'Vendor'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Payment Mode Selector */}
-              <div className="w-full md:w-auto md:shrink-0">
-                <select
-                  value={paymentsModeFilter}
-                  onChange={e => setPaymentsModeFilter(e.target.value)}
-                  className="w-full md:w-auto px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                >
-                  <option value="All">All Accounts (Cash + Bank)</option>
-                  <option value="Cash">Cash Drawer Only</option>
-                  <option value="Online">Bank / Online Only</option>
-                </select>
-              </div>
-
-              {/* Print Report */}
-              <button aria-label="Print Payments Register"
-                onClick={() => window.print()}
-                className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl transition-colors cursor-pointer shrink-0"
-                title="Print Payments Register"
-              >
-                <Printer size={15} />
+              <button type="button" onClick={() => window.print()} className="hidden h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 lg:flex">
+                <Printer size={14} /> Print
               </button>
             </div>
-          </div>
-
-          {/* 3. The Transactions Register (Desktop Table) */}
-          <div className="hidden md:block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50/90 dark:bg-slate-850 text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider border-b border-slate-200 dark:border-slate-800">
-                  <tr>
-                    <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Vendor / Party (Kis Ko Di / Li)</th>
-                    <th className="px-4 py-3 text-center">Action Type</th>
-                    <th className="px-4 py-3">Description & Notes</th>
-                    <th className="px-4 py-3">Paid From / Mode</th>
-                    <th className="px-4 py-3 text-right">Amount (Raqam)</th>
-                    <th className="px-4 py-3 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium text-slate-700 dark:text-slate-200">
-                  {filteredPaymentLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
-                        <Users size={32} className="mx-auto text-slate-300 mb-2 opacity-50" />
-                        <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No vendor payments found</p>
-                        <p className="text-xs text-slate-400 mt-0.5">Try adjusting your date filters or search terms</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredPaymentLogs.map(row => {
-                      const isPaymentDi = row.actionType === 'Payment';
-                      const isPaymentLi = row.actionType === 'Refund';
-                      const isBill = row.actionType === 'Bill';
-
-                      return (
-                        <tr key={row.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-850/50 transition-colors">
-                          {/* Date */}
-                          <td className="px-4 py-3 whitespace-nowrap font-mono text-slate-600 dark:text-slate-400 text-xs">
-                            <span className="font-semibold block text-slate-900 dark:text-slate-100">
-                              {formatDateDisplay(row.date)}
-                            </span>
-                            {row.date.includes('T') && (
-                              <span className="text-[10px] text-slate-400 flex items-center gap-0.5 mt-0.5">
-                                <Clock size={10} />
-                                {new Date(row.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Vendor / Party */}
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2.5">
-                              <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                                isPaymentDi
-                                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
-                                  : isPaymentLi
-                                  ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                              }`}>
-                                {row.vendorName.charAt(0).toUpperCase()}
-                              </div>
-                              <div className="min-w-0">
-                                <button
-                                  type="button"
-                                  onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
-                                  className="font-bold text-xs text-slate-900 dark:text-slate-100 hover:text-lime-600 dark:hover:text-lime-400 transition-colors text-left truncate block cursor-pointer"
-                                  title="View this vendor's full ledger"
-                                >
-                                  {row.vendorName}
-                                </button>
-                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
-                                  <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 font-medium">
-                                    {row.vendorServiceType || 'Vendor'}
-                                  </span>
-                                  {row.vendorPhone && (
-                                    <span className="font-mono">{row.vendorPhone}</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Action Type Badge (Di vs Li vs Bill) */}
-                          <td className="px-4 py-3 text-center whitespace-nowrap">
-                            {isPaymentDi && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                <ArrowUpRight size={12} className="text-emerald-600 dark:text-emerald-400" />
-                                <span>Payment Di (Paid)</span>
-                              </span>
-                            )}
-                            {isPaymentLi && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                <ArrowDownLeft size={12} className="text-blue-600 dark:text-blue-400" />
-                                <span>Payment Li (Refund)</span>
-                              </span>
-                            )}
-                            {isBill && (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                                <Receipt size={12} className="text-rose-600 dark:text-rose-400" />
-                                <span>Bill (Kharidari)</span>
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Description & Reference */}
-                          <td className="px-4 py-3">
-                            <p className="font-semibold text-slate-800 dark:text-slate-200 text-xs">
-                              {row.description}
-                            </p>
-                            {row.referenceNo && (
-                              <span className="text-[10px] font-mono text-slate-400 block mt-0.5">
-                                Ref: {row.referenceNo}
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Paid From / Account */}
-                          <td className="px-4 py-3 whitespace-nowrap">
-                            <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-                              {row.accountName}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-medium">
-                              Mode: {row.paymentMode}
-                            </span>
-                          </td>
-
-                          {/* Amount */}
-                          <td className="px-4 py-3 text-right whitespace-nowrap">
-                            <span className={`font-mono font-black text-sm block ${
-                              isPaymentDi
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : isPaymentLi
-                                ? 'text-blue-600 dark:text-blue-400'
-                                : 'text-rose-600 dark:text-rose-400'
-                            }`}>
-                              {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}{formatCurrency(row.amount)}
-                            </span>
-                          </td>
-
-                          {/* Actions */}
-                          <td className="px-4 py-3 text-center whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1">
-                              <button aria-label="View Vendor Ledger"
-                                type="button"
-                                onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
-                                className="p-1.5 bg-slate-100 hover:bg-lime-100 text-slate-600 hover:text-lime-800 rounded-lg transition-colors cursor-pointer"
-                                title="View Vendor Ledger"
-                              >
-                                <ChevronRight size={14} />
-                              </button>
-
-                              {row.isDeletable && canDelete && handleDeleteVendorTransaction && (
-                                <button aria-label="Delete Payment Entry"
-                                  type="button"
-                                  onClick={() => handleDeleteVendorTransaction(row.id)}
-                                  className="p-1.5 bg-slate-100 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                                  title="Delete Payment Entry"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* 4. Mobile payment cards */}
-          <div className="md:hidden space-y-2.5">
-            {filteredPaymentLogs.length === 0 ? (
-              <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-slate-400">
-                <Users size={28} className="mx-auto text-slate-300 mb-1.5" />
-                <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No vendor payments found</p>
-                <p className="text-xs text-slate-400 mt-0.5">Try adjusting your date filters or search</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
+              <div className="max-w-full overflow-x-auto scrollbar-hide">
+                <PillGroup label="Period" size="sm" options={LOG_PERIODS} value={logPeriod} onChange={setLogPeriod} className="w-max" />
               </div>
-            ) : (
-              filteredPaymentLogs.map(row => {
-                const isPaymentDi = row.actionType === 'Payment';
-                const isPaymentLi = row.actionType === 'Refund';
-                const isBill = row.actionType === 'Bill';
-
-                return (
-                  <div
-                    key={row.id}
-                    className="p-3 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
-                        className="min-w-0 flex-1 text-left cursor-pointer"
-                      >
-                        <span className="text-[10px] font-mono font-bold text-slate-400">{formatDateDisplay(row.date)}</span>
-                        <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate mt-0.5">{row.vendorName}</h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                          {row.vendorServiceType || 'Vendor'}
-                          {row.vendorPhone ? ` • ${row.vendorPhone}` : ''}
-                        </p>
-                      </button>
-                      <div className="text-right shrink-0">
-                        <span className={`font-mono font-black text-sm block ${
-                          isPaymentDi
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : isPaymentLi
-                            ? 'text-blue-600 dark:text-blue-400'
-                            : 'text-rose-600 dark:text-rose-400'
-                        }`}>
-                          {isPaymentDi ? '- ' : isPaymentLi ? '+ ' : ''}{formatCurrency(row.amount)}
-                        </span>
-                        <span className={`mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                          isPaymentDi
-                            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                            : isPaymentLi
-                            ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-                            : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
-                        }`}>
-                          {isPaymentDi && <ArrowUpRight size={11} />}
-                          {isPaymentLi && <ArrowDownLeft size={11} />}
-                          {isBill && <Receipt size={11} />}
-                          {isPaymentDi ? 'Di' : isPaymentLi ? 'Li' : 'Bill'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 leading-snug break-words">{row.description}</p>
-
-                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
-                      <span className="text-slate-400 truncate min-w-0">{row.accountName} • {row.paymentMode}</span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button aria-label="View Vendor Ledger"
-                          type="button"
-                          onClick={() => row.vendorId && handleSelectVendorFromRow(row.vendorId)}
-                          className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-lime-100 text-slate-600 hover:text-lime-800 rounded-lg transition-colors cursor-pointer"
-                          title="View Vendor Ledger"
-                        >
-                          <ChevronRight size={14} />
-                        </button>
-                        {row.isDeletable && canDelete && handleDeleteVendorTransaction && (
-                          <button aria-label="Delete Payment Entry"
-                            type="button"
-                            onClick={() => handleDeleteVendorTransaction(row.id)}
-                            className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                            title="Delete Payment Entry"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODE 2: VENDOR PROFILES & INDIVIDUAL LEDGERS (INFRADI KHATA)               */}
-      {/* ========================================================================= */}
-      {vendorViewMode === 'directory' && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col lg:flex-row min-h-0 lg:min-h-[680px]">
-          
-          {/* LEFT PANE: Vendor Master Directory List */}
-          <div className={`w-full lg:w-[360px] xl:w-[380px] min-w-0 border-r border-slate-200 dark:border-slate-800 flex flex-col bg-slate-50/50 dark:bg-slate-950/40 shrink-0 ${
-            isMobileLedgerOpen ? 'hidden lg:flex' : 'flex'
-          }`}>
-            <div className="p-2.5 sm:p-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-                  <input
-                    type="text"
-                    placeholder="Search vendor by name, phone..."
-                    className="w-full pl-9 pr-7 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:bg-white dark:focus:bg-slate-900 focus:outline-none focus:border-lime-500 transition-all shadow-inner"
-                    value={searchTerm}
-                    onChange={e => setSearchTerm(e.target.value)}
-                  />
-                  {searchTerm && (
-                    <button aria-label="Hatayen" onClick={() => setSearchTerm('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer">
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  onClick={handleOpenAddVendorModal}
-                  className="px-3.5 py-2 bg-lime-600 hover:bg-lime-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all shrink-0 cursor-pointer active:scale-95"
-                  title="Add New Vendor / Staff"
-                >
-                  <Plus size={14} />
-                  <span>Add</span>
-                </button>
+              <div className="max-w-full overflow-x-auto scrollbar-hide">
+                <PillGroup
+                  label="Entry type"
+                  size="sm"
+                  value={logAction}
+                  onChange={setLogAction}
+                  className="w-max"
+                  options={[
+                    { value: 'all', label: 'All' },
+                    { value: 'Payment', label: 'Paid', dot: 'bg-emerald-500' },
+                    { value: 'Refund', label: 'Received', dot: 'bg-sky-500' },
+                    { value: 'Bill', label: 'Credit bills', dot: 'bg-rose-500' },
+                  ]}
+                />
               </div>
-
-              <div className="flex gap-1 overflow-x-auto pb-0.5 scrollbar-hide text-[11px] font-semibold">
-                <button
-                  onClick={() => setFilterVendorTabStatus('All')}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-all cursor-pointer ${
-                    filterVendorTabStatus === 'All' ? 'bg-lime-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  All ({expenseVendors.length})
-                </button>
-                <button
-                  onClick={() => setFilterVendorTabStatus('With Dues')}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-all cursor-pointer ${
-                    filterVendorTabStatus === 'With Dues' ? 'bg-rose-600 text-white font-bold' : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100'
-                  }`}
-                >
-                  Dues ({expenseVendors.filter(v => (v.pending_balance || 0) > 0).length})
-                </button>
-                <button
-                  onClick={() => setFilterVendorTabStatus('Advance')}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-all cursor-pointer ${
-                    filterVendorTabStatus === 'Advance' ? 'bg-blue-600 text-white font-bold' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100'
-                  }`}
-                >
-                  Advance ({expenseVendors.filter(v => (v.pending_balance || 0) < 0).length})
-                </button>
-                <button
-                  onClick={() => setFilterVendorTabStatus('Active')}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-all cursor-pointer ${
-                    filterVendorTabStatus === 'Active' ? 'bg-emerald-700 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  Active
-                </button>
+              <PillGroup label="Mode" size="sm" value={logMode} onChange={setLogMode} options={[{ value: 'All', label: 'Any mode' }, { value: 'Cash', label: 'Cash' }, { value: 'Online', label: 'Bank' }]} />
+              <div className="w-full sm:w-56">
+                <RichSelect
+                  compact
+                  options={[{ value: 'All', label: 'All vendors' }, ...expenseVendors.map(v => ({ value: v.id, label: v.name, subLabel: v.service_type, avatarLetter: v.name.charAt(0).toUpperCase() }))]}
+                  value={logVendor}
+                  onChange={val => setLogVendor(val || 'All')}
+                  allowClear={false}
+                  placeholder="All vendors"
+                  searchPlaceholder="Search vendor…"
+                />
               </div>
-            </div>
-
-            {/* Quick Switch to All Payments Log Button inside the left panel */}
-            <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60">
-              <button
-                type="button"
-                onClick={() => setVendorViewMode('all_payments')}
-                className="w-full p-2.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-200 border border-blue-200 dark:border-blue-800 rounded-xl text-xs font-bold flex items-center justify-between transition-all cursor-pointer shadow-2xs"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <ArrowDownUp size={15} className="text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="truncate">
-                    <span className="sm:hidden">All Payments Log</span>
-                    <span className="hidden sm:inline">Tamam Payments Log (Kisko Di / Li)</span>
-                  </span>
-                </div>
-                <ChevronRight size={14} className="text-blue-500 shrink-0" />
-              </button>
-            </div>
-
-            {/* Scrollable Vendor List */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 max-h-[70vh] lg:max-h-[calc(100vh-290px)] lg:min-h-[460px]">
-              {filteredVendors.map(vendor => {
-                const isSelected = selectedVendor?.id === vendor.id;
-                const bal = vendor.pending_balance || 0;
-                const hasDues = bal > 0;
-                const hasAdvance = bal < 0;
-
-                return (
-                  <div
-                    key={vendor.id}
-                    onClick={() => {
-                      setSelectedVendorId(vendor.id);
-                      setIsMobileLedgerOpen(true);
-                    }}
-                    className={`p-3 rounded-2xl cursor-pointer transition-all border ${
-                      isSelected
-                        ? 'bg-white dark:bg-slate-850 border-lime-500 shadow-sm ring-2 ring-lime-500/20'
-                        : 'bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                          hasDues
-                            ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
-                            : hasAdvance
-                            ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                        }`}>
-                          {vendor.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h4 className={`text-xs font-semibold truncate ${isSelected ? 'text-lime-900 dark:text-lime-300' : 'text-slate-800 dark:text-slate-100'}`}>{vendor.name}</h4>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">{vendor.service_type || 'Vendor'}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className={`text-xs font-bold font-mono ${hasDues ? 'text-rose-600 dark:text-rose-400' : hasAdvance ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                          {formatCurrency(Math.abs(bal))}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {filteredVendors.length === 0 && (
-                <div className="py-12 text-center text-slate-400">
-                  <Users size={28} className="mx-auto text-slate-300 mb-1.5" />
-                  <p className="font-semibold text-xs text-slate-600 dark:text-slate-400">No matching vendors found</p>
+              {logPeriod === 'custom_range' && (
+                <div className="flex items-center gap-1.5">
+                  <CalendarRange size={14} className="text-slate-400" />
+                  <input type="date" value={logStart} onChange={e => setLogStart(e.target.value)} aria-label="Kab se" className="h-8 rounded-lg border border-slate-200 px-2 text-xs font-semibold outline-none focus:border-lime-500" />
+                  <span className="text-xs text-slate-400">to</span>
+                  <input type="date" value={logEnd} onChange={e => setLogEnd(e.target.value)} aria-label="Kab tak" className="h-8 rounded-lg border border-slate-200 px-2 text-xs font-semibold outline-none focus:border-lime-500" />
                 </div>
               )}
             </div>
           </div>
 
-          {/* RIGHT PANE: Live Ledger Statement */}
-          <div className={`flex-1 min-w-0 flex flex-col bg-white dark:bg-slate-900 overflow-hidden ${
-            !isMobileLedgerOpen ? 'hidden lg:flex' : 'flex'
-          }`}>
-            {selectedVendor ? (
-              <div className="flex flex-col h-full min-w-0">
-                {/* Vendor Header */}
-                <div className="p-3 sm:p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/50 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3 min-w-0">
-                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                    <button aria-label="Wapas jayen"
-                      onClick={() => setIsMobileLedgerOpen(false)}
-                      className="lg:hidden p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300 shrink-0"
-                    >
-                      <ArrowLeft size={16} />
-                    </button>
-
-                    <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
-                      (selectedVendor.pending_balance || 0) > 0
-                        ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
-                        : (selectedVendor.pending_balance || 0) < 0
-                        ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300'
-                        : 'bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-300'
-                    }`}>
-                      {selectedVendor.name.charAt(0).toUpperCase()}
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <h3 className="font-bold text-sm sm:text-lg text-slate-900 dark:text-slate-100 truncate">{selectedVendor.name}</h3>
-                        <span className="text-[10px] font-bold bg-slate-200 dark:bg-slate-750 text-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full shrink-0 truncate max-w-[7rem] sm:max-w-none">
-                          {selectedVendor.service_type || 'Vendor'}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        {selectedVendor.contact_person && <span className="truncate max-w-full">Contact: {selectedVendor.contact_person}</span>}
-                        {selectedVendor.phone && (
-                          <span className="flex items-center gap-1 font-mono">
-                            <Phone size={11} className="text-slate-400" /> {selectedVendor.phone}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 w-full lg:w-auto">
-                    <button
-                      onClick={() => handleOpenPaymentModal(selectedVendor)}
-                      className="flex-1 lg:flex-initial justify-center px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                    >
-                      <Wallet size={14} /> Pay / Receive
-                    </button>
-
-                    <button
-                      onClick={() => handleShareWhatsAppStatement(selectedVendor)}
-                      className="px-2.5 py-2 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer shrink-0"
-                      title="Share Statement via WhatsApp"
-                    >
-                      <MessageCircle size={14} className="text-emerald-600 dark:text-emerald-400" />
-                      <span className="hidden sm:inline">WhatsApp</span>
-                    </button>
-
-                    <button
-                      onClick={handlePrintStatement}
-                      className="px-2.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer shrink-0"
-                      title="Print Ledger Statement"
-                    >
-                      <Printer size={14} />
-                      <span className="hidden sm:inline">Print</span>
-                    </button>
-
-                    <button aria-label="Edit Profile"
-                      onClick={() => handleOpenEditVendorModal(selectedVendor)}
-                      className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl transition-colors cursor-pointer"
-                      title="Edit Profile"
-                    >
-                      <Edit size={14} />
-                    </button>
-
-                    <button aria-label="Delete Vendor"
-                      onClick={() => handleDeleteVendor(selectedVendor)}
-                      className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-xl transition-colors cursor-pointer"
-                      title="Delete Vendor"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Financial Summary KPIs */}
-                <div className="p-3 sm:p-5 space-y-3 sm:space-y-4 flex-1 overflow-y-auto min-w-0">
-                  <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
-                    <div className="bg-slate-50 dark:bg-slate-800/40 p-2 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 min-w-0">
-                      <span className="text-[9px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider block leading-tight">Billed</span>
-                      <span className="text-xs sm:text-xl font-bold font-mono text-slate-900 dark:text-slate-100 block mt-1 truncate">
-                        {formatCurrency((selectedVendor.total_billed || 0))}
-                      </span>
-                    </div>
-
-                    <div className="bg-emerald-50/60 dark:bg-emerald-950/20 p-2 sm:p-4 rounded-xl sm:rounded-2xl border border-emerald-200 dark:border-emerald-800/60 min-w-0">
-                      <span className="text-[9px] sm:text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold uppercase tracking-wider block leading-tight">Paid</span>
-                      <span className="text-xs sm:text-xl font-bold font-mono text-emerald-700 dark:text-emerald-400 block mt-1 truncate">
-                        {formatCurrency((selectedVendor.total_paid || 0))}
-                      </span>
-                    </div>
-
-                    <div className={`p-2 sm:p-4 rounded-xl sm:rounded-2xl border min-w-0 ${
-                      (selectedVendor.pending_balance || 0) > 0
-                        ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200'
-                        : (selectedVendor.pending_balance || 0) < 0
-                        ? 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200'
-                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
-                    }`}>
-                      <span className="text-[9px] sm:text-[11px] font-semibold uppercase tracking-wider block opacity-80 leading-tight">
-                        {(selectedVendor.pending_balance || 0) < 0 ? 'Advance' : 'Dues'}
-                      </span>
-                      <span className={`text-xs sm:text-xl font-bold font-mono block mt-1 truncate ${
-                        (selectedVendor.pending_balance || 0) > 0
-                          ? 'text-rose-700 dark:text-rose-400'
-                          : (selectedVendor.pending_balance || 0) < 0
-                          ? 'text-blue-700 dark:text-blue-400'
-                          : 'text-slate-800 dark:text-slate-200'
-                      }`}>
-                        {formatCurrency(Math.abs(selectedVendor.pending_balance || 0))}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Comprehensive Date Filter Strip */}
-                  <div className="space-y-2 bg-slate-50 dark:bg-slate-850 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800">
-                    <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold overflow-x-auto scrollbar-hide">
-                      {KHATA_STATEMENT_DATE_FILTERS.map(range => (
-                        <button
-                          key={range.value}
-                          onClick={() => setKhataDateRange(range.value)}
-                          className={`px-3 py-1.5 rounded-lg transition-all shrink-0 cursor-pointer ${
-                            khataDateRange === range.value 
-                              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-bold' 
-                              : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'
-                          }`}
-                        >
-                          {range.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Interactive Date Pickers for Single Date and Custom Range */}
-                    {khataDateRange === 'single_date' && (
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 p-2 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                        <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">Specific Date:</span>
-                        <input
-                          type="date"
-                          value={khataStartDate}
-                          onChange={e => {
-                            setKhataStartDate(e.target.value);
-                            setKhataEndDate(e.target.value);
-                          }}
-                          className="w-full sm:w-auto px-2.5 py-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg font-mono text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                        />
-                      </div>
-                    )}
-
-                    {khataDateRange === 'custom' && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                        <label className="flex flex-col gap-1">
-                          <span className="font-bold text-slate-700 dark:text-slate-300">From Date</span>
-                          <input
-                            type="date"
-                            value={khataStartDate}
-                            onChange={e => setKhataStartDate(e.target.value)}
-                            className="w-full px-2.5 py-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg font-mono text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="font-bold text-slate-700 dark:text-slate-300">To Date</span>
-                          <input
-                            type="date"
-                            value={khataEndDate}
-                            onChange={e => setKhataEndDate(e.target.value)}
-                            className="w-full px-2.5 py-1 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg font-mono text-xs text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500"
-                          />
-                        </label>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Statement Ledger Table with Clear Di / Li indicators */}
-                  <div className="hidden md:block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-2xs">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50/90 dark:bg-slate-850 text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider border-b border-slate-200 dark:border-slate-800">
-                        <tr>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3">Type</th>
-                          <th className="px-4 py-3">Description & Account</th>
-                          <th className="px-4 py-3 text-right">Debit (Bill)</th>
-                          <th className="px-4 py-3 text-right">Credit (Paid)</th>
-                          <th className="px-4 py-3 text-right">Running Balance</th>
-                          {canDelete && <th className="px-3 py-3 text-center">Action</th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium text-slate-700 dark:text-slate-200">
-                        {khataLedgerRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={canDelete ? 7 : 6} className="px-4 py-8 text-center text-slate-400">
-                              No transaction history found for this period
-                            </td>
-                          </tr>
-                        ) : (
-                          khataLedgerRows.map(row => (
-                            <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
-                              <td className="px-4 py-2.5 font-mono text-[11px] text-slate-500">
-                                {formatDateDisplay(row.date)}
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-flex items-center gap-1 ${
-                                  row.type === 'Bill'
-                                    ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
-                                    : row.type === 'Payment'
-                                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                                    : row.type === 'Refund'
-                                    ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
-                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                                }`}>
-                                  {row.type === 'Payment' && <ArrowUpRight size={10} />}
-                                  {row.type === 'Refund' && <ArrowDownLeft size={10} />}
-                                  {row.type === 'Payment' ? 'Payment Di' : row.type === 'Refund' ? 'Payment Li' : row.type}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <p className="font-semibold text-slate-800 dark:text-slate-100">{row.description}</p>
-                                {row.modeAccount && <span className="text-[10px] text-slate-400 font-normal">Account: {row.modeAccount}</span>}
-                              </td>
-                              <td className="px-4 py-2.5 text-right font-mono font-bold text-rose-600 dark:text-rose-400">
-                                {row.debit > 0 ? `${formatCurrency(row.debit)}` : '—'}
-                              </td>
-                              <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                                {row.credit > 0 ? `${formatCurrency(row.credit)}` : '—'}
-                              </td>
-                              <td className={`px-4 py-2.5 text-right font-mono font-black ${
-                                row.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : row.runningBalance < 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-slate-200'
-                              }`}>
-                                {formatCurrency(Math.abs(row.runningBalance))}
-                              </td>
-                              {canDelete && (
-                                <td className="px-3 py-2.5 text-center whitespace-nowrap">
-                                  {handleDeleteVendorTransaction && (row.type === 'Payment' || row.type === 'Refund') ? (
-                                    <button aria-label="Delete Vendor Transaction"
-                                      type="button"
-                                      onClick={() => handleDeleteVendorTransaction(row.id)}
-                                      className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                                      title="Delete Vendor Transaction"
-                                    >
-                                      <Trash2 size={13} />
-                                    </button>
-                                  ) : (
-                                    <span className="text-slate-300 dark:text-slate-600 text-xs">—</span>
-                                  )}
-                                </td>
-                              )}
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="md:hidden space-y-2">
-                    {khataLedgerRows.length === 0 ? (
-                      <div className="px-4 py-8 text-center text-slate-400 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl">
-                        No transaction history found for this period
-                      </div>
-                    ) : (
-                      khataLedgerRows.map(row => (
-                        <div key={row.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 space-y-2 shadow-2xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-mono font-bold text-slate-500">{formatDateDisplay(row.date)}</span>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-flex items-center gap-1 ${
-                                row.type === 'Bill'
-                                  ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
-                                  : row.type === 'Payment'
-                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                                  : row.type === 'Refund'
-                                  ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                              }`}>
-                                {row.type === 'Payment' && <ArrowUpRight size={10} />}
-                                {row.type === 'Refund' && <ArrowDownLeft size={10} />}
-                                {row.type === 'Payment' ? 'Payment Di' : row.type === 'Refund' ? 'Payment Li' : row.type}
-                              </span>
-                              {canDelete && handleDeleteVendorTransaction && (row.type === 'Payment' || row.type === 'Refund') && (
-                                <button aria-label="Delete Vendor Transaction"
-                                  type="button"
-                                  onClick={() => handleDeleteVendorTransaction(row.id)}
-                                  className="p-1 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                                  title="Delete Vendor Transaction"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-xs text-slate-800 dark:text-slate-100 break-words">{row.description}</p>
-                            {row.modeAccount && <span className="text-[10px] text-slate-400 font-normal">Account: {row.modeAccount}</span>}
-                          </div>
-                          <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800 text-center">
-                            <div className="min-w-0">
-                              <span className="block text-[9px] font-bold uppercase text-slate-400">Bill</span>
-                              <span className="block text-xs font-mono font-bold text-rose-600 dark:text-rose-400 truncate">
-                                {row.debit > 0 ? `${formatCurrency(row.debit)}` : '—'}
-                              </span>
-                            </div>
-                            <div className="min-w-0">
-                              <span className="block text-[9px] font-bold uppercase text-slate-400">Paid</span>
-                              <span className="block text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate">
-                                {row.credit > 0 ? `${formatCurrency(row.credit)}` : '—'}
-                              </span>
-                            </div>
-                            <div className="min-w-0">
-                              <span className="block text-[9px] font-bold uppercase text-slate-400">Balance</span>
-                              <span className={`block text-[11px] font-mono font-black truncate ${
-                                row.runningBalance > 0 ? 'text-rose-600 dark:text-rose-400' : row.runningBalance < 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-800 dark:text-slate-200'
-                              }`}>
-                                {formatCurrency(Math.abs(row.runningBalance))}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* Fallback when directory mode is open but no vendor selected: show All Payments */
-              <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12 text-slate-400 space-y-3">
-                <Users size={40} className="text-slate-300 mb-1" />
-                <p className="font-bold text-base text-slate-700 dark:text-slate-300">Koi Vendor Select Nahi Hai</p>
-                <p className="text-xs text-slate-400 max-w-sm text-center">
-                  Left panel se kisi vendor ko select karein unka mukammal khata dekhnay ke liye, ya tamam payments dekhnay ke liye upar <strong>"Tamam Payments"</strong> par click karein.
-                </p>
-                <button
-                  onClick={() => setVendorViewMode('all_payments')}
-                  className="px-4 py-2 bg-lime-600 hover:bg-lime-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
-                >
-                  Tamam Payments Log Dekhein
-                </button>
-              </div>
-            )}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <MiniStat label="Paid out" value={logStats.paid} tone="text-emerald-700" />
+            <MiniStat label="Received back" value={logStats.received} tone="text-sky-700" />
+            <MiniStat label="Net outflow" value={logStats.net} tone="text-slate-900" />
+            <MiniStat label="New credit bills" value={logStats.billed} tone="text-rose-600" />
           </div>
+
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+            {filteredLog.length === 0 ? (
+              <EmptyState icon={ArrowDownUp} title="No vendor payments in this view" hint="Try another period, entry type or vendor." />
+            ) : (
+              <>
+                {logGroups.map(group => {
+                  const heading = dayHeading(group.day);
+                  const dayNet = group.rows.reduce((sum, r) => sum + (r.actionType === 'Payment' ? r.amount : r.actionType === 'Refund' ? -r.amount : 0), 0);
+                  return (
+                    <div key={group.day}>
+                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-4 py-1.5 text-[11px]">
+                        <span className="font-bold text-slate-700">{heading.title}{heading.sub && <span className="ml-1.5 font-medium text-slate-400">{heading.sub}</span>}</span>
+                        <span className="font-semibold text-slate-500">Net <span className="font-mono font-bold text-slate-800">{formatCurrency(dayNet)}</span></span>
+                      </div>
+                      <ul className="divide-y divide-slate-100">
+                        {group.rows.map(row => {
+                          const isPaid = row.actionType === 'Payment';
+                          const isIn = row.actionType === 'Refund';
+                          const tone = isPaid ? 'text-emerald-700' : isIn ? 'text-sky-700' : 'text-rose-600';
+                          const label = isPaid ? 'Paid' : isIn ? 'Received' : 'Credit bill';
+                          const Icon = isPaid ? ArrowUpRight : isIn ? ArrowDownLeft : Receipt;
+                          const tile = isPaid ? 'bg-emerald-100 text-emerald-700' : isIn ? 'bg-sky-100 text-sky-700' : 'bg-rose-100 text-rose-700';
+                          return (
+                            <li key={row.id} className="group flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50">
+                              <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${tile}`}><Icon size={15} /></span>
+                              <div className="min-w-0 flex-1">
+                                <button type="button" onClick={() => openLedger(row.vendorId)} className="block max-w-full truncate text-left text-[13px] font-bold text-slate-900 hover:text-lime-700">
+                                  {row.vendorName}
+                                </button>
+                                <p className="truncate text-[11px] text-slate-500">{row.description}</p>
+                              </div>
+                              <div className="hidden w-40 min-w-0 text-[11px] text-slate-500 xl:block">
+                                <p className="truncate font-semibold text-slate-700">{row.accountName}</p>
+                                {row.referenceNo && <p className="truncate font-mono text-[10px] text-slate-400">Ref {row.referenceNo}</p>}
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className={`font-mono text-[13px] font-black tabular-nums ${tone}`}>{isPaid ? '−' : isIn ? '+' : ''}{formatCurrency(row.amount)}</p>
+                                <p className="text-[10px] font-semibold text-slate-400">{label}</p>
+                              </div>
+                              <div className="flex w-7 justify-end print:hidden">
+                                {row.isDeletable && canDelete && handleDeleteVendorTransaction && (
+                                  <button type="button" aria-label="Payment delete karein" title="Delete payment" onClick={() => handleDeleteVendorTransaction(row.id)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-300 opacity-100 hover:bg-rose-50 hover:text-rose-600 xl:opacity-0 xl:group-hover:opacity-100">
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  );
+                })}
+                <LoadMoreRow sentinelRef={logWindow.sentinelRef} hiddenCount={logWindow.hiddenCount} onShowMore={logWindow.showMore} onShowAll={logWindow.showAll} />
+              </>
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="grid min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs xl:min-h-[640px] xl:grid-cols-[340px_minmax(0,1fr)]">
+          {/* Vendor list */}
+          <aside className={`min-w-0 flex-col border-slate-200 bg-slate-50/40 xl:flex xl:border-r print:hidden ${isMobileLedgerOpen ? 'hidden' : 'flex'}`}>
+            <div className="space-y-2 border-b border-slate-200 bg-white p-3">
+              {viewSwitch}
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+                  <input
+                    type="search"
+                    placeholder="Name, phone, service…"
+                    className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-400 focus:border-lime-500 focus:bg-white"
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                  />
+                  {searchTerm && (
+                    <button type="button" aria-label="Search saaf karein" onClick={() => setSearchTerm('')} className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-slate-400 hover:bg-slate-200">
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <label className="relative">
+                  <span className="sr-only">Sort vendors</span>
+                  <select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)} className="h-9 appearance-none rounded-xl border border-slate-200 bg-white pl-2.5 pr-7 text-xs font-semibold text-slate-700 outline-none focus:border-lime-500">
+                    <option value="balance">Top dues</option>
+                    <option value="recent">Recent</option>
+                    <option value="name">A–Z</option>
+                  </select>
+                  <ChevronDown size={13} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                </label>
+              </div>
+              <div className="overflow-x-auto scrollbar-hide">
+                <PillGroup
+                  label="Vendor filter"
+                  size="sm"
+                  value={filterVendorTabStatus === 'Active' ? 'All' : filterVendorTabStatus}
+                  onChange={value => setFilterVendorTabStatus(value)}
+                  className="w-max min-w-full"
+                  options={[
+                    { value: 'All', label: `All ${statusCounts.All}` },
+                    { value: 'With Dues', label: `To pay ${statusCounts['With Dues']}`, dot: 'bg-rose-500' },
+                    { value: 'Advance', label: `Advance ${statusCounts.Advance}`, dot: 'bg-sky-500' },
+                    { value: 'Inactive', label: `Inactive ${statusCounts.Inactive}`, dot: 'bg-slate-400' },
+                  ]}
+                />
+              </div>
+            </div>
+
+            <ul className="flex-1 space-y-1 overflow-y-auto p-2 xl:max-h-[calc(100vh-300px)]">
+              {sortedVendors.map(vendor => {
+                const bal = vendor.pending_balance || 0;
+                const selected = selectedVendor?.id === vendor.id;
+                const last = lastActivity.get(vendor.id);
+                return (
+                  <li key={vendor.id}>
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedVendorId(vendor.id); setIsMobileLedgerOpen(true); }}
+                      aria-current={selected ? 'true' : undefined}
+                      className={`flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-all ${
+                        selected ? 'border-lime-400 bg-white shadow-sm ring-2 ring-lime-500/15' : 'border-transparent hover:border-slate-200 hover:bg-white'
+                      } ${vendor.isActive === false ? 'opacity-60' : ''}`}
+                    >
+                      <Avatar name={vendor.name} owed={bal > 0} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-bold text-slate-900">{vendor.name}</span>
+                        <span className="block truncate text-[11px] text-slate-500">
+                          {vendor.service_type || 'Vendor'}
+                          {last ? ` · ${formatDateDisplay(last).replace(/ \d{4}$/, '')}` : ''}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right">
+                        <span className={`block font-mono text-xs font-black tabular-nums ${balanceText(bal)}`}>{bal === 0 ? '—' : formatCurrency(Math.abs(bal))}</span>
+                        <span className="block text-[10px] font-semibold text-slate-400">{balanceWord(bal)}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+              {sortedVendors.length === 0 && (
+                <li>
+                  <EmptyState
+                    icon={Users}
+                    title={expenseVendors.length ? 'No vendor matches' : 'No vendors yet'}
+                    hint={expenseVendors.length ? 'Try another search or filter.' : 'Add your landlord, diesel pump, packaging supplier or staff.'}
+                    action={!expenseVendors.length && <PrimaryButton onClick={handleOpenAddVendorModal}><Plus size={14} /> Add vendor</PrimaryButton>}
+                  />
+                </li>
+              )}
+            </ul>
+          </aside>
+
+          {/* Vendor detail */}
+          <section className={`min-w-0 flex-col xl:flex ${isMobileLedgerOpen ? 'flex' : 'hidden'}`}>
+            {selectedVendor ? (
+              <VendorDetail
+                vendor={selectedVendor}
+                onBack={() => setIsMobileLedgerOpen(false)}
+                onPay={amount => handleOpenPaymentModal(selectedVendor, amount, 'payment')}
+                onReceive={() => handleOpenPaymentModal(selectedVendor, undefined, 'refund')}
+                onRecordBill={canCreate && onRecordBill ? () => onRecordBill(selectedVendor) : undefined}
+                onWhatsApp={() => handleShareWhatsAppStatement(selectedVendor)}
+                onPrint={handlePrintStatement}
+                onEdit={() => handleOpenEditVendorModal(selectedVendor)}
+                onDelete={() => handleDeleteVendor(selectedVendor)}
+                showInfo={showMobileVendorInfo}
+                setShowInfo={setShowMobileVendorInfo}
+                khataDateRange={khataDateRange}
+                setKhataDateRange={setKhataDateRange}
+                khataStartDate={khataStartDate}
+                setKhataStartDate={setKhataStartDate}
+                khataEndDate={khataEndDate}
+                setKhataEndDate={setKhataEndDate}
+                rows={khataLedgerRows}
+                formatDateDisplay={formatDateDisplay}
+                canDelete={canDelete}
+                onDeleteTx={handleDeleteVendorTransaction}
+              />
+            ) : (
+              <EmptyState
+                icon={BookUser}
+                title={selectedVendorId ? 'Vendor not found' : 'Pick a vendor'}
+                hint="Choose a vendor on the left to see their khata, or add a new one."
+                action={<PrimaryButton onClick={handleOpenAddVendorModal}><Plus size={14} /> Add vendor</PrimaryButton>}
+              />
+            )}
+          </section>
         </div>
       )}
     </div>
   );
 };
+
+const MiniStat: React.FC<{ label: string; value: number; tone: string }> = ({ label, value, tone }) => (
+  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs">
+    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+    <p className={`mt-0.5 truncate font-mono text-sm font-black tabular-nums ${tone}`}>{formatCurrency(value)}</p>
+  </div>
+);
+
+const VendorDetail: React.FC<{
+  vendor: ExpenseVendor;
+  onBack: () => void;
+  onPay: (amount?: number) => void;
+  onReceive: () => void;
+  onRecordBill?: () => void;
+  onWhatsApp: () => void;
+  onPrint: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  showInfo: boolean;
+  setShowInfo: (open: boolean) => void;
+  khataDateRange: KhataDateRangeType;
+  setKhataDateRange: (r: KhataDateRangeType) => void;
+  khataStartDate: string;
+  setKhataStartDate: (s: string) => void;
+  khataEndDate: string;
+  setKhataEndDate: (s: string) => void;
+  rows: LedgerRow[];
+  formatDateDisplay: (date: string) => string;
+  canDelete: boolean;
+  onDeleteTx?: (id: string) => void;
+}> = ({
+  vendor, onBack, onPay, onReceive, onRecordBill, onWhatsApp, onPrint, onEdit, onDelete, showInfo, setShowInfo,
+  khataDateRange, setKhataDateRange, khataStartDate, setKhataStartDate, khataEndDate, setKhataEndDate,
+  rows, formatDateDisplay, canDelete, onDeleteTx,
+}) => {
+  const [copied, setCopied] = useState(false);
+  const bal = vendor.pending_balance || 0;
+  const billed = vendor.total_billed || 0;
+  const paid = vendor.total_paid || 0;
+  const rowWindow = useProgressiveList<LedgerRow>(rows, 80, `${vendor.id}|${khataDateRange}|${khataStartDate}|${khataEndDate}`);
+
+  const summary = useMemo(() => {
+    const opening = rows[0]?.type === 'Opening Balance' ? rows[0].runningBalance || (rows[0].debit - rows[0].credit) : 0;
+    let bills = 0, payments = 0;
+    rows.forEach((row, index) => {
+      if (index === 0 && row.type === 'Opening Balance') return;
+      bills += row.debit;
+      payments += row.credit;
+    });
+    const closing = rows.length ? rows[rows.length - 1].runningBalance : 0;
+    return { opening, bills, payments, closing };
+  }, [rows]);
+
+  const hasInfo = Boolean(vendor.contact_person || vendor.address || vendor.bank_name || vendor.account_number || vendor.iban || vendor.notes);
+  const accountNo = vendor.iban || vendor.account_number;
+
+  const copyAccount = async () => {
+    if (!accountNo) return;
+    try {
+      await navigator.clipboard.writeText(accountNo);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard blocked */ }
+  };
+
+  const hero = bal > 0
+    ? { label: 'You owe', tone: 'from-rose-50 border-rose-200 dark:from-rose-500/15', value: 'text-rose-600 dark:text-rose-400', note: 'Pending dues to this vendor' }
+    : bal < 0
+      ? { label: 'Advance with vendor', tone: 'from-sky-50 border-sky-200 dark:from-sky-500/15', value: 'text-sky-700', note: 'Vendor holds your money' }
+      : { label: 'All settled', tone: 'from-emerald-50 border-emerald-200 dark:from-emerald-500/15', value: 'text-emerald-700', note: 'Nothing pending either way' };
+
+  const iconBtn = 'grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900';
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      {/* Header */}
+      <div className="flex flex-col gap-3 border-b border-slate-100 p-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <button type="button" aria-label="Wapas jayen" onClick={onBack} className={`${iconBtn} xl:hidden print:hidden`}>
+            <ArrowLeft size={16} />
+          </button>
+          <Avatar name={vendor.name} owed={bal > 0} size="lg" />
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-base font-black tracking-tight text-slate-900 sm:text-lg">{vendor.name}</h2>
+              {vendor.isActive === false && <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">Inactive</span>}
+            </div>
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+              <span className="font-semibold text-slate-600">{vendor.service_type || 'Vendor'}</span>
+              {vendor.phone && (
+                <a href={`tel:${vendor.phone}`} className="flex items-center gap-1 font-mono hover:text-lime-700">
+                  <Phone size={11} /> {vendor.phone}
+                </a>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 print:hidden">
+          {bal >= 0 ? (
+            <PrimaryButton tone="emerald" onClick={() => onPay()} className="flex-1 sm:flex-initial">
+              <ArrowUpRight size={14} /> Pay
+            </PrimaryButton>
+          ) : (
+            <PrimaryButton tone="sky" onClick={onReceive} className="flex-1 sm:flex-initial">
+              <ArrowDownLeft size={14} /> Receive
+            </PrimaryButton>
+          )}
+          {bal >= 0 ? (
+            <button type="button" onClick={onReceive} className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50" title="Refund / advance wapas">
+              <ArrowDownLeft size={14} className="text-sky-600" /> <span className="hidden xl:inline">Receive</span>
+            </button>
+          ) : (
+            <button type="button" onClick={() => onPay()} className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50" title="Pay vendor">
+              <ArrowUpRight size={14} className="text-emerald-600" /> <span className="hidden xl:inline">Pay</span>
+            </button>
+          )}
+          {onRecordBill && (
+            <button type="button" onClick={onRecordBill} className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50" title="Is vendor ka naya bill likhein">
+              <FileText size={14} className="text-rose-500" /> <span className="hidden sm:inline">Add bill</span>
+            </button>
+          )}
+          <button type="button" aria-label="WhatsApp statement" title="WhatsApp statement" onClick={onWhatsApp} className={`${iconBtn} hover:!text-emerald-600`}><MessageCircle size={15} /></button>
+          <button type="button" aria-label="Print statement" title="Print" onClick={onPrint} className={`${iconBtn} hidden sm:grid`}><Printer size={15} /></button>
+          <button type="button" aria-label="Vendor edit karein" title="Edit vendor" onClick={onEdit} className={iconBtn}><Edit size={15} /></button>
+          <button type="button" aria-label="Vendor delete karein" title="Delete vendor" onClick={onDelete} className={`${iconBtn} hover:!text-rose-600`}><Trash2 size={15} /></button>
+        </div>
+      </div>
+
+      <div className="min-w-0 flex-1 space-y-4 p-4">
+        {/* Balance hero */}
+        <div className="grid gap-2.5 sm:grid-cols-[1.3fr_1fr]">
+          <div className={`rounded-2xl border bg-gradient-to-br to-white p-4 dark:to-slate-900 ${hero.tone}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{hero.label}</p>
+            <p className={`mt-1 font-mono text-2xl font-black tracking-tight tabular-nums sm:text-3xl ${hero.value}`}>{formatCurrency(Math.abs(bal))}</p>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-slate-500">{hero.note}</p>
+              {bal > 0 && (
+                <button type="button" onClick={() => onPay(bal)} className="rounded-lg bg-white/80 px-2 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-200 hover:bg-white print:hidden">
+                  Pay full {formatCurrency(bal)}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200 p-4">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total billed</p>
+                <p className="mt-0.5 truncate font-mono text-sm font-black text-slate-900">{formatCurrency(billed)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total paid</p>
+                <p className="mt-0.5 truncate font-mono text-sm font-black text-emerald-700">{formatCurrency(paid)}</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              {/* Bar = everything paid so far vs what is still owed, so it always agrees with the balance. */}
+              {paid + Math.max(0, bal) > 0
+                ? <SettlementBar total={paid + Math.max(0, bal)} paid={paid} formatMoney={formatCurrency} />
+                : <p className="text-[11px] text-slate-400">No bills recorded yet.</p>}
+              {(vendor.opening_balance || 0) !== 0 && (
+                <p className="mt-1 text-[10px] text-slate-400">Includes opening balance of {formatCurrency(Math.abs(vendor.opening_balance || 0))} {(vendor.opening_balance || 0) > 0 ? 'owed' : 'advance'}</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Profile info */}
+        {hasInfo && (
+          <div className="rounded-2xl border border-slate-200">
+            <button type="button" onClick={() => setShowInfo(!showInfo)} className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-bold text-slate-700 sm:hidden" aria-expanded={showInfo}>
+              Vendor details
+              <ChevronDown size={14} className={`transition-transform ${showInfo ? 'rotate-180' : ''}`} />
+            </button>
+            <dl className={`grid gap-x-4 gap-y-2.5 px-4 pb-3 pt-1 text-xs sm:grid sm:grid-cols-2 sm:pt-3 ${showInfo ? 'grid' : 'hidden'}`}>
+              {vendor.contact_person && <InfoItem icon={Users} label="Contact" value={vendor.contact_person} />}
+              {vendor.address && <InfoItem icon={MapPin} label="Address" value={vendor.address} />}
+              {vendor.bank_name && <InfoItem icon={Landmark} label="Bank" value={vendor.bank_name} />}
+              {accountNo && (
+                <InfoItem
+                  icon={Landmark}
+                  label="Account / IBAN"
+                  value={<span className="flex items-center gap-1.5 font-mono">{accountNo}
+                    <button type="button" onClick={copyAccount} className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Account number copy karein">
+                      <Copy size={11} />
+                    </button>
+                    {copied && <span className="font-sans text-[10px] font-bold text-emerald-600">Copied</span>}
+                  </span>}
+                />
+              )}
+              {vendor.notes && <InfoItem icon={StickyNote} label="Notes" value={vendor.notes} className="sm:col-span-2" />}
+            </dl>
+          </div>
+        )}
+
+        {/* Statement */}
+        <div className="rounded-2xl border border-slate-200">
+          <div className="flex flex-col gap-2 border-b border-slate-100 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-sm font-black text-slate-900">Statement</h3>
+            <div className="max-w-full overflow-x-auto scrollbar-hide print:hidden">
+              <PillGroup label="Statement period" size="sm" options={KHATA_PERIODS} value={khataDateRange} onChange={setKhataDateRange} className="w-max" />
+            </div>
+          </div>
+          {khataDateRange === 'custom' && (
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-3 py-2 print:hidden">
+              <CalendarRange size={14} className="text-slate-400" />
+              <input type="date" value={khataStartDate} onChange={e => setKhataStartDate(e.target.value)} aria-label="Kab se" className="h-8 rounded-lg border border-slate-200 px-2 text-xs font-semibold outline-none focus:border-lime-500" />
+              <span className="text-xs text-slate-400">to</span>
+              <input type="date" value={khataEndDate} onChange={e => setKhataEndDate(e.target.value)} aria-label="Kab tak" className="h-8 rounded-lg border border-slate-200 px-2 text-xs font-semibold outline-none focus:border-lime-500" />
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-px bg-slate-100 sm:grid-cols-4">
+            {[
+              { label: 'Opening', value: summary.opening, tone: balanceText(summary.opening) },
+              { label: 'Bills (+)', value: summary.bills, tone: 'text-rose-600' },
+              { label: 'Paid (−)', value: summary.payments, tone: 'text-emerald-700' },
+              { label: 'Closing', value: summary.closing, tone: balanceText(summary.closing) },
+            ].map(item => (
+              <div key={item.label} className="bg-white px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{item.label}</p>
+                <p className={`truncate font-mono text-[13px] font-black tabular-nums ${item.tone}`}>{formatCurrency(Math.abs(item.value))}</p>
+              </div>
+            ))}
+          </div>
+
+          {rows.length === 0 ? (
+            <EmptyState icon={Receipt} title="No entries in this period" hint="Pick another period to see older bills and payments." />
+          ) : (
+            <>
+              <div className="hidden grid-cols-[100px_minmax(0,1fr)_110px_110px_120px_32px] gap-3 border-y border-slate-100 bg-slate-50/70 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 2xl:grid">
+                <span>Date</span>
+                <span>Details</span>
+                <span className="text-right">Bill (+)</span>
+                <span className="text-right">Paid (−)</span>
+                <span className="text-right">Balance</span>
+                <span />
+              </div>
+              <ul className="divide-y divide-slate-100">
+                {rowWindow.visibleItems.map(row => {
+                  const kind = ROW_KIND[row.type];
+                  const Icon = kind.icon;
+                  const deletable = canDelete && onDeleteTx && (row.type === 'Payment' || row.type === 'Refund');
+                  return (
+                    <li key={row.id} className="group px-3 py-2.5 2xl:grid 2xl:grid-cols-[100px_minmax(0,1fr)_110px_110px_120px_32px] 2xl:items-center 2xl:gap-3">
+                      <span className="hidden font-mono text-[11px] text-slate-500 2xl:block">{formatDateDisplay(row.date)}</span>
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${kind.tile}`}><Icon size={14} /></span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold text-slate-800">{row.description}</p>
+                          <p className="truncate text-[10px] text-slate-400">
+                            <span className="2xl:hidden">{formatDateDisplay(row.date)} · </span>{kind.label} · {row.modeAccount}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right 2xl:hidden">
+                          <p className={`font-mono text-xs font-black ${row.debit > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                            {row.debit > 0 ? `+${formatCurrency(row.debit)}` : ''}{row.debit > 0 && row.credit > 0 ? ' ' : ''}{row.credit > 0 ? `−${formatCurrency(row.credit)}` : ''}
+                          </p>
+                          <p className={`font-mono text-[10px] font-bold ${balanceText(row.runningBalance)}`}>Bal {formatCurrency(Math.abs(row.runningBalance))}</p>
+                        </div>
+                        <span className="flex w-7 shrink-0 justify-end 2xl:hidden print:hidden">
+                          {deletable && (
+                            <button type="button" aria-label="Entry delete karein" title="Delete payment" onClick={() => onDeleteTx!(row.id)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-300 hover:bg-rose-50 hover:text-rose-600 sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100">
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                      <span className="hidden text-right font-mono text-xs font-bold text-rose-600 2xl:block">{row.debit > 0 ? formatCurrency(row.debit) : <span className="text-slate-300">—</span>}</span>
+                      <span className="hidden text-right font-mono text-xs font-bold text-emerald-700 2xl:block">{row.credit > 0 ? formatCurrency(row.credit) : <span className="text-slate-300">—</span>}</span>
+                      <span className={`hidden text-right font-mono text-xs font-black 2xl:block ${balanceText(row.runningBalance)}`}>
+                        {formatCurrency(Math.abs(row.runningBalance))}
+                        <span className="ml-1 font-sans text-[9px] font-semibold text-slate-400">{row.runningBalance > 0 ? 'Dr' : row.runningBalance < 0 ? 'Cr' : ''}</span>
+                      </span>
+                      <span className="hidden justify-end 2xl:flex print:hidden">
+                        {deletable && (
+                          <button type="button" aria-label="Entry delete karein" title="Delete payment" onClick={() => onDeleteTx!(row.id)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-300 opacity-0 hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100">
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <LoadMoreRow sentinelRef={rowWindow.sentinelRef} hiddenCount={rowWindow.hiddenCount} onShowMore={rowWindow.showMore} onShowAll={rowWindow.showAll} />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const InfoItem: React.FC<{ icon: React.ElementType; label: string; value: React.ReactNode; className?: string }> = ({ icon: Icon, label, value, className = '' }) => (
+  <div className={`flex min-w-0 items-start gap-2 ${className}`}>
+    <Icon size={13} className="mt-0.5 shrink-0 text-slate-400" />
+    <div className="min-w-0">
+      <dt className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</dt>
+      <dd className="break-words font-semibold text-slate-700">{value}</dd>
+    </div>
+  </div>
+);
+
+export default ExpenseVendorsTab;
