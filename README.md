@@ -1,53 +1,78 @@
-# Mooco ERP — Dairy Management & Accounting
+# Mooco ERP
 
-Point-of-sale + accounting system for a dairy business: milk procurement, allocation, production batches, POS with offline support, cash custody (shifts/drawers/day close), khata ledgers, double-entry style accounts, and reports.
+Point-of-sale and accounting system for a dairy business: milk procurement and allocation, production batches, POS with offline sales, cash custody (shifts, drawers, day close), customer and supplier khata, expenses, bank/cash accounts and reporting.
 
-**Stack:** React 19 · TypeScript · Vite 6 · Tailwind CSS 3 (build-time) · Supabase (Postgres) · Dexie (IndexedDB offline store) · Recharts · Framer Motion.
+**Stack:** React 19, TypeScript, Vite 6, Tailwind CSS 3, Supabase (Postgres, Auth, Edge Functions), Dexie (IndexedDB), Recharts, Framer Motion.
 
-## Setup
+## Getting started
+
+Requires Node.js 20 or later.
 
 ```bash
 npm install
-cp .env.example .env.local   # then fill in your Supabase project URL + anon key
+cp .env.example .env.local   # set the Supabase URL and anon key
 npm run dev                  # http://localhost:3000
 ```
 
-Environment variables (in `.env.local`, never committed):
-
 | Variable | Purpose |
-|---|---|
+| --- | --- |
 | `VITE_SUPABASE_URL` | Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabase publishable (anon) key |
 
-## Build & package
+## Scripts
 
-```bash
-npm run build          # production bundle in dist/
-node package_dist.cjs  # optional: creates mooco_erp_hostinger_build.zip from dist/
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the development server |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the production build locally |
+| `npm run typecheck` | Type-check the app and build config |
+| `npm run lint` | Run ESLint |
+| `npm run format` | Format the codebase with Prettier |
+| `npm run package:hostinger` | Build and zip `dist/` into `release/mooco-erp-hostinger.zip` for manual upload |
+
+## Project structure
+
+```
+src/
+  main.tsx            Application entry point
+  App.tsx             Shell: routing, workspace tabs, sidebar, lock screen
+  pages/              One module per screen (POS, Customers, Suppliers, Cash Control, Reports, ...)
+  components/         Shared and feature-specific UI, grouped by feature
+    ui/               Generic primitives (Modal, ConfirmDialog, ...)
+  context/            DairyContext (data and business operations), tabs, toasts
+  hooks/              Reusable React hooks
+  lib/                Domain logic, Supabase client, offline sync, formatting
+    reports/          Report registry, definitions and exporters
+  types.ts            Shared domain types
+  theme.ts            Shared design tokens
+supabase/
+  migrations/         Database schema, RPCs and security policies (applied in order)
+  functions/          Edge Functions (operator-login)
+  scripts/            One-off data repair scripts, kept for audit
+scripts/              Build and packaging scripts
+docs/                 Feature and operations documentation
 ```
 
-## Database migrations
+## Database
 
-SQL lives in `supabase/migrations/`. Apply in order with the Supabase CLI (`supabase db push`) or the dashboard SQL editor:
+Migrations live in `supabase/migrations/` and are applied in filename order with the Supabase CLI (`supabase db push`) or the dashboard SQL editor. Business rules that move money or stock (balances, POS order effects, returns, customer order checkout) run inside Postgres functions so they are atomic and idempotent; the client never does read-modify-write on balances.
 
-1. `20260902150236_cash_control_foundation.sql` — cash custody tables + RPCs
-2. `20260902220000_secure_pin_auth.sql` — **required**: hashed PINs (`pin_hash` + per-user salt), auth RPCs (`app_login`, `app_verify_pin`, `app_list_users`, `app_create_user`, `app_update_user`, `app_delete_user`), brute-force lockout, and RLS lockdown of `app_users`
-3. `20260902221000_atomic_financial_ops.sql` — **required**: atomic balance/stock delta RPCs (`adjust_account_balance`, `adjust_customer_balance`, `adjust_supplier_balance`, `adjust_item_stock`, `transfer_between_accounts`, `adjust_expense_vendor_stats`, `pos_sync_order_effects`)
-4. `20260902230000_drop_legacy_pin.sql` — **optional, deploy LAST**: drops the legacy plaintext `pin` column once the new build is confirmed live
+The `operator-login` Edge Function exchanges a PIN login for a Supabase Auth session. All tables and business RPCs require an active operator session. See [docs/security.md](docs/security.md).
 
-> Deploy order matters: apply migrations 2–3 **before** shipping the updated client, and only run 4 after the new client is in use everywhere.
+## Offline behaviour
 
-## Security model (current)
+POS sales and new customers are written to IndexedDB first and synced in the background with retries, a dead-letter queue and a cross-tab lock. Order side effects (stock, cash, khata) are applied by the idempotent `pos_sync_order_effects` RPC, so retries never double-post. Other modules require a connection.
 
-- PINs are salted-hashed server-side (pgcrypto) and never leave the database; login/unlock go through `security definer` RPCs with basic rate limiting (8 failed attempts / 15 min).
-- `app_users` has RLS enabled with **no direct client policies** — all access flows through the auth RPCs.
-- **First login (fresh installs):** the auth migration seeds one owner account — username `admin`, PIN `1234`. Change this PIN immediately in Settings → Users & Roles.
-- **Known limitation:** business tables (sales, purchases, khata, …) are still reachable with the anon key because the app does not use Supabase Auth sessions yet. This is appropriate only for trusted/local network deployments. Migrating operator identity to Supabase Auth (and tightening table policies to `authenticated`) is the next security milestone.
+## Deployment
 
-## Offline behavior
+Pushing to `main` runs the GitHub Actions workflow in `.github/workflows/deploy.yml`, which builds the app and uploads `dist/` to Hostinger over FTP. The workflow needs these repository secrets: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD`.
 
-POS sales and new customers are written to IndexedDB first and synced in the background (25 s interval, 5 retries, dead-letter on failure, cross-tab lock). All other modules require connectivity. Order side effects (inventory deduction, cash receipt, khata charge) are applied by the idempotent `pos_sync_order_effects` RPC, so retries never double-apply.
+## Documentation
 
-## Customer Orders
-
-**Sales & POS → Customer Orders** supports pickup/delivery bookings, products and packs, agreed prices, discount, preparation statuses, printing, and billing through POS. Apply `20261002153153_customer_orders.sql` before activating the feature. Bookings require connectivity and do not change stock or balances until billed. See [Customer Orders workflow, access model and verification](docs/customer-orders.md).
+- [Cash control](docs/cash-control.md): cashier shifts, handovers, remittances and day close
+- [POS](docs/pos.md): catalog, quick entry and keyboard shortcuts
+- [Customer orders](docs/customer-orders.md): bookings and billing through POS
+- [Stock-based profit](docs/stock-profit.md): how the actual profit report is calculated
+- [Security](docs/security.md): operator sessions and database access model
+- [QA checklist](docs/qa-checklist.md): manual test plan by workflow

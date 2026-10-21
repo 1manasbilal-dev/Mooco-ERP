@@ -17,15 +17,3 @@ Apply `supabase/migrations/20261002153153_customer_orders.sql` before using orde
 This deployment uses PIN operators and a trusted-terminal database access model, without Supabase Auth sessions. The migration follows the existing business-table model: RLS is enabled, `anon`/`authenticated` can read/create/update bookings, and deletion is denied. UI permissions control operator actions; they are not database authentication. The migration also grants the Customer Orders module to standard owner, manager and cashier roles, while leaving custom roles unchanged. Settings → Users & Roles supports separate view, create, edit and cancel actions; billing additionally requires POS checkout permission. Migrating the application's identity and business-table policies to Supabase Auth is a separate prerequisite for a public multi-tenant deployment.
 
 The customer and invoice references prevent deleting records that are needed for order history. Product names, units and prices are saved as snapshots.
-
-## Verification
-
-`node scripts/verify-customer-orders-ui.mjs` runs the actual React screens against sample customers and a mocked transport. All live business requests are blocked. It covers bookings, agreed prices, edits, search, delivery, desktop/mobile themes, cancellation, invoice linking, duplicate submits, preservation of the counter cart, view-only permissions and loading recovery. Screenshots and the check report are saved in `screenshots/customer-orders/`.
-
-`node scripts/verify-customer-orders-db.mjs` runs the migration in isolated local Postgres using PGlite and copies of the existing financial RPCs. It checks totals, transitions, revision conflicts, stock/cash/khata effects, atomic rollback after ledger failure, retries, locked days and payment accounts. It does not access Supabase. To install its temporary test runtime:
-
-```powershell
-npm install --prefix .qa-customer-orders --no-save --package-lock=false --ignore-scripts @electric-sql/pglite
-```
-
-TypeScript validation, production build, and the existing POS UX regression suite also pass. Local tests do not replace a live end-to-end verification after the approved migration is applied.
