@@ -38,5 +38,3 @@ New production completions preserve the output breakdown, pack sizes and ingredi
 CSV exports include the full formula, all stock balances, expenses, movements and data checks, regardless of table search. Printing includes the same data-check status.
 
 The cost approach follows [IAS 2's purchase/conversion cost and weighted-average principles](https://www.ifrs.org/issued-standards/list-of-standards/ias-2-inventories/). Unrecorded costs, depreciation, tax and inventory write-downs require their own recorded entries before final accounting profit can be determined; the app cannot infer them from cash movements.
-
-Validation: `node scripts/verify-stock-profit.mjs`, `node scripts/verify-stock-profit-ui.mjs`, `npx tsc --noEmit`, and `npm run build`.
