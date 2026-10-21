@@ -25,7 +25,7 @@ const UserSwitcherHost: React.FC = () => {
 
 // Header User Profile Pill with Interactive Dropdown
 const HeaderUserButton: React.FC = () => {
-  const { currentUser, currentRole, logoutUser, setIsUserSwitcherOpen } = useDairy();
+  const { currentUser, currentRole, logoutUser, lockTerminalNow, setIsUserSwitcherOpen } = useDairy();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
   const initials = currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : 'OW';
@@ -92,7 +92,10 @@ const HeaderUserButton: React.FC = () => {
             type="button"
             onClick={() => {
               setIsOpen(false);
-              setIsUserSwitcherOpen(true);
+              // A real lock: the screen only opens again with a PIN (not with the close button).
+              // Offline the PIN cannot be checked, so (like the idle lock) it stays a switcher.
+              if (navigator.onLine) lockTerminalNow();
+              else setIsUserSwitcherOpen(true);
             }}
             className="flex w-full items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >

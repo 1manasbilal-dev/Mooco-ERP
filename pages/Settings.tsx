@@ -46,15 +46,18 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
 
   const isOwner = currentUser?.role_id === 'role_super_admin';
   const canEdit = canPerform('settings', 'edit');
+  // A user manager without the settings permission only reaches Users & Access.
+  const canSeeSettings = hasPermission('settings');
   const visibleTabs = TABS.filter(t =>
     (t.id !== 'users' || hasPermission('user_management')) &&
-    (t.id !== 'data' || isOwner)
+    (t.id !== 'data' || isOwner) &&
+    (canSeeSettings || t.id === 'users')
   );
 
   const tabFromUrl = (): TabId => {
     const raw = new URLSearchParams(location.search).get('tab') || '';
     const id = (LEGACY_TABS[raw] || raw) as TabId;
-    return visibleTabs.some(t => t.id === id) ? id : 'business';
+    return visibleTabs.some(t => t.id === id) ? id : (visibleTabs[0]?.id || 'business');
   };
   const activeTab = tabFromUrl();
   const selectTab = (id: TabId) => navigate(`/settings?tab=${id}`);
@@ -98,7 +101,11 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
       confirmLabel: 'Haan, band karein',
     }))) return;
     setSaving(true);
-    const ok = await updateSettings(draftToSettings(draft));
+    const changes = draftToSettings(draft);
+    // Security controls are Owner-only (read-only for everyone else): never send a stale copy
+    // that could undo the Owner's newer lock date / discount limit.
+    if (!isOwner) delete changes.security;
+    const ok = await updateSettings(changes);
     setSaving(false);
     if (ok) showToast('Settings save ho gayin.', 'success');
   };

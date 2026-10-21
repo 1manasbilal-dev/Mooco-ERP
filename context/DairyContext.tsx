@@ -312,7 +312,9 @@ interface DairyContextType {
   setInventory: React.Dispatch<React.SetStateAction<InventoryItem[]>>;
 
   setProductionBatches: React.Dispatch<React.SetStateAction<ProductionBatch[]>>;
-  createBatch: (productName: string, quantity: number, notes?: string, priority?: PriorityLevel, inputCostPerUnit?: number, estimatedOutput?: number, details?: any) => Promise<boolean>;
+  createBatch: (productName: string, quantity: number, notes?: string, priority?: PriorityLevel, inputCostPerUnit?: number, estimatedOutput?: number, details?: any) => Promise<string | false>;
+  discardBatch: (batchId: string) => Promise<boolean>;
+  trimBatchToSource: (batchId: string, keepSource: 'fresh' | 'retail') => Promise<boolean>;
   updateBatchStage: (batchId: string, newStage: ProductionStage, logMessage?: string, outputData?: { variants: { variantId: string, count: number }[], looseQty: number }) => Promise<boolean>;
   cancelBatch: (batchId: string, reason: string) => Promise<boolean>;
 
@@ -708,6 +710,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const lastWorkCountRef = useRef<number>(-1);
+  // Local work that was still unsynced when the current server snapshot was requested. A bill that
+  // syncs while the snapshot is in flight is no longer "unsynced", yet parts of the snapshot can
+  // predate its effects; reapplyLedger spots that and asks fetchData for one more load
+  // (refreshAgain) instead of showing pre-sale stock/cash/khata until the next reload.
+  // Only set while loadData runs.
+  const preLoadWork = useRef<Awaited<ReturnType<typeof readUnsyncedWork>> | null>(null);
 
   const reapplyLedger = async () => {
     const seen = currentEpoch();
@@ -717,6 +725,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (err) {
       console.warn('[Ledger] Could not read the local journal', err);
       return;
+    }
+    const early = preLoadWork.current;
+    if (early) {
+      // Something synced while this snapshot was loading. Its effects may be in some tables and not
+      // others, so neither projecting it nor dropping it is reliably right: project only what is still
+      // unsynced and load once more, so the next snapshot is read entirely after that sync.
+      const syncedMidLoad = <T extends { id: any }>(current: T[], before: T[]) => {
+        const ids = new Set(current.map(row => row.id));
+        return before.some(row => !ids.has(row.id));
+      };
+      if (syncedMidLoad(work.orders, early.orders) || syncedMidLoad(work.customers, early.customers) || syncedMidLoad(work.outbox, early.outbox)) {
+        refreshAgain.current = true;
+      }
     }
     if (currentEpoch() !== seen) return;
     const workTotal = work.orders.length + work.customers.length + work.outbox.length;
@@ -756,14 +777,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     publish(setRetailClosings, view.retailClosings);
   };
 
-  const fetchFullTable = async (tableName: string, orderCol = 'date', maxPages = 20): Promise<{ data: any[]; error: any }> => {
+  // ascending: name-ordered masters (customers, suppliers) list A->Z; dated history stays newest first.
+  const fetchFullTable = async (tableName: string, orderCol = 'date', maxPages = 20, ascending = false): Promise<{ data: any[]; error: any }> => {
     try {
       const pageSize = 1000;
       const firstPage = await loadRead(
-        supabase.from(tableName).select('*').order(orderCol, { ascending: false }).range(0, pageSize - 1),
+        // id breaks ties: rows sharing a timestamp (one sale's stock logs) could repeat or vanish across pages.
+        supabase.from(tableName).select('*').order(orderCol, { ascending }).order('id', { ascending }).range(0, pageSize - 1),
         35000
       );
-      if (firstPage.error) return { data: [], error: firstPage.error };
+      // null, not []: callers treat [] as "the table is empty" and would wipe the loaded records.
+      if (firstPage.error) return { data: null, error: firstPage.error };
       const rows: any[] = [...(firstPage.data || [])];
       
       if (firstPage.data && firstPage.data.length === pageSize) {
@@ -776,11 +800,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const chunkResults = await Promise.all(
             chunkPages.map(p =>
               loadRead(
-                supabase.from(tableName).select('*').order(orderCol, { ascending: false }).range(p * pageSize, (p + 1) * pageSize - 1),
+                supabase.from(tableName).select('*').order(orderCol, { ascending }).order('id', { ascending }).range(p * pageSize, (p + 1) * pageSize - 1),
                 35000
               )
             )
           );
+          // A failed page must not pass as the end of the table: that silently dropped older history.
+          const failedPage = chunkResults.find(res => res.error);
+          if (failedPage) return { data: null, error: failedPage.error };
           let hasMore = true;
           for (const res of chunkResults) {
             if (res.data && res.data.length > 0) {
@@ -798,7 +825,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return { data: rows, error: null };
     } catch (err) {
       console.warn(`[Workspace load] fetchFullTable for ${tableName} error:`, err);
-      return { data: [], error: err };
+      return { data: null, error: err };
     }
   };
 
@@ -818,19 +845,26 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       awaitingLogin.current = false;
       try {
         const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
+        // Taken BEFORE the server reads start (see preLoadWork).
+        try {
+          preLoadWork.current = await withDeadline(() => readUnsyncedWork(), 3000);
+        } catch {
+          preLoadWork.current = null;
+        }
         const fullSalesPromise = fetchFullTable('sales', 'date');
         const fullBankPromise = fetchFullTable('bank_transactions', 'date');
         const results = await Promise.allSettled([
-          supabase.from('suppliers').select('*'),
-          supabase.from('customers').select('*'),
+          fetchFullTable('suppliers', 'name', 20, true),
+          fetchFullTable('customers', 'name', 20, true),
           supabase.from('items').select('*').order('sort_order', { ascending: true, nullsFirst: false }).order('name', { ascending: true }),
-          supabase.from('sales').select('*').gte('date', businessDate).order('date', { ascending: false }).limit(300),
+          // Midnight in Pakistan, not UTC: a bare date meant 05:00 PKT and dropped the early-morning bills.
+          supabase.from('sales').select('*').gte('date', `${businessDate}T00:00:00+05:00`).order('date', { ascending: false }).limit(300),
           fetchFullTable('purchases', 'date'),
           fetchFullTable('material_purchases', 'date'),
           fetchFullTable('allocations', 'date'),
           fetchFullTable('production_batches', 'start_date'),
           fetchFullTable('daily_supply', 'date'),
-          supabase.from('retail_closings').select('*').order('date', { ascending: false }),
+          fetchFullTable('retail_closings', 'date'),
           fetchFullTable('expenses', 'date'),
           supabase.from('recurring_expenses').select('*'),
           supabase.from('expense_vendors').select('*'),
@@ -846,13 +880,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           fetchFullTable('expense_vendor_transactions', 'date'),
           null,
           null,
-          supabase.from('business_days').select('*').order('business_date', { ascending: false }),
+          fetchFullTable('business_days', 'business_date'),
           supabase.from('cash_drawers').select('*').order('name'),
           fetchFullTable('cash_shifts', 'started_at'),
-          supabase.from('drawer_handovers').select('*').order('declared_at', { ascending: false }),
-          supabase.from('cash_remittances').select('*').order('declared_at', { ascending: false }),
-          supabase.from('cash_variances').select('*').order('created_at', { ascending: false }),
+          fetchFullTable('drawer_handovers', 'declared_at'),
+          fetchFullTable('cash_remittances', 'declared_at'),
+          fetchFullTable('cash_variances', 'created_at'),
           fetchFullTable('shift_cash_events', 'occurred_at'),
+          // dcRes: was destructured below without a matching read, so it was always undefined.
+          supabase.from('day_closings').select('*').order('date', { ascending: false }),
         ].map(query => query ? loadRead(query as any, 35000) : Promise.resolve({ data: null, error: null } as any)));
         const failedReads = results.filter(result => result.status === 'rejected' || result.value.error);
         if (failedReads.length) {
@@ -1509,6 +1545,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           console.error("Dexie offline fallback error:", dexieErr);
         }
       } finally {
+        preLoadWork.current = null;
         setIsDataLoading(false);
         await operatorRequest;
       }
@@ -2169,6 +2206,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const roundedTotal = roundCurrency(total);
       // Money kept on the bill never exceeds its total; anything over is change handed back (cash_given / change_return).
       const actualPaid = roundCurrency(Math.min(roundedTotal, paidAmount !== undefined ? Math.max(0, paidAmount) : (paymentMode === 'Credit' ? 0 : roundedTotal)));
+      // A walk-in has no khata: any unpaid part would be saved as paid < total with due 0 and simply vanish.
+      if (!customer.id && (paymentMode === 'Credit' || actualPaid < roundedTotal - 0.01)) {
+        showToast('Walk-in customer ka udhaar nahi ho sakta. Poori raqam lein ya customer select karein.', 'warning');
+        return false;
+      }
       const dueAmount = roundCurrency(customer.id ? Math.max(0, roundedTotal - actualPaid) : 0);
       const receivedToPost = roundCurrency(Math.min(actualPaid, roundedTotal));
       const invoiceNumber = generateInvoiceNumber(settings.sales.invoicePrefix || 'INV-');
@@ -2244,7 +2286,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         name: item.name,
         qty: item.qty,
         price: item.price,
-        total: item.total || (item.qty * item.price),
+        // A typed amount ("Rs 100 of milk") is the line total; qty × price would store e.g. 100.08.
+        total: item.total || (item.customTotal != null && Number.isFinite(Number(item.customTotal)) ? roundCurrency(Number(item.customTotal)) : roundCurrency(item.qty * item.price)),
         variant_id: item.variantId,
         unit: item.unit || (item.variantId ? (item.variantName || 'Pack') : 'Unit'),
         sync_status: 'pending',
@@ -2683,7 +2726,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           
           showToast(`Production batch ${dbBatch.batch_number} for ${safeProductName} created!`, "success");
           fetchData();
-          return true;
+          return id;
       } catch (e: any) {
           console.error(e);
           showToast(`Batch creation error: ${e.message || 'Error'}`, "error");
@@ -2694,11 +2737,82 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return lockResult !== null ? lockResult : false;
   };
 
+  // Removes a batch whose milk was never deducted (allocation failed right after createBatch).
+  // Not a cancel: cancelling would return milk to stock that never left it.
+  const discardBatch = async (batchId: string) => {
+    const { error } = await supabase.from('production_batches').delete().eq('id', batchId);
+    if (error) {
+      console.error('Failed to discard batch:', error);
+      showToast(`Batch remove nahi hua: ${error.message || 'Error'}`, 'error');
+      return false;
+    }
+    setProductionBatches(prev => prev.filter(b => b.id !== batchId));
+    // createBatch's own refresh may still be in flight with the batch in it: load again after the delete.
+    fetchData();
+    return true;
+  };
+
+  // Only one source's allocation went through (fresh pool or counter stock): the batch keeps just the
+  // milk lines that actually left stock, so a later cancel returns only what was taken.
+  const trimBatchToSource = async (batchId: string, keepSource: 'fresh' | 'retail') => {
+    const { data: row, error: readError } = await supabase.from('production_batches').select('*').eq('id', batchId).single();
+    if (readError || !row) {
+      console.error('Failed to read batch for trim:', readError);
+      showToast(`Batch update nahi hua: ${readError?.message || 'Batch not found'}`, 'error');
+      return false;
+    }
+    const details: any = row.details || {};
+    const breakdown: any[] = Array.isArray(details.milk_breakdown) ? details.milk_breakdown : [];
+    const kept = breakdown.filter((m: any) => (m?.source === 'retail' ? 'retail' : 'fresh') === keepSource);
+    const quantity = roundQuantity(kept.reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0));
+    const value = kept.reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0) * (Number(m.rate) || 0), 0);
+    const rate = quantity > 0 ? value / quantity : Number(row.input_cost_per_unit) || 0;
+    const oldQuantity = Number(row.quantity_input) || 0;
+    const types = Array.from(new Set(kept.map((m: any) => String(m.milkType || 'Mixed').toLowerCase())));
+    const milkType = types.length === 1 ? (types[0].includes('buffalo') ? 'Buffalo' : types[0].includes('cow') ? 'Cow' : 'Mixed') : 'Mixed';
+    const update = {
+      quantity_input: quantity,
+      input_cost_per_unit: rate,
+      quantity_output_estimated: roundQuantity(oldQuantity > 0 ? (Number(row.quantity_output_estimated) || 0) * quantity / oldQuantity : 0),
+      details: { ...details, milk_breakdown: kept, milk_type: milkType, input_cost_per_unit: rate }
+    };
+    const { error } = await supabase.from('production_batches').update(update).eq('id', batchId);
+    if (error) {
+      console.error('Failed to trim batch:', error);
+      showToast(`Batch update nahi hua: ${error.message || 'Error'}`, 'error');
+      return false;
+    }
+    setProductionBatches(prev => prev.map(b => b.id === batchId ? { ...b, ...update } as any : b));
+    fetchData();
+    return true;
+  };
+
   const allocateFromRetailStock = async (itemsList: any[], destination: string, details: any) => {
     const lockResult = await actionLock.runExclusive(`alloc_retail_${destination}`, async () => {
       try {
           const updatedInventory = [...inventory];
           const updatedItems = [...items];
+
+          // Counter stock cannot be sent out beyond what is on hand (it went negative). Checked for
+          // every line before anything moves, so a short line never leaves earlier lines deducted.
+          const wanted = new Map<string, { name: string; unit: string; qty: number }>();
+          for (const item of itemsList) {
+            const rawId = item.itemId || item.id || '';
+            const actualItemId = rawId.startsWith('inv_') ? rawId.replace('inv_', '') : rawId;
+            const def = items.find(i => i.id === actualItemId || i.id === rawId || i.name.toLowerCase() === (item.name || '').toLowerCase());
+            if (!def) continue;
+            const prev = wanted.get(def.id);
+            wanted.set(def.id, { name: def.name, unit: def.unit || '', qty: roundQuantity((prev?.qty || 0) + (Number(item.quantity) || 0)) });
+          }
+          for (const [itemId, need] of wanted) {
+            const { data: stockRow, error: stockError } = await supabase.from('items').select('stock').eq('id', itemId).single();
+            if (stockError) throw stockError;
+            const onHand = roundQuantity(Number(stockRow?.stock) || 0);
+            if (need.qty > onHand + 0.001) {
+              showToast(`${need.name}: sirf ${onHand} ${need.unit} stock hai, ${need.qty} allocate nahi ho sakta.`, 'error');
+              return false;
+            }
+          }
 
           for (const item of itemsList) {
               const rawId = item.itemId || item.id || '';
@@ -3000,10 +3114,50 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             // Return input milk back to unallocated pool if not already cancelled and quantity > 0
             if (batch.status !== ProductionStage.CANCELLED && batch.quantity_input && batch.quantity_input > 0) {
                 const returnAllocId = `alloc_ret_batch_${batch.id}`;
-                
+
+                // Milk taken from counter stock goes back to counter stock, not into the bulk pool
+                // (that turned retail litres into fresh unallocated milk a second time).
+                const cancelDetails: any = batch.details || {};
+                const retailParts: any[] = Array.isArray(cancelDetails.milk_breakdown)
+                  ? cancelDetails.milk_breakdown.filter((m: any) => m?.source === 'retail' && Number(m.quantity) > 0)
+                  : [];
+                let retailReturned = 0;
+                for (const part of retailParts) {
+                  const rawId = String(part.allocationId || '');
+                  const retailItemId = rawId.startsWith('inv_') ? rawId.slice(4) : rawId;
+                  const retailDef = items.find(i => i.id === retailItemId);
+                  if (!retailDef) continue;
+                  const partQty = roundQuantity(Number(part.quantity) || 0);
+                  // Deterministic log id first: a retry finds it and does not add the litres twice.
+                  const { error: retailLogError } = await supabase.from('inventory_logs').insert([{
+                    id: `log_batch_cancel_${batch.id}_${retailItemId}`,
+                    date: new Date().toISOString(),
+                    item_id: retailItemId,
+                    item_name: retailDef.name,
+                    old_quantity: roundQuantity(Number((retailDef as any).stock) || 0),
+                    new_quantity: roundQuantity((Number((retailDef as any).stock) || 0) + partQty),
+                    difference: partQty,
+                    reason: 'Allocation',
+                    notes: `Batch #${batch.batch_number} cancelled: counter milk returned`,
+                    details: { loose_delta: partQty, batch_id: batch.id }
+                  }]);
+                  if (retailLogError && retailLogError.code !== '23505') throw retailLogError;
+                  if (!retailLogError) {
+                    const { error: retailStockError } = await adjustItemStock(retailItemId, partQty);
+                    if (retailStockError) {
+                      await supabase.from('inventory_logs').delete().eq('id', `log_batch_cancel_${batch.id}_${retailItemId}`);
+                      throw retailStockError;
+                    }
+                    setItems(prev => prev.map(i => i.id === retailItemId ? { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + partQty) } as any : i));
+                    setInventory(prev => prev.map(inv => inv.item_id === retailItemId ? { ...inv, quantity: roundQuantity((inv.quantity || 0) + partQty) } : inv));
+                  }
+                  retailReturned = roundQuantity(retailReturned + partQty);
+                }
+                const poolReturnQty = roundQuantity(Math.max(0, batch.quantity_input - retailReturned));
+
                 // Idempotency check on allocation return
                 const { data: existingAlloc } = await supabase.from('allocations').select('id').eq('id', returnAllocId).maybeSingle();
-                if (!existingAlloc) {
+                if (!existingAlloc && poolReturnQty > 0) {
                     // Determine exact return milk type:
                     // 1. If batch details has explicit milk_type ('Cow' | 'Buffalo' | 'Mixed')
                     // 2. If milk breakdown contains only Cow -> Cow, only Buffalo -> Buffalo
@@ -3043,9 +3197,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                         date: new Date().toISOString(),
                         supplier_name: `Return: Batch #${batch.batch_number} (${batch.product_name})`,
                         milk_type: returnMilkType,
-                        original_quantity: batch.quantity_input,
+                        original_quantity: poolReturnQty,
                         allocated_quantity: 0,
-                        remaining_quantity: batch.quantity_input,
+                        remaining_quantity: poolReturnQty,
                         status: AllocationStatus.UNALLOCATED,
                         average_rate: batch.input_cost_per_unit || 0,
                         details: { 
@@ -3058,13 +3212,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     };
 
                     const { error: allocErr } = await supabase.from('allocations').insert([returnRecord]);
-                    if (allocErr) {
-                        console.error("Failed to insert returned milk allocation:", allocErr);
-                    }
+                    // A lost return must not be reported as success: the milk would vanish from the pool.
+                    if (allocErr) throw allocErr;
 
                     setAllocations(prev => [returnRecord, ...prev]);
-                    showToast(`Batch #${batch.batch_number} cancelled. ${batch.quantity_input} L returned to Unallocated ${returnMilkType} Milk.`, "success");
                 }
+                showToast(`Batch #${batch.batch_number} cancelled. ${batch.quantity_input} L returned${retailReturned > 0 ? ` (${retailReturned} L to counter stock)` : ''}.`, "success");
             }
         }
 
@@ -3076,7 +3229,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             return newList;
         });
 
-        await supabase.from('production_batches').update(updatePayload).eq('id', batchId);
+        const { error: batchUpdateError } = await supabase.from('production_batches').update(updatePayload).eq('id', batchId);
+        if (batchUpdateError) throw batchUpdateError;
         if (newStage !== ProductionStage.CANCELLED) {
             showToast("Batch Updated & Inventory Synced", "success");
         }
@@ -3084,6 +3238,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return true;
       } catch (e) {
         console.error(e);
+        showToast('Batch update nahi hua: ' + getErrorMessage(e), 'error');
+        fetchData();
         return false;
       }
     });
@@ -3156,6 +3312,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             returned_quantity: (Number(prevPurDetails.returned_quantity) || 0) + actualReturnQty,
             return_reason: reason,
             returned_at: returnTimestamp,
+            // Same trail as a material return: what was paid at intake and how much came back as cash.
+            original_paid_amount: prevPurDetails.original_paid_amount ?? Number(purchase.paid_amount || prevPurDetails.paid_amount || 0),
+            cash_refund: roundCurrency((Number(prevPurDetails.cash_refund) || 0) + (
+              refundAs !== 'khata' && (prevPurDetails.account_id || (purchase as any).account_id)
+                ? Math.min(Number(purchase.paid_amount || prevPurDetails.paid_amount || 0), returnAmount * ((Number(purchase.total_amount || 0) || (totalPurchaseQty * (purchase.rate || 0))) > 0 ? Number(purchase.paid_amount || prevPurDetails.paid_amount || 0) / (Number(purchase.total_amount || 0) || (totalPurchaseQty * (purchase.rate || 0))) : 0))
+                : 0
+            )),
             original_quantity: prevPurDetails.original_intake_quantity || prevPurDetails.original_quantity || totalPurchaseQty,
             original_intake_quantity: prevPurDetails.original_intake_quantity || prevPurDetails.original_quantity || totalPurchaseQty
           }
@@ -3451,6 +3614,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setInventory(prev => prev.map(inv => inv.item_id !== itemDef.id ? inv : packId
           ? { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) - actualReturnQty) } }
           : { ...inv, quantity: roundQuantity((inv.quantity || 0) - actualReturnBaseQty) }));
+        setItems(prev => prev.map(i => i.id !== itemDef.id ? i : packId
+          ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packId]: roundQuantity((Number(i.variant_stocks?.[packId]) || 0) - actualReturnQty) } }
+          : { ...i, stock: roundQuantity((Number((i as any).stock) || 0) - actualReturnBaseQty) } as any));
 
         // Take the returned goods out of the average at the rate they came in at.
         const onHandBase = stockOnHandBase(oldLoose, invRow?.variant_stocks || itemDef.variant_stocks, itemDef.variants);
@@ -3559,7 +3725,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deletePurchase = async (id: string) => { return returnPurchase(id, undefined, 'Deleted by user'); };
   const deleteMaterialPurchase = async (id: string) => { return returnMaterialPurchase(id, undefined, 'Deleted by user'); };
   
-  const addBulkMaterialPurchase = async (data: any) => { 
+  // One bill per supplier at a time: a double click used to save the whole bill (stock, khata, cash) twice.
+  const addBulkMaterialPurchase = async (data: any) => {
+    const lockResult = await actionLock.runExclusive(`add_material_purchase_${data?.supplier_id || 'spot'}`, () => addBulkMaterialPurchaseUnlocked(data), 60000);
+    return lockResult !== null ? lockResult : false;
+  };
+
+  const addBulkMaterialPurchaseUnlocked = async (data: any) => {
       try {
           const { supplier_id, date, items: cartItems, purchase_type, paid_amount, payment_mode, account_id } = data;
           if (!guardOpenPeriod(date)) return false;
@@ -4182,11 +4354,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const currentStock = roundQuantity(invRow?.quantity ?? (itemDef as any).stock ?? 0);
           const currentVarStock = packId ? roundQuantity((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0) : 0;
           const packDetails = (delta: number) => packId ? { variant_id: packId, variant_delta: delta, loose_delta: 0 } : { loose_delta: delta };
-          const applyLocal = (delta: number) => setInventory(prev => prev.map(inv => {
-            if (inv.item_id !== itemDef.id) return inv;
-            if (packId) return { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) + delta) } };
-            return { ...inv, quantity: roundQuantity((inv.quantity || 0) + delta) };
-          }));
+          const applyLocal = (delta: number) => {
+            setInventory(prev => prev.map(inv => {
+              if (inv.item_id !== itemDef.id) return inv;
+              if (packId) return { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) + delta) } };
+              return { ...inv, quantity: roundQuantity((inv.quantity || 0) + delta) };
+            }));
+            // POS and Items read the catalog row, so mirror the move there too.
+            setItems(prev => prev.map(i => {
+              if (i.id !== itemDef.id) return i;
+              if (packId) return { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packId]: roundQuantity((Number(i.variant_stocks?.[packId]) || 0) + delta) } };
+              return { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + delta) } as any;
+            }));
+          };
           const lineLabel = packId ? `${qty} x ${item.name}` : `${returnQty} ${itemDef.unit || ''}`.trim();
 
           if (isReplacement) {
@@ -4787,7 +4967,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const saleId = generateUUID();
       const invoiceNumber = generateInvoiceNumber('CS-');
       const nowIso = new Date().toISOString();
-      const saleDate = data.date ? `${data.date}T${new Date().toTimeString().slice(0, 8)}` : nowIso;
+      // A bare "date T time" has no zone and is read as UTC on the server (5 hours off, often the next PKT day).
+      const saleDate = normalizeTransactionTimestamp(data.date || nowIso);
       const shiftLabel = data.shiftName || activeShiftSession?.shift_name || 'Counter Closing';
       const paymentMode = data.paymentMode || 'Cash';
 
@@ -4851,13 +5032,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       };
 
       // One journal entry. Stock and cash move only when this order syncs.
-      await db.orders.put({
-        ...saleData,
-        receipt_account_id: receiptAccountId,
-        sync_status: 'pending',
-        created_at: nowIso
-      } as any);
-
       const orderItems = cart.map(item => ({
         id: generateUUID(),
         order_id: saleId,
@@ -4871,9 +5045,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         sync_status: 'pending' as const,
         created_at: nowIso
       }));
-      if (orderItems.length > 0) {
-        await db.order_items.bulkPut(orderItems as any);
-      }
+      // Bill and lines in one Dexie transaction (as the POS does), so the sync never sees a bill without lines.
+      await db.transaction('rw', db.orders, db.order_items, async () => {
+        await db.orders.put({
+          ...saleData,
+          receipt_account_id: receiptAccountId,
+          sync_status: 'pending',
+          created_at: nowIso
+        } as any);
+        if (orderItems.length > 0) {
+          await db.order_items.bulkPut(orderItems as any);
+        }
+      });
       noteLocalWrite();
 
       setSales(prev => [saleData, ...prev]);
@@ -5011,13 +5194,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const refreshCashControl = async (): Promise<void> => {
     const [days, drawers, shifts, handovers, remittances, variances, events, faRes, btxRes] = await Promise.all([
-      supabase.from('business_days').select('*').order('business_date', { ascending: false }),
+      fetchFullTable('business_days', 'business_date'),
       supabase.from('cash_drawers').select('*').order('name'),
       // Paged reads: a plain select stops at 1000 rows, which cut the bank history after every shift action.
       fetchFullTable('cash_shifts', 'started_at'),
-      supabase.from('drawer_handovers').select('*').order('declared_at', { ascending: false }),
-      supabase.from('cash_remittances').select('*').order('declared_at', { ascending: false }),
-      supabase.from('cash_variances').select('*').order('created_at', { ascending: false }),
+      fetchFullTable('drawer_handovers', 'declared_at'),
+      fetchFullTable('cash_remittances', 'declared_at'),
+      fetchFullTable('cash_variances', 'created_at'),
       fetchFullTable('shift_cash_events', 'occurred_at'),
       supabase.from('financial_accounts').select('*'),
       fetchFullTable('bank_transactions', 'date')
@@ -5193,7 +5376,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // 2. Safe Auto-Healing: Include orphan or misplaced bill on the same drawer & timeframe
       if (!s.date) return false;
       const saleTime = new Date(s.date).getTime();
-      const saleDate = s.date.split('T')[0];
+      // Pakistan business day, not the UTC date (00:00–05:00 PKT bills carry the previous UTC date).
+      const saleDate = businessDayOf(s.date);
 
       const matchesTime = shiftStartTime > 0 && saleTime >= (shiftStartTime - 60000) && saleTime <= (shiftEndTime + 60000);
       const matchesDrawer = !s.drawer_id || !drawerAccountId || s.drawer_id === drawerAccountId || s.drawer_id === shift?.drawer_id;
@@ -5281,12 +5465,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       .filter(e => isDrawerTxInShiftWindow(e, e.account_id || (e as any).details?.account_id));
     const cashExpenses = roundCurrency(validShiftExpenses.reduce((sum, e) => sum + Number(e.paidAmount || 0), 0));
 
-    // Direct Cash Purchases (Milk Purchases) paid specifically from THIS drawer
+    // Direct Cash Purchases (Milk Purchases) paid specifically from THIS drawer.
+    // Cash that left at intake: a partial return lowers paid_amount, but its refund is netted
+    // separately below, so the live paid_amount would count the returned cash twice.
+    const milkCashPaid = (p: any) => {
+      const original = p.original_paid_amount ?? p.details?.original_paid_amount;
+      if (original !== undefined && original !== null && original !== '') return Number(original) || 0;
+      return Number(p.paid_amount ?? p.amount_paid ?? p.total_amount ?? 0);
+    };
     const validMilkPurchases = purchases
       .filter(p => String(p.payment_mode || '').toLowerCase().includes('cash'))
       .filter(p => isDrawerTxInShiftWindow(p, p.account_id || (p as any).details?.account_id))
-      .filter(p => Number(p.paid_amount ?? (p as any).amount_paid ?? (p as any).total_amount ?? 0) > 0);
-    const directCashPurchases = roundCurrency(validMilkPurchases.reduce((sum, p: any) => sum + Number(p.paid_amount ?? p.amount_paid ?? p.total_amount ?? 0), 0));
+      .filter(p => milkCashPaid(p) > 0);
+    const directCashPurchases = roundCurrency(validMilkPurchases.reduce((sum, p: any) => sum + milkCashPaid(p), 0));
 
     const countedPurchaseIds = new Set(validMilkPurchases.map(p => p.id));
     const countedExpenseIds = new Set(validShiftExpenses.map(e => e.id));
@@ -5320,7 +5511,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         id: p.id,
         referenceId: p.id,
         title: `Milk Purchase: ${p.supplier_name || 'Supplier'}`,
-        amount: Number(p.paid_amount ?? p.amount_paid ?? p.total_amount ?? 0),
+        amount: milkCashPaid(p),
         category: 'Milk Purchase',
         group: 'Milk Intake',
         partyName: p.supplier_name || 'Supplier',
@@ -5970,6 +6161,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // its account balance), so only the NET new cash moves from the source.
       const replacedSum = roundCurrency((existingPending || []).reduce((sum, h) => sum + Number(h.declared_amount || 0), 0));
       const netCredit = roundCurrency(amt - replacedSum);
+      // The replaced handover's cash stays in the drawer; a smaller declaration would hide the difference.
+      if (netCredit < 0) {
+        showToast(`Drawer mein pehle se Rs ${replacedSum.toLocaleString()} pending hain. Opening cash is se kam declare nahi ho sakti.`, 'warning');
+        return false;
+      }
       if (sourceAcc && netCredit > 0 && Number(sourceAcc.balance || 0) < netCredit) {
         showToast(
           `Source account "${sourceAcc.name}" mein sirf Rs ${Number(sourceAcc.balance || 0).toLocaleString()} hai — ` +
@@ -6259,13 +6455,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       credit_sales: roundCurrency(liveTotals.reduce((sum, row) => sum + Number(row.credit_sales || 0), 0)),
       total_variance: roundCurrency(dayShifts.reduce((sum, s) => sum + Number(s.cash_difference || 0), 0))
     };
+    // Keep the cash closing recorded earlier by closeDayCash: rewriting summary without it lost the count.
+    let earlierCash: unknown = undefined;
+    if (!cashClose) {
+      const { data: existingDay } = await supabase.from('business_days').select('summary').eq('id', businessDayId).maybeSingle();
+      earlierCash = (existingDay as any)?.summary?.cash ?? (day as any).summary?.cash;
+    }
     // Locking the day fills any closing that is still missing so both
     // closings always read complete after the lock.
     const updatePayload: Record<string, unknown> = {
       status: 'Closed', closed_at: new Date().toISOString(), closed_by: currentUser.id, notes,
       cash_closed_at: day.cash_closed_at || new Date().toISOString(),
       stock_closed_at: day.stock_closed_at || new Date().toISOString(),
-      summary: { ...summary, ...(cashClose ? { cash: cashClose } : {}) }
+      summary: { ...summary, ...(cashClose ? { cash: cashClose } : (earlierCash ? { cash: earlierCash } : {})) }
     };
     const { error } = await supabase.from('business_days').update(updatePayload)
       .eq('id', businessDayId).neq('status', 'Closed');
@@ -6594,7 +6796,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const opTxRecord = {
           id: `ctx_op_${id}`,
           customer_id: id,
-          date: createdDate.split('T')[0],
+          // Pakistan date: the UTC date is yesterday for customers added 00:00–05:00 PKT.
+          date: getTodayLocalDate(),
           type: (initialBalance > 0 ? 'Charge' : 'Payment') as any,
           amount: Math.abs(initialBalance),
           mode: 'Opening Balance',
@@ -6631,9 +6834,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const updateCustomer = async (id: string, u: Partial<Customer>) => {
     try {
-      setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...u } : c));
-
-      const { name, phone, address, route, type, balance, isActive, ...extraData } = u;
+      // The khata balance moves only through ledger entries (sale, payment, charge, return). A profile
+      // edit that sets it would change the balance with no customer_transactions row behind it.
+      const { name, phone, address, route, type, balance: _ignoredBalance, isActive, ...extraData } = u;
+      setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...extraData, ...(name !== undefined ? { name } : {}), ...(phone !== undefined ? { phone } : {}), ...(address !== undefined ? { address } : {}), ...(route !== undefined ? { route } : {}), ...(type !== undefined ? { type } : {}), ...(isActive !== undefined ? { isActive } : {}) } : c));
       const dbUpdates: any = {};
       if (name !== undefined) dbUpdates.name = name;
       if (phone !== undefined) dbUpdates.phone = phone;
@@ -6641,22 +6845,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (route !== undefined) dbUpdates.route = route;
       if (type !== undefined) dbUpdates.type = type;
       if (isActive !== undefined) dbUpdates.is_active = isActive;
-
-      // Balance edits go through the atomic delta RPC, not a full-row
-      // overwrite — a direct UPDATE would clobber a concurrent sale/payment
-      // applied by another device between our fetch and write.
-      if (balance !== undefined) {
-        const current = customers.find(c => c.id === id);
-        const delta = roundCurrency(Number(balance || 0) - Number(current?.balance || 0));
-        if (delta !== 0) {
-          const { error: balError } = await adjustCustomerBalance(id, delta);
-          if (balError) {
-            showToast("Failed to update customer balance: " + balError.message, 'error');
-            fetchData();
-            return false;
-          }
-        }
-      }
 
       if (Object.keys(extraData).length > 0) {
         const { data: existing } = await supabase.from('customers').select('data').eq('id', id).single();
@@ -6707,6 +6895,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       try {
           if (date && isDayLocked(date)) {
             showToast('Ye din band (locked) hai. Entry aaj ki tareekh par darj karein.', 'error');
+            return false;
+          }
+          if (!canPerform('customers', type === 'Payment' ? 'payment' : 'edit')) {
+            showToast('Aap ko customer khata mein entry karne ki ijazat nahi hai.', 'error');
+            return false;
+          }
+          if (!(Number(amount) > 0)) {
+            showToast('Amount 0 se zyada honi chahiye.', 'warning');
             return false;
           }
           const cust = customers.find(c => c.id === customerId);
@@ -6808,6 +7004,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const deleteCustomerTransaction = async (id: string) => {
     try {
+      if (!canPerform('customers', 'delete')) {
+        showToast('Aap ko khata entry delete karne ki ijazat nahi hai.', 'error');
+        return false;
+      }
       const tx = customerTransactions.find(t => t.id === id);
       if (tx && tx.date && isDayLocked(tx.date)) {
         showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
@@ -6852,6 +7052,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const id = `exp_${generateUUID()}`;
       const { date, category, amount, paidAmount, paymentStatus, description, account_id, account_name, vendor_id, vendor_name, ...extraDetails } = e as any;
       if (!guardOpenPeriod(date)) return false;
+      if (date && isDayLocked(date)) {
+        showToast('Ye din band (locked) hai. Kharcha aaj ki tareekh par darj karein.', 'error');
+        return false;
+      }
       
       const totalAmt = amount || 0;
       const actualPaidAmount = paymentStatus === 'Unpaid' 
@@ -6979,27 +7183,58 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         const paid = exp.paidAmount !== undefined ? exp.paidAmount : exp.amount;
         const accountId = exp.account_id || (exp as any)?.details?.account_id;
-        
+
+        // The voucher is deleted LAST, so a failed step leaves it on screen and the delete can be retried.
+        // Each money step is recorded on the voucher (details.delete_reversal) as soon as it succeeds;
+        // a retry skips what was already put back instead of restoring it twice.
+        const { data: expRow, error: expReadError } = await supabase.from('expenses').select('details').eq('id', id).maybeSingle();
+        if (expReadError) throw expReadError;
+        let reversal: Record<string, boolean> = { ...(expRow?.details?.delete_reversal || {}) };
+        const markStep = async (step: string) => {
+          const nextReversal = { ...reversal, [step]: true };
+          const { error } = await supabase.from('expenses').update({ details: { ...(expRow?.details || {}), delete_reversal: nextReversal } }).eq('id', id);
+          if (!error) reversal = nextReversal;
+          return error;
+        };
+
         // 1. Restore cash/bank balance if money was paid
         if (accountId && paid > 0) {
           const acc = accounts.find(a => a.id === accountId);
-          if (acc) {
+          if (acc && !reversal.account_restored) {
             const { error: expAccError } = await adjustAccountBalance(accountId, paid);
             if (expAccError) throw expAccError;
+            const markError = await markStep('account_restored');
+            if (markError) {
+              // Not recorded: take the money back out so a retry does not restore it twice.
+              await adjustAccountBalance(accountId, -paid);
+              throw markError;
+            }
             setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, balance: roundCurrency((a.balance || 0) + paid) } : a));
           }
-          await supabase.from('bank_transactions').delete().or(`related_expense_id.eq.${id},reference_id.eq.${id},id.eq.btx_${id}`);
+          // bank_transactions has no related_expense_id column: filtering on it failed the whole
+          // delete, so the expense's bank row stayed behind after the money was put back.
+          // Deleting it is safe to repeat.
+          const { error: btxDelError } = await supabase.from('bank_transactions').delete().or(`reference_id.eq.${id},id.eq.btx_${id}`);
+          if (btxDelError) throw btxDelError;
           setBankTransactions(prev => prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`));
         }
 
         // 2. Adjust vendor balance if unpaid portion was added
         if (exp.vendor_id) {
           const vendor = expenseVendors.find(v => v.id === exp.vendor_id);
-          if (vendor) {
+          if (vendor && !reversal.vendor_restored) {
             const unpaidPortion = Math.max(0, (exp.amount || 0) - paid);
-            const newPending = Math.max(0, (vendor.pending_balance || 0) - unpaidPortion);
+            const newPending = (vendor.pending_balance || 0) - unpaidPortion; // same delta the server applies
             const newPaid = Math.max(0, (vendor.total_paid || 0) - paid);
             const newBilled = Math.max(0, (vendor.total_billed || 0) - (exp.amount || 0));
+
+            const { error: vendorRevError } = await adjustExpenseVendorStats(vendor.id, -unpaidPortion, -(exp.amount || 0), -paid);
+            if (vendorRevError) throw vendorRevError;
+            const markError = await markStep('vendor_restored');
+            if (markError) {
+              await adjustExpenseVendorStats(vendor.id, unpaidPortion, exp.amount || 0, paid);
+              throw markError;
+            }
 
             setExpenseVendors(prev => prev.map(v => v.id === exp.vendor_id ? {
               ...v,
@@ -7007,17 +7242,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               total_paid: newPaid,
               total_billed: newBilled
             } : v));
-
-            await adjustExpenseVendorStats(vendor.id, -unpaidPortion, -(exp.amount || 0), -paid);
           }
         }
+
+        // 3. The voucher itself, only after its money is fully reversed.
+        const { error: expDelError } = await supabase.from('expenses').delete().eq('id', id);
+        if (expDelError) throw expDelError;
+      } else {
+        const { error: expDelError } = await supabase.from('expenses').delete().eq('id', id);
+        if (expDelError) throw expDelError;
       }
       setExpenses(prev => prev.filter(e => e.id !== id));
-      await supabase.from('expenses').delete().eq('id', id); 
-      fetchData(); 
-      return true; 
+      fetchData();
+      return true;
     } catch(e) {
       console.error("deleteExpense error:", e);
+      showToast('Expense delete nahi hua: ' + getErrorMessage(e), 'error');
+      fetchData();
       return false;
     }
   };
@@ -7042,15 +7283,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Revert previous financial impact
       const oldPaid = exp.paidAmount !== undefined ? exp.paidAmount : exp.amount;
       const oldAccountId = exp.account_id || (exp as any)?.details?.account_id;
+      // Every step is checked: an ignored failure here moved the money twice or left the bank row
+      // out of step with the account.
       if (oldAccountId && oldPaid > 0) {
-        await adjustAccountBalance(oldAccountId, oldPaid);
-        setAccounts(prev => prev.map(a => a.id === oldAccountId ? { ...a, balance: roundCurrency((a.balance || 0) + oldPaid) } : a));
-        await supabase.from('bank_transactions').delete().or(`related_expense_id.eq.${id},reference_id.eq.${id},id.eq.btx_${id}`);
+        // bank_transactions has no related_expense_id column; filtering on it failed the delete.
+        const { error: oldBtxError } = await supabase.from('bank_transactions').delete().or(`reference_id.eq.${id},id.eq.btx_${id}`);
+        if (oldBtxError) throw oldBtxError;
         setBankTransactions(prev => prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`));
+        const { error: oldAccError } = await adjustAccountBalance(oldAccountId, oldPaid);
+        if (oldAccError) throw oldAccError;
+        setAccounts(prev => prev.map(a => a.id === oldAccountId ? { ...a, balance: roundCurrency((a.balance || 0) + oldPaid) } : a));
       }
       if (exp.vendor_id) {
         const unpaidOld = Math.max(0, (exp.amount || 0) - oldPaid);
-        await adjustExpenseVendorStats(exp.vendor_id, -unpaidOld, -(exp.amount || 0), -oldPaid);
+        const { error: oldVendorError } = await adjustExpenseVendorStats(exp.vendor_id, -unpaidOld, -(exp.amount || 0), -oldPaid);
+        if (oldVendorError) throw oldVendorError;
       }
 
       // Calculate merged payload
@@ -7064,8 +7311,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const newDate = normalizeTransactionTimestamp(merged.date || new Date().toISOString());
 
       if (newAccountId && newPaid > 0) {
-        await adjustAccountBalance(newAccountId, -newPaid);
-        setAccounts(prev => prev.map(a => a.id === newAccountId ? { ...a, balance: roundCurrency((a.balance || 0) - newPaid) } : a));
         const btxRecord = {
           id: `btx_${id}`,
           account_id: newAccountId,
@@ -7074,19 +7319,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           type: 'Expense',
           category: merged.category || 'Expense',
           description: `Expense: ${merged.description || ''}${merged.vendor_name ? ` (${merged.vendor_name})` : ''}`,
-          related_expense_id: id,
+          // reference_id links the row to the expense (as record_expense_effects does); the table has no related_expense_id.
+          reference_id: id,
           business_day_id: merged.business_day_id,
           shift_session_id: merged.shift_session_id,
           drawer_id: merged.drawer_id,
           cashier_id: merged.cashier_id
         };
-        await supabase.from('bank_transactions').insert([btxRecord]);
+        const { error: newBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
+        if (newBtxError) throw newBtxError;
         setBankTransactions(prev => [btxRecord as any, ...prev]);
+        const { error: newAccError } = await adjustAccountBalance(newAccountId, -newPaid);
+        if (newAccError) throw newAccError;
+        setAccounts(prev => prev.map(a => a.id === newAccountId ? { ...a, balance: roundCurrency((a.balance || 0) - newPaid) } : a));
       }
 
       if (merged.vendor_id) {
         const unpaidNew = Math.max(0, newTotal - newPaid);
-        await adjustExpenseVendorStats(merged.vendor_id, unpaidNew, newTotal, newPaid);
+        const { error: newVendorError } = await adjustExpenseVendorStats(merged.vendor_id, unpaidNew, newTotal, newPaid);
+        if (newVendorError) throw newVendorError;
       }
 
       const updatedExpense: ExpenseEntry = {
@@ -7098,18 +7349,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       };
 
       setExpenses(prev => prev.map(e => e.id === id ? updatedExpense : e));
+      // expenses only has date/category/amount/description/details columns (paid_amount, payment_status,
+      // account_* and vendor_* made every update fail). The loader reads details.paid_amount and
+      // details.payment_status first, so the old snake_case copies must be overwritten as well.
       const { error } = await supabase.from('expenses').update({
         date: updatedExpense.date,
         category: updatedExpense.category,
         amount: updatedExpense.amount,
-        paid_amount: updatedExpense.paidAmount,
-        payment_status: updatedExpense.paymentStatus,
         description: updatedExpense.description,
-        account_id: updatedExpense.account_id,
-        account_name: updatedExpense.account_name,
-        vendor_id: updatedExpense.vendor_id,
-        vendor_name: updatedExpense.vendor_name,
-        details: updatedExpense
+        details: {
+          ...updatedExpense,
+          paid_amount: newPaid,
+          payment_status: newStatus,
+          account_id: newAccountId,
+          vendor_id: merged.vendor_id || null
+        }
       }).eq('id', id);
       if (error) throw error;
 
@@ -7284,6 +7538,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   ): Promise<boolean> => {
     try {
       if (!guardOpenPeriod(date)) return false;
+      if (date && isDayLocked(date)) {
+        showToast('Ye din band (locked) hai. Entry aaj ki tareekh par darj karein.', 'error');
+        return false;
+      }
       const vendor = expenseVendors.find(v => v.id === vendorId);
       if (!vendor) {
         showToast("Vendor not found", "error");
@@ -7346,13 +7604,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ? `Refund / Return from: ${vendor.name}${note ? ` (${note})` : ''}`
           : `Payment to: ${vendor.name}${note ? ` (${note})` : ''}`;
 
+        // Only money that left THIS shift's drawer belongs to the shift. Any Cash account (head cash,
+        // another till) used to be stamped with this drawer and shift as well.
         const isDrawerAccount = Boolean(
           activeShiftSession?.status === 'Active' && (
             chosenAccount.id === activeShiftSession?.drawer_id ||
-            chosenAccount.id === resolveDrawerAccountId(activeShiftSession?.drawer_id) ||
-            chosenAccount.isDrawer === true ||
-            chosenAccount.type === 'Cash' ||
-            isCashMode
+            chosenAccount.id === resolveDrawerAccountId(activeShiftSession?.drawer_id)
           )
         );
         const shiftSessionId = isDrawerAccount ? (activeShiftSession?.id || null) : null;
@@ -7453,6 +7710,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       const tx = expenseVendorTransactions.find(t => t.id === id);
       if (tx && !guardOpenPeriod(tx.date)) return false;
+      if (tx?.date && isDayLocked(tx.date)) {
+        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        return false;
+      }
       if (tx) {
         const vendor = expenseVendors.find(v => v.id === tx.vendor_id);
         const isRefund = tx.type === 'Refund';
@@ -7617,8 +7878,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const recordBankTransaction = async (data: any) => {
       try {
           if (!guardOpenPeriod(data.date)) return false;
+          // bank_transactions has no related_account_id column: sending it made every insert fail
+          // while the balance below still moved. The contra account rides in details.
+          const { related_account_id, ...rowData } = data;
           const taggedTransaction = {
-            ...data,
+            ...rowData,
+            ...(related_account_id ? { details: { ...(rowData.details || {}), related_account_id } } : {}),
             date: normalizeTransactionTimestamp(data.date),
             business_day_id: data.business_day_id || activeShiftSession?.business_day_id,
             shift_session_id: data.shift_session_id || activeShiftSession?.id,
@@ -7626,13 +7891,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             cashier_id: data.cashier_id || activeShiftSession?.user_id,
             id: `btx_${generateUUID()}`
           };
-          await supabase.from('bank_transactions').insert([taggedTransaction]);
+          const { error: insertError } = await supabase.from('bank_transactions').insert([taggedTransaction]);
+          if (insertError) throw insertError;
           // Atomic delta — no client-side read-modify-write on the balance.
           const impact = data.type === 'Deposit' || data.type === 'Income' || data.type === 'Transfer_In' ? data.amount : -data.amount;
-          await adjustAccountBalance(data.account_id, impact);
+          const { error: balanceError } = await adjustAccountBalance(data.account_id, impact);
+          if (balanceError) {
+            // No ledger row without its balance move.
+            await supabase.from('bank_transactions').delete().eq('id', taggedTransaction.id);
+            throw balanceError;
+          }
           fetchData();
           return true;
-      } catch(e) { return false; }
+      } catch(e) {
+        console.error('recordBankTransaction error:', e);
+        return false;
+      }
   };
   const transferFunds = async (fromId: string, toId: string, amount: number, date: string, description: string) => {
       try {
@@ -7736,8 +8010,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         const manualAcc = manualAccounts.find(m => m.id === line.account_id);
         if (manualAcc) {
-          const newBal = roundCurrency((manualAcc.balance || 0) + netChange);
-          await supabase.from('manual_accounts').update({ balance: newBal }).eq('id', manualAcc.id);
+          // Liability / Equity / Income balances are kept as positive credits (same rule as Bank & Cash),
+          // so a credit raises them; debit − credit lowered Owner Capital on every capital entry.
+          const isCreditNormal = ['Liability', 'Equity', 'Income'].includes(String(manualAcc.type));
+          const manualChange = isCreditNormal ? -netChange : netChange;
+          const newBal = roundCurrency((manualAcc.balance || 0) + manualChange);
+          const { error: manualError } = await supabase.from('manual_accounts').update({ balance: newBal }).eq('id', manualAcc.id);
+          if (manualError) throw manualError;
           setManualAccounts(prev => prev.map(m => m.id === manualAcc.id ? { ...m, balance: newBal } : m));
         } else {
           const finAcc = accounts.find(a => a.id === line.account_id);
@@ -7769,7 +8048,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       fetchData();
       return true;
-    } catch(e) { console.error(e); return false; }
+    } catch(e) {
+      console.error(e);
+      showToast('Journal entry post nahi hui: ' + getErrorMessage(e), 'error');
+      fetchData();
+      return false;
+    }
   };
 
   // =========================================================================
@@ -7884,7 +8168,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const name = acc?.name || 'Account';
       const bal = Number(acc?.balance || 0);
       const isSystem = acc?.is_default || acc?.id === settings.financial?.defaultCashAccountId || acc?.id === settings.financial?.defaultDigitalAccountId;
-      const txCount = bankTransactions.filter(t => t.account_id === id || t.related_account_id === id).length;
+      const txCount = bankTransactions.filter(t => t.account_id === id || t.related_account_id === id || (t as any).details?.related_account_id === id).length;
       const hasHistory = txCount > 0;
 
       if (isSystem) {
@@ -7984,11 +8268,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!cust) return false;
 
       if (action === 'write_off_bad_debt') {
+        // One write-off per customer at a time: a double click used to post it twice.
+        const writeOffResult = await actionLock.runExclusive(`write_off_customer_${id}`, async () => {
         const bal = Number(cust.balance || 0);
         if (bal > 0) {
           // Customer owes money: Write off as Bad Debt Expense
           const txId = `ctx_wo_${generateUUID()}`;
-          await supabase.from('customer_transactions').insert([{
+          const { error: woTxError } = await supabase.from('customer_transactions').insert([{
             id: txId,
             customer_id: id,
             date: new Date().toISOString(),
@@ -8000,25 +8286,29 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               is_write_off: true
             }
           }]);
+          if (woTxError) throw woTxError;
 
-          // Record write off expense to keep Balance Sheet in exact equilibrium
-          await supabase.from('expenses').insert([{
+          // Record write off expense to keep Balance Sheet in exact equilibrium.
+          // expenses has no paid_amount / payment_mode / payment_status columns (the insert was
+          // rejected every time), so they ride in details where the loader reads them.
+          // A non-cash adjustment with no account: settled in full (paid_amount = amount), or it
+          // would sit in "unpaid expenses / payables" forever. No account_id, so no cash moves.
+          const { error: woExpError } = await supabase.from('expenses').insert([{
             id: `exp_wo_${generateUUID()}`,
-            date: getTodayLocalDate(),
+            date: normalizeTransactionTimestamp(getTodayLocalDate()),
             category: 'Bad Debt & Write-off',
             description: `Bad debt write-off for customer: ${cust.name}`,
             amount: bal,
-            paid_amount: 0,
-            payment_mode: 'Adjustment',
-            payment_status: 'Paid',
-            details: { customer_id: id, write_off: true }
+            details: { customer_id: id, write_off: true, paid_amount: bal, payment_mode: 'Adjustment', payment_status: 'Paid' }
           }]);
+          if (woExpError) throw woExpError;
 
-          await adjustCustomerBalance(id, -bal);
+          const { error: woBalError } = await adjustCustomerBalance(id, -bal);
+          if (woBalError) throw woBalError;
         } else if (bal < 0) {
           // Unclaimed customer advance: Forfeit advance
           const absBal = Math.abs(bal);
-          await supabase.from('customer_transactions').insert([{
+          const { error: forfeitTxError } = await supabase.from('customer_transactions').insert([{
             id: `ctx_wo_${generateUUID()}`,
             customer_id: id,
             date: new Date().toISOString(),
@@ -8030,8 +8320,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               is_write_off: true
             }
           }]);
-          await adjustCustomerBalance(id, absBal);
+          if (forfeitTxError) throw forfeitTxError;
+          const { error: forfeitBalError } = await adjustCustomerBalance(id, absBal);
+          if (forfeitBalError) throw forfeitBalError;
         }
+        return true;
+        });
+        if (writeOffResult === null) return false;
 
         await updateCustomer(id, { isActive: false });
         showToast(`Customer "${cust.name}" balance written off and marked Inactive!`, 'success');
@@ -8293,16 +8588,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const updateSettings = async (newSettings: Partial<SystemSettings>): Promise<boolean> => {
     const previous = settings;
     try {
-      const mergedSettings = {
+      const mergedSettings: any = {
         general: { ...settings.general, ...(newSettings.general || {}) },
         financial: { ...settings.financial, ...(newSettings.financial || {}) },
         sales: { ...settings.sales, ...(newSettings.sales || {}) },
         inventory: { ...settings.inventory, ...(newSettings.inventory || {}) },
-        expenses: { ...(settings.expenses || {}), ...(newSettings.expenses || {}) },
-        security: { ...(settings.security || {}), ...(newSettings.security || {}) }
+        expenses: { ...(settings.expenses || {}), ...(newSettings.expenses || {}) }
       };
+      // security is written only when this save is about it: re-sending this device's copy from
+      // another tab's save could undo the Owner's newer lock date / discount limit.
+      if ('security' in newSettings && newSettings.security != null) {
+        mergedSettings.security = { ...(settings.security || {}), ...(newSettings.security || {}) };
+      }
 
-      setSettings(mergedSettings);
+      setSettings(prev => ({ ...mergedSettings, security: mergedSettings.security ?? prev.security }));
 
       const { error } = await supabase
         .from('app_settings')
@@ -8350,6 +8649,30 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     cashRemittances, cashVariances, shiftCashEvents
   });
   
+  // customer_orders.sale_id -> sales and customer_orders.customer_id -> customers have no ON DELETE,
+  // so bookings pointing at the rows being wiped must go first (allOrders: every booking, for a
+  // customers wipe; otherwise only billed ones linked to a sale). Completed bookings cannot be
+  // updated (trigger) and the table may not allow client deletes (RLS), in which case the delete
+  // removes nothing: what is left is counted and the reset stops BEFORE anything else is deleted,
+  // instead of failing halfway on the foreign key.
+  const clearCustomerOrderLinks = async (allOrders: boolean) => {
+    const ALL = '00000000-0000-0000-0000-000000000000';
+    // Deployments without the Customer Orders migration have no table and no foreign key.
+    const missingTable = (error: any) => error?.code === '42P01' || error?.code === 'PGRST205';
+    const deleteQuery = supabase.from('customer_orders').delete();
+    const { error: delError } = await (allOrders ? deleteQuery.neq('id', ALL) : deleteQuery.not('sale_id', 'is', null));
+    if (delError && !missingTable(delError)) throw delError;
+    const countQuery = supabase.from('customer_orders').select('id', { count: 'exact', head: true });
+    const { count, error: countError } = await (allOrders ? countQuery : countQuery.not('sale_id', 'is', null));
+    if (countError) {
+      if (missingTable(countError)) return;
+      throw countError;
+    }
+    if ((count || 0) > 0) {
+      throw new Error(`${count} Customer Order booking(s) in records se linked hain aur app unhe delete nahi kar sakti. Pehle database se customer_orders saaf karwayein; kuch bhi delete nahi hua.`);
+    }
+  };
+
   const resetSystem = async () => {
     if (currentUser?.role_id !== 'role_super_admin') {
       showToast('Sirf Owner / Super Admin data delete kar sakta hai.', 'error');
@@ -8359,16 +8682,29 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast("Resetting system, please wait...", "info");
       const sentinel = '00000000-0000-0000-0000-000000000000';
 
-      // 1. Delete cash control activity (leaf nodes first to preserve integrity)
-      await Promise.all([
-        supabase.from('shift_cash_events').delete().neq('id', sentinel),
-        supabase.from('cash_variances').delete().neq('id', sentinel),
-        supabase.from('cash_remittances').delete().neq('id', sentinel),
-        supabase.from('drawer_handovers').delete().neq('id', sentinel),
-        supabase.from('day_closings').delete().neq('id', sentinel),
-      ]);
-      await supabase.from('cash_shifts').delete().neq('id', sentinel);
-      await supabase.from('business_days').delete().neq('id', sentinel);
+      // 0. Bookings reference sales and customers (no ON DELETE): cleared or the reset stops here.
+      await clearCustomerOrderLinks(true);
+
+      // 1. Delete cash control activity one level at a time, children before parents:
+      // cash_variances -> remittances/handovers/shifts/days, shift_cash_events -> shifts/days,
+      // remittances/handovers -> shifts/days, cash_shifts -> business_days. Run in parallel they raced
+      // the foreign keys and the reset stopped with half the cash records gone.
+      const cashSteps: string[][] = [
+        ['cash_variances'],
+        ['shift_cash_events'],
+        ['cash_remittances', 'drawer_handovers', 'day_closings'],
+        ['cash_shifts'],
+        ['business_days'],
+      ];
+      for (const step of cashSteps) {
+        const cashResults = await Promise.all(step.map(table => supabase.from(table).delete().neq('id', sentinel)));
+        const cashFailure = cashResults.find(r => r.error);
+        if (cashFailure) {
+          showToast(`Factory Reset failed: ${cashFailure.error?.message || 'Database error'}`, "error");
+          await fetchData();
+          return;
+        }
+      }
 
       // 2. Delete all transaction/activity tables
       const txResults = await Promise.all([
@@ -8390,6 +8726,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         supabase.from('recurring_expenses').delete().neq('id', sentinel),
         supabase.from('expense_vendor_transactions').delete().neq('id', sentinel),
       ]);
+      // Masters are referenced by these rows (sales/khata -> customers, attendance -> employees):
+      // stop here rather than delete some masters while their history is still in place.
+      const txFailure = txResults.find(r => r.error);
+      if (txFailure) {
+        console.error("System reset partial failures:", txResults.filter(r => r.error).map(f => f.error));
+        showToast(`Factory Reset failed: ${txFailure.error?.message || 'Database error'}`, "error");
+        await fetchData();
+        return;
+      }
 
       // 3. Delete master records (KEEP locked system items & standard COA accounts, reset their balance/stock to 0)
       const masterResults = await Promise.all([
@@ -8405,7 +8750,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       ]);
 
       // Check failures
-      const failures = [...txResults, ...masterResults].filter(r => r.error);
+      const failures = masterResults.filter(r => r.error);
       if (failures.length > 0) {
         console.error("System reset partial failures:", failures.map(f => f.error));
         showToast(`Factory Reset failed: ${failures[0].error?.message || 'Database error'}`, "error");
@@ -8415,12 +8760,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       // 4. Clear offline stores (Dexie)
       try {
-        await db.transaction('rw', [db.orders, db.order_items, db.customers, db.catalog_cache], async () => {
+        // The outbox too: queued milk purchases / expenses / payments would re-post into the wiped tables.
+        await db.transaction('rw', [db.orders, db.order_items, db.customers, db.catalog_cache, db.outbox], async () => {
           await Promise.all([
             db.orders.clear(),
             db.order_items.clear(),
             db.customers.clear(),
-            db.catalog_cache.clear()
+            db.catalog_cache.clear(),
+            db.outbox.clear()
           ]);
         });
       } catch (dexieErr) {
@@ -8462,49 +8809,88 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return;
     }
 
+    const ALL = '00000000-0000-0000-0000-000000000000';
+    // supabase-js resolves with { error } instead of throwing: every call is checked, or a failed
+    // delete/update was reported as "reset successfully".
+    const check = async (query: PromiseLike<{ error: any }>) => {
+      const { error } = await query;
+      if (error) throw error;
+    };
+    const checkAll = async (queries: PromiseLike<{ error: any }>[]) => {
+      const results = await Promise.all(queries);
+      const failed = results.find(r => r.error);
+      if (failed) throw failed.error;
+    };
+    const wipe = (table: string) => supabase.from(table).delete().neq('id', ALL);
+    // expense_vendors keeps its totals in details (there are no balance / total_paid columns).
+    const zeroVendorStats = async () => {
+      const { data, error } = await supabase.from('expense_vendors').select('id, details');
+      if (error) throw error;
+      await checkAll((data || []).map((v: any) => supabase.from('expense_vendors').update({
+        details: { ...(v.details || {}), pending_balance: 0, total_paid: 0, total_billed: 0, opening_balance: 0 }
+      }).eq('id', v.id)));
+    };
+    // Queued offline vouchers would re-post into the wiped tables on the next sync.
+    const clearOutbox = async (types?: string[]) => {
+      try {
+        if (!types) await db.outbox.clear();
+        else await db.outbox.where('action_type').anyOf(types).delete();
+      } catch (e) {
+        console.warn('[Dexie outbox cleanup]', e);
+      }
+    };
+
     try {
       showToast(`Clearing ${modules.length > 1 ? `${modules.length} selected modules` : modules[0]}...`, "info");
-      
+
+      // Bookings that point at sales / customers about to be wiped (no ON DELETE). Done once, before
+      // any module runs, so a blocked booking stops the reset before anything is deleted.
+      if (modules.includes('customers')) await clearCustomerOrderLinks(true);
+      else if (modules.some(m => m === 'transactions' || m === 'sales' || m === 'customer_ledger')) await clearCustomerOrderLinks(false);
+
       for (const module of modules) {
         if (module === 'transactions') {
-          // Clear all transaction tables but keep master records
-          await Promise.all([
-            supabase.from('shift_cash_events').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('cash_variances').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('cash_remittances').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('drawer_handovers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('day_closings').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('allocations').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('inventory_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('journal_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('bank_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('employee_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('attendance').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('retail_closings').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('daily_supply').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('customer_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('supplier_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('material_purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('production_batches').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('recurring_expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('expense_vendor_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+          // Clear all transaction tables but keep master records.
+          // Cash records reference each other: children before parents, one level at a time
+          // (in parallel they raced the foreign keys and stopped the reset halfway).
+          await check(wipe('cash_variances'));
+          await check(wipe('shift_cash_events'));
+          await checkAll([
+            wipe('cash_remittances'),
+            wipe('drawer_handovers'),
+            wipe('day_closings'),
           ]);
-          await supabase.from('cash_shifts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('business_days').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          // Reset balances and stock to 0
-          await Promise.all([
-            supabase.from('suppliers').update({ balance: 0, pending_balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('customers').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('items').update({ stock: 0, variant_stocks: {} }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('employees').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('expense_vendors').update({ balance: 0, total_paid: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('inventory').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('financial_accounts').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
-            supabase.from('manual_accounts').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
+          await check(wipe('cash_shifts'));
+          await check(wipe('business_days'));
+          await checkAll([
+            wipe('allocations'),
+            wipe('inventory_logs'),
+            wipe('journal_entries'),
+            wipe('bank_transactions'),
+            wipe('employee_transactions'),
+            wipe('attendance'),
+            wipe('retail_closings'),
+            wipe('daily_supply'),
+            wipe('customer_transactions'),
+            wipe('supplier_transactions'),
+            wipe('purchases'),
+            wipe('material_purchases'),
+            wipe('sales'),
+            wipe('production_batches'),
+            wipe('expenses'),
+            wipe('recurring_expenses'),
+            wipe('expense_vendor_transactions'),
           ]);
+          // Reset balances and stock to 0 (suppliers has no pending_balance column; there is no inventory table).
+          await checkAll([
+            supabase.from('suppliers').update({ balance: 0 }).neq('id', ALL),
+            supabase.from('customers').update({ balance: 0 }).neq('id', ALL),
+            supabase.from('items').update({ stock: 0, variant_stocks: {} }).neq('id', ALL),
+            supabase.from('employees').update({ balance: 0 }).neq('id', ALL),
+            supabase.from('financial_accounts').update({ balance: 0 }).neq('id', ALL),
+            supabase.from('manual_accounts').update({ balance: 0 }).neq('id', ALL),
+          ]);
+          await zeroVendorStats();
           try {
             await db.orders.clear();
             await db.order_items.clear();
@@ -8512,20 +8898,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           } catch (e) {
             console.warn('[Dexie cleanup]', e);
           }
+          await clearOutbox();
         } else if (module === 'stock' || module === 'inventory') {
           // Reset all physical stock & counter inventory to 0
-          await supabase.from('items').update({ stock: 0, variant_stocks: {} }).neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('inventory_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('allocations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('retail_closings').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('inventory').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(supabase.from('items').update({ stock: 0, variant_stocks: {} }).neq('id', ALL));
+          await check(wipe('inventory_logs'));
+          await check(wipe('allocations'));
+          await check(wipe('retail_closings'));
         } else if (module === 'purchases') {
-          await supabase.from('allocations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('material_purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('allocations'));
+          await check(wipe('purchases'));
+          await check(wipe('material_purchases'));
+          await clearOutbox(['milk_purchase']);
         } else if (module === 'sales') {
-          await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('daily_supply').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('sales'));
+          await check(wipe('daily_supply'));
           try {
             await db.orders.clear();
             await db.order_items.clear();
@@ -8533,68 +8920,76 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             console.warn('[Dexie sales cleanup]', e);
           }
         } else if (module === 'production') {
-          await supabase.from('production_batches').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('production_batches'));
         } else if (module === 'supplier_ledger') {
           // Reset only supplier financial balances and ledger history, keep profiles
-          await supabase.from('supplier_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('material_purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('allocations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('suppliers').update({ balance: 0, pending_balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('supplier_transactions'));
+          await check(wipe('purchases'));
+          await check(wipe('material_purchases'));
+          await check(wipe('allocations'));
+          await check(supabase.from('suppliers').update({ balance: 0 }).neq('id', ALL));
+          await clearOutbox(['milk_purchase', 'supplier_payment']);
         } else if (module === 'customer_ledger') {
           // Reset only customer credit balances and ledger history, keep profiles
-          await supabase.from('customer_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('daily_supply').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('customers').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('customer_transactions'));
+          // Zeroed straight after the khata is gone: a later failure must not leave balances with no ledger behind them.
+          await check(supabase.from('customers').update({ balance: 0 }).neq('id', ALL));
+          await check(wipe('sales'));
+          await check(wipe('daily_supply'));
           try {
             await db.orders.clear();
             await db.order_items.clear();
           } catch (e) {
             console.warn('[Dexie sales cleanup]', e);
           }
+          await clearOutbox(['customer_payment']);
         } else if (module === 'suppliers') {
-          await supabase.from('supplier_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('allocations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('material_purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('supplier_transactions'));
+          await check(wipe('allocations'));
+          await check(wipe('purchases'));
+          await check(wipe('material_purchases'));
+          await check(wipe('suppliers'));
+          await clearOutbox(['milk_purchase', 'supplier_payment']);
         } else if (module === 'customers') {
-          await supabase.from('customer_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('daily_supply').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('customer_transactions'));
+          await check(wipe('sales'));
+          await check(wipe('daily_supply'));
+          await check(wipe('customers'));
           try {
             await db.customers.clear();
           } catch (e) {
             console.warn('[Dexie customers cleanup]', e);
           }
+          await clearOutbox(['customer_payment']);
         } else if (module === 'items') {
-          await supabase.from('inventory_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('items').delete().neq('is_system', true);
+          await check(wipe('inventory_logs'));
+          await check(supabase.from('items').delete().neq('is_system', true));
         } else if (module === 'expenses') {
-          await supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('recurring_expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('expense_vendor_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('expense_vendors').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('expenses'));
+          await check(wipe('recurring_expenses'));
+          await check(wipe('expense_vendor_transactions'));
+          await check(wipe('expense_vendors'));
+          await clearOutbox(['expense']);
         } else if (module === 'bank_cash') {
-          await supabase.from('bank_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('financial_accounts').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('bank_transactions'));
+          await check(supabase.from('financial_accounts').update({ balance: 0 }).neq('id', ALL));
         } else if (module === 'accounts_journal') {
-          await supabase.from('journal_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('manual_accounts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          // Journal vouchers only: the chart of accounts (Owner Capital etc.) stays, at zero.
+          await check(wipe('journal_entries'));
+          await check(supabase.from('manual_accounts').update({ balance: 0 }).neq('id', ALL));
         } else if (module === 'retail_closings') {
-          await supabase.from('retail_closings').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe('retail_closings'));
         } else {
-          await supabase.from(module).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await check(wipe(module));
         }
       }
-      
+
       showToast(`Selected data reset successfully!`, "success");
       await fetchData();
     } catch (err) {
       console.error(`Failed to clear data:`, err);
       showToast(`Failed to clear data: ${(err as any)?.message || 'Unknown error'}`, "error");
+      await fetchData();
     }
   };
   // --- RBAC / User Management & Permissions Engine ---
@@ -8923,7 +9318,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
     allocateBulkMilk, allocateFromRetailStock, setAllocations,
     addItem, updateItem, deleteItem, reorderItems, adjustStock, setInventory,
-    setProductionBatches, createBatch, updateBatchStage, cancelBatch,
+    setProductionBatches, createBatch, discardBatch, trimBatchToSource, updateBatchStage, cancelBatch,
     addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, processCreditSaleTransaction, performRetailClosing, postClosingStockSale,
     addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
     addExpense, updateExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, generateRecurringExpense, 

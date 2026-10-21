@@ -35,7 +35,7 @@ interface AllocateModalData {
 }
 
 const Allocation: React.FC = () => {
-  const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, items, inventory, suppliers, canPerform } = useDairy();
+  const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, discardBatch, trimBatchToSource, items, inventory, suppliers, canPerform } = useDairy();
   const { showToast } = useToast();
   const canCreate = canPerform('allocation', 'create');
   const canStartBatch = canPerform('production', 'create');
@@ -319,9 +319,40 @@ const Allocation: React.FC = () => {
       return;
     }
 
+    // Check every line against live stock before anything is written. The batch is created first,
+    // so a line that the allocation step later rejects (milk used meanwhile) left a batch whose
+    // milk was never taken out of the pool or the counter.
+    const emptyLine = cart.find(item => !(Number(item.quantity) > 0));
+    if (emptyLine) {
+      showToast(`${emptyLine.supplierName}: qty 0 hai. Qty likhein ya line hata dein.`, "warning");
+      return;
+    }
+    for (const item of cart) {
+      const qty = Number(item.quantity) || 0;
+      let left = Infinity;
+      if (item.source === 'fresh') {
+        const pool = allocations.find(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
+        if (pool) {
+          left = (pool.remaining_quantity !== null && pool.remaining_quantity !== undefined)
+            ? Number(pool.remaining_quantity)
+            : (Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0));
+        } else {
+          left = 0;
+        }
+      } else {
+        const stockRow = inventory.find(inv => inv.item_id === item.allocationId || inv.id === item.allocationId || inv.id === `inv_${item.allocationId}`);
+        left = stockRow ? Number(stockRow.quantity) || 0 : 0;
+      }
+      if (qty > Math.max(0, left) + 0.001) {
+        showToast(`${item.supplierName}: sirf ${cleanNumber(Math.max(0, left))} L baqi hai, ${cleanNumber(qty)} L allocate nahi ho sakta.`, "error");
+        return;
+      }
+    }
+
     isSubmittingAllocRef.current = true;
     setIsSubmitting(true);
 
+    let createdBatchId: string | null = null;
     try {
       if (destination === DestinationType.PRODUCTION) {
         if (!selectedProduct) {
@@ -364,6 +395,7 @@ const Allocation: React.FC = () => {
           setIsSubmitting(false);
           return;
         }
+        createdBatchId = batchCreated;
       }
 
       // Split Cart items by Source
@@ -371,16 +403,27 @@ const Allocation: React.FC = () => {
       const retailItems = cart.filter(i => i.source === 'retail').map(i => ({ itemId: i.allocationId, quantity: i.quantity, rate: i.rate }));
 
       let success = true;
+      let anyDeducted = false;
+      let freshDeducted = false;
       if (freshItems.length > 0) {
         const res = await allocateBulkMilk(freshItems, destination, { rate: averageRate });
-        if (!res) success = false;
+        if (!res) success = false; else { anyDeducted = true; freshDeducted = true; }
       }
-      
+
       if (retailItems.length > 0) {
         const res = await allocateFromRetailStock(retailItems, destination, { rate: averageRate });
-        if (!res) success = false;
+        if (!res) success = false; else anyDeducted = true;
       }
-      
+
+      // No milk left stock, so the batch created above is a phantom: remove it.
+      if (createdBatchId && !anyDeducted) {
+        await discardBatch(createdBatchId);
+      } else if (createdBatchId && !success) {
+        // Only one source went through: keep just its lines on the batch, or a later cancel would
+        // return milk (pool or counter) that never left.
+        await trimBatchToSource(createdBatchId, freshDeducted ? 'fresh' : 'retail');
+      }
+
       if (success) {
         setCart([]);
         setSelectedProduct('');

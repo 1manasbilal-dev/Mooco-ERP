@@ -47,15 +47,7 @@ export const DenominationDialog: React.FC<DenominationDialogProps> = ({
   title = 'Cash Denomination Count',
   subtitle = 'Enter quantity for each currency note and coin'
 }) => {
-  if (!open) return null;
-
-  const total = DENOMINATIONS.reduce((sum, denomination) => sum + denomination * Number(value[denomination] || 0), 0);
-  const totalNotes = DENOMINATIONS.reduce((sum, denomination) => sum + Number(value[denomination] || 0), 0);
-
-  const handleClear = () => {
-    onChange({});
-  };
-
+  // Hooks must run before the early return, otherwise the Escape listener is never cleaned up.
   React.useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -68,6 +60,15 @@ export const DenominationDialog: React.FC<DenominationDialogProps> = ({
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [open, onClose]);
+
+  if (!open) return null;
+
+  const total = DENOMINATIONS.reduce((sum, denomination) => sum + denomination * Number(value[denomination] || 0), 0);
+  const totalNotes = DENOMINATIONS.reduce((sum, denomination) => sum + Number(value[denomination] || 0), 0);
+
+  const handleClear = () => {
+    onChange({});
+  };
 
   const handleApply = () => {
     onApply(total);

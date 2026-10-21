@@ -127,7 +127,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab: propActiveTab, setActiveTab: propSetActiveTab, isOpen, onClose }) => {
   const location = useLocation();
-  const { hasPermission, currentUser, currentRole, logoutUser, setIsUserSwitcherOpen } = useDairy();
+  const { hasPermission, currentUser, currentRole, logoutUser, lockTerminalNow, setIsUserSwitcherOpen } = useDairy();
   const { openTab, activeTabId } = useTabs();
   const activeTab = activeTabId || propActiveTab || location.pathname.replace(/^\//, '') || 'dashboard';
   const [autoCollapse, setAutoCollapse] = useSidebarPreference();
@@ -326,7 +326,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab: propActiveTab, setActiveTa
           {!isDesktop && <div className="sidebar-swipe-hint"><MoveLeft size={13} />Swipe left to close</div>}
           {isUserMenuOpen && <div className="sidebar-user-menu" ref={userMenuRef} role="dialog" aria-label="User options" id="sidebar-user-options">
             <div className="sidebar-user-menu-heading"><span className="sidebar-avatar">{userInitials}</span><div><strong>{displayName}</strong><span><ShieldCheck size={12} />{roleName}</span></div></div>
-            <button onClick={() => { setIsUserMenuOpen(false); if (!isDesktop) onClose(); setIsUserSwitcherOpen(true); }}><Lock size={16} /><span>Switch User / Lock</span></button>
+            <button onClick={() => { setIsUserMenuOpen(false); if (!isDesktop) onClose(); if (navigator.onLine) lockTerminalNow(); else setIsUserSwitcherOpen(true); }}><Lock size={16} /><span>Switch User / Lock</span></button>
             <button className="sidebar-signout" onClick={() => { setIsUserMenuOpen(false); logoutUser(); }}><LogOut size={16} /><span>Logout / Sign Out</span></button>
           </div>}
           <button type="button" ref={profileButtonRef} className={cn('sidebar-profile', isUserMenuOpen && 'is-open')} onClick={() => setIsUserMenuOpen(prev => !prev)} aria-label={`User menu for ${displayName}`} aria-expanded={isUserMenuOpen} aria-haspopup="dialog" aria-controls="sidebar-user-options" title={!showFullMenu ? displayName : undefined}>

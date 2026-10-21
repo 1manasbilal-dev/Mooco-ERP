@@ -86,7 +86,7 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = fals
           type: 'outbox' as const,
           title: `Accounting: ${String(x.action_type || 'entry').replace(/_/g, ' ').toUpperCase()}`,
           subtitle: `Ref: ${x.idempotency_key ? x.idempotency_key.slice(0, 10) : x.id.slice(0, 8)}`,
-          amount: x.payload?.total_amount || x.payload?.amount || undefined,
+          amount: x.payload?.total_amount || x.payload?.amount || x.payload?.p_amount || undefined,
           sync_status: x.sync_status,
           sync_error: x.sync_error,
           retry_count: x.retry_count,
@@ -156,8 +156,10 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = fals
       } else {
         showToast('All local data is up-to-date with cloud.', 'success');
       }
-    } else if (syncState.lastError) {
-      showToast(`Sync notice: ${syncState.lastError}`, 'error');
+    } else {
+      // The render-time syncState is from before this run; read the error this run produced.
+      const { lastError } = syncService.getState();
+      if (lastError) showToast(`Sync notice: ${lastError}`, 'error');
     }
     await loadQueue();
   };
@@ -452,8 +454,8 @@ export const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = fals
                         </div>
                       </div>
 
-                      {/* Exact Sync Error Message (if failed) */}
-                      {isFailed && item.sync_error && (
+                      {/* Exact Sync Error Message (failed, or still retrying after an error) */}
+                      {item.sync_error && (isFailed || (item.retry_count || 0) > 0) && (
                         <div className="mt-2.5 p-2 bg-rose-100/70 dark:bg-rose-950/60 rounded-xl border border-rose-200 dark:border-rose-900 text-[11px] font-mono text-rose-900 dark:text-rose-200 break-words flex items-start gap-1.5">
                           <AlertTriangle size={13} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                           <span>{item.sync_error}</span>

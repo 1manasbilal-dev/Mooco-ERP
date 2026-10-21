@@ -4,7 +4,9 @@
 export function exportToCSV(filename: string, headers: string[], rows: (string | number | boolean | null | undefined)[][]): void {
   const sanitizeCell = (cell: string | number | boolean | null | undefined): string => {
     if (cell === null || cell === undefined) return '""';
-    const str = String(cell);
+    let str = String(cell);
+    // Text starting with =, +, -, @ would run as a spreadsheet formula; keep it as text. Numbers pass through.
+    if (typeof cell === 'string' && /^[=+\-@\t\r]/.test(str) && !/^[+-]?\d[\d,.]*$/.test(str)) str = `'${str}`;
     // Escape double quotes by doubling them
     const escaped = str.replace(/"/g, '""');
     return `"${escaped}"`;

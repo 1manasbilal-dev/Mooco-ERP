@@ -15,6 +15,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatQty, formatCurrency, cleanNumber, cleanQty } from '../lib/formatters';
 import { convertQuantity } from '../lib/unitConversion';
+import { businessDate } from '../lib/dashboardAnalytics';
 
 // --- Type Fix for Framer Motion ---
 const MotionDiv = motion.div as any;
@@ -222,7 +223,7 @@ const Production: React.FC = () => {
              if (count > 0 && v.packaging_item_id) {
                  const packItem = itemsMap.get(v.packaging_item_id);
                  if (packItem) {
-                     const packQtyUsed = count * v.packaging_qty;
+                     const packQtyUsed = count * (Number(v.packaging_qty) || 0);
                      const cost = packQtyUsed * (packItem.cost_price || 0);
                      packagingCost += cost;
                      breakdown.push({
@@ -301,7 +302,8 @@ const Production: React.FC = () => {
         const batchMatch = (b.batch_number || '').toLowerCase().includes(historySearch.toLowerCase());
         const matchesSearch = nameMatch || batchMatch;
         const dateStr = b.completed_date || b.start_date || '';
-        const matchesDate = historyDate ? dateStr.startsWith(historyDate) : true;
+        // Stored as UTC; a batch finished before 05:00 PKT belongs to that Pakistan day, not the UTC one.
+        const matchesDate = historyDate ? (dateStr ? businessDate(dateStr) === historyDate : false) : true;
         return matchesSearch && matchesDate;
       })
       .sort((a, b) => new Date(b.completed_date || b.start_date || 0).getTime() - new Date(a.completed_date || a.start_date || 0).getTime());
@@ -455,7 +457,12 @@ const Production: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
-      await cancelBatch(selectedBatch.id, cancelReason);
+      // A refused cancel (e.g. a completed batch) must not close the sheet and report success.
+      const ok = await cancelBatch(selectedBatch.id, cancelReason);
+      if (!ok) {
+        showToast("Batch cancel nahi hua.", "error");
+        return;
+      }
       setSelectedBatch(null);
       showToast("Batch cancelled", "info");
     } catch (err: any) {

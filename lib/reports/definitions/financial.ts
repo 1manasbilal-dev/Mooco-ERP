@@ -544,7 +544,8 @@ export const financialReports: ReportDefinition[] = [
       activeExpenses(data, f).forEach(e => add(e.id, {
         time: e.created_at && dayOf(e.created_at) === dayOf(e.date) ? e.created_at : e.date, type: 'Expense', ref: e.referenceNo || '',
         party: e.vendor_name || '', description: [e.category, e.description].filter(Boolean).join(' · '),
-        in: 0, out: expenseCashPaid(e), moved: 0,
+        // Bad-debt write-offs ('Adjustment') move no cash.
+        in: 0, out: e.paymentMode === 'Adjustment' ? 0 : expenseCashPaid(e), moved: 0,
         _drill: { report: 'expense_register', filters: { category: e.category }, label: 'Expenses in category' },
       }));
 

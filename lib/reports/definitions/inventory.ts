@@ -11,18 +11,20 @@ import type { InventoryLog, ItemDefinition } from '../../../types';
 
 const isActiveItem = (item: ItemDefinition) => item.isActive !== false;
 
-/** Loose stock: the live `stock` on the item, else the inventory row for it. */
+/**
+ * Loose stock: the live inventory row, else the `stock` on the item. Returns, audits and purchases
+ * update the inventory row first, so it matches Master Inventory and the balance sheet.
+ */
 function looseOf(item: ItemDefinition, data: ReportData): number {
-  const own = (item as any).stock;
-  if (own !== undefined && own !== null && own !== '') return n(own);
   const inv = data.inventory.find(i => i.item_id === item.id || i.id === item.id);
-  return n(inv?.quantity);
+  if (inv && inv.quantity !== undefined && inv.quantity !== null) return n(inv.quantity);
+  return n((item as any).stock);
 }
 
 function variantStocksOf(item: ItemDefinition, data: ReportData): Record<string, number> {
-  if (item.variant_stocks && Object.keys(item.variant_stocks).length) return item.variant_stocks;
   const inv = data.inventory.find(i => i.item_id === item.id || i.id === item.id);
-  return inv?.variant_stocks || item.variant_stocks || {};
+  if (inv?.variant_stocks && Object.keys(inv.variant_stocks).length) return inv.variant_stocks;
+  return item.variant_stocks || inv?.variant_stocks || {};
 }
 
 const stockOf = (item: ItemDefinition, data: ReportData) =>
@@ -57,8 +59,9 @@ function logBaseDelta(log: InventoryLog, item?: ItemDefinition): number {
   return r3(delta);
 }
 
-/** Log reasons written by purchases, production and milk allocation. They are stock flows, not adjustments. */
-const FLOW_REASONS = ['allocation', 'production', 'production usage', 'purchase'];
+/** Log reasons written by purchases, production, milk allocation and bill checkout. They are stock flows, not adjustments. */
+const SALE_REASONS = ['sale', 'pos sale'];
+const FLOW_REASONS = ['allocation', 'production', 'production usage', 'purchase', ...SALE_REASONS];
 const isFlowReason = (reason?: string) => FLOW_REASONS.includes(lower(reason));
 /** Reasons that move stock without being a loss to the business. */
 const NOT_LOSS = [lower(AdjustmentReason.SUPPLY_RETURN), lower(AdjustmentReason.PRODUCTION_CANCEL)];
@@ -308,7 +311,7 @@ export const inventoryReports: ReportDefinition[] = [
           rows,
           emptyText: 'No stock adjustments in this period.',
         }],
-        notes: [{ tone: 'info', text: 'Purchases, production and milk allocation entries are left out (see Item Movement Summary). Value uses today\'s cost price. Supplier returns are not counted as loss.' }],
+        notes: [{ tone: 'info', text: 'Sales, purchases, production and milk allocation entries are left out (see Item Movement Summary). Value uses today\'s cost price. Supplier returns are not counted as loss.' }],
       };
     },
   },
@@ -423,7 +426,19 @@ export const inventoryReports: ReportDefinition[] = [
         if (!wanted(item)) return;
         const reason = lower(log.reason);
         if (reason === 'purchase' || reason === 'production') return; // already counted from purchases and batches
-        const delta = logBaseDelta(log, item);
+        // Bills give "sold" net of refunds and purchase lines are net of supplier returns,
+        // so the stock logs those documents wrote would count the same movement twice.
+        if (SALE_REASONS.includes(reason)) return;
+        const manualAudit = /Loose Stock Audit|Variant Audit/.test(String(log.notes || ''));
+        if (!manualAudit && (reason === lower(AdjustmentReason.SALES_RETURN) || reason === lower(AdjustmentReason.SUPPLY_RETURN))) return;
+        let delta = logBaseDelta(log, item);
+        // A scrapped customer return is netted out of "sold" but never came back to the shelf.
+        const scrapped = n((log as any).details?.scrapped_qty);
+        if (scrapped > 0) {
+          const packId = (log as any).details?.variant_id;
+          const pack = packId ? (item!.variants || []).find(v => v.id === packId) : undefined;
+          delta = r3(delta - scrapped * (pack && n(pack.quantity_in_base_unit) > 0 ? n(pack.quantity_in_base_unit) : 1));
+        }
         const row = get(item!.id);
         if (reason === 'allocation') row.allocated += delta;
         else if (reason === lower(AdjustmentReason.PRODUCTION_USAGE)) row.used += delta;

@@ -161,7 +161,7 @@ export function CashPaymentDays(props: {
             <span className="text-[11px] font-bold text-slate-500">
               Paid {formatMoney(day.paid)}
               {day.refunded > 0 ? ` · Refund ${formatMoney(day.refunded)}` : ''}
-              <span className="text-slate-900"> · Net {formatMoney(day.net)}</span>
+              <span className="text-slate-900"> · Net {day.net < -0.5 ? '-' : ''}{formatMoney(day.net)}</span>
             </span>
           </div>
           <div className="divide-y divide-slate-100">

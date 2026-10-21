@@ -12,8 +12,10 @@
 //
 // Request body (one of):
 //   { "mode": "username", "username": "ali", "pin": "1234" }   -> app_login
-//   { "mode": "pin", "pin": "1234" }                           -> app_login_with_pin
 //   { "mode": "user", "user_id": "user_x", "pin": "1234" }     -> app_verify_pin
+// PIN-only login ("mode": "pin" -> app_login_with_pin) is not accepted: the app never uses it,
+// and one guess tests the PIN of every operator at once while its lockout blocks everybody.
+// A wrong PIN comes back from the RPCs as null (so the failed attempt is kept for the lockout).
 // Response: { user, session: { access_token, refresh_token, expires_at } } or { message } on error.
 
 import { createClient } from 'npm:@supabase/supabase-js@2.106.2';
@@ -70,8 +72,6 @@ async function verifyPin(body: any): Promise<{ user?: any; message?: string }> {
   let rpc: { fn: string; args: Record<string, string> } | null = null;
   if (mode === 'username' && typeof body.username === 'string' && body.username.trim() && isPin(body.pin)) {
     rpc = { fn: 'app_login', args: { p_username: body.username.trim().toLowerCase(), p_pin: body.pin.trim() } };
-  } else if (mode === 'pin' && isPin(body.pin)) {
-    rpc = { fn: 'app_login_with_pin', args: { p_pin: body.pin.trim() } };
   } else if (mode === 'user' && typeof body.user_id === 'string' && body.user_id.trim() && isPin(body.pin)) {
     rpc = { fn: 'app_verify_pin', args: { p_user_id: body.user_id.trim(), p_pin: body.pin.trim() } };
   }

@@ -593,8 +593,19 @@ const Items: React.FC = () => {
     }
   };
 
+  // POS positions for the reordered list. With a search or filter on, only the positions the visible
+  // products already held are reshuffled, so hidden products keep their own POS numbers.
+  const posOrderUpdates = (newOrderList: ItemDefinition[]): { id: string; sort_order: number }[] => {
+    const visibleSale = newOrderList.filter(item => item.item_type?.includes('Sale product'));
+    const allSaleCount = items.filter(item => item.item_type?.includes('Sale product')).length;
+    if (visibleSale.length >= allSaleCount) return visibleSale.map((item, index) => ({ id: item.id, sort_order: index + 1 }));
+    const slots = visibleSale.map(item => Number(item.sort_order ?? 999)).sort((a, b) => a - b);
+    for (let i = 1; i < slots.length; i++) if (slots[i] <= slots[i - 1]) slots[i] = slots[i - 1] + 1;
+    return visibleSale.map((item, index) => ({ id: item.id, sort_order: slots[index] }));
+  };
+
   // Drag and drop & step reordering
-  const handleDragStart = (e: React.DragEvent, id: string) => {
+  const handleDragStart =(e: React.DragEvent, id: string) => {
     e.dataTransfer.setData('text/plain', id);
     e.dataTransfer.effectAllowed = 'move';
     setDraggedItemId(id);
@@ -655,14 +666,7 @@ const Items: React.FC = () => {
       setSortOrder('asc');
     }
 
-    let saleCounter = 1;
-    const updates: { id: string; sort_order: number }[] = [];
-    newOrderList.forEach(item => {
-      if (item.item_type?.includes('Sale product')) {
-        updates.push({ id: item.id, sort_order: saleCounter });
-        saleCounter++;
-      }
-    });
+    const updates = posOrderUpdates(newOrderList);
 
     if (updates.length > 0) {
       await reorderItems(updates);
@@ -684,14 +688,7 @@ const Items: React.FC = () => {
       setSortOrder('asc');
     }
 
-    let saleCounter = 1;
-    const updates: { id: string; sort_order: number }[] = [];
-    newOrderList.forEach(item => {
-      if (item.item_type?.includes('Sale product')) {
-        updates.push({ id: item.id, sort_order: saleCounter });
-        saleCounter++;
-      }
-    });
+    const updates = posOrderUpdates(newOrderList);
 
     if (updates.length > 0) {
       await reorderItems(updates);

@@ -217,6 +217,8 @@ const POS: React.FC = () => {
       if (cancelled) return;
       if (!['Confirmed', 'Ready'].includes(order.status)) throw new Error(order.status === 'Completed' ? 'This order has already been billed. Open its invoice from Customer Orders.' : 'Confirm this order before billing. Cancelled orders cannot be billed.');
       const remainingDue = Math.max(0, order.total - Number(order.advance_paid || 0));
+      // Keep the booking's payment defaults: the customer-change effect would reset them to Cash / blank.
+      isRecallingRef.current = true;
       setBooking(order); setSelectedCustomerId(order.customer_id); setPaymentMode(remainingDue === 0 ? 'Cash' : 'Credit'); setCustomerPaidAmount(remainingDue === 0 ? '0' : String(remainingDue));
       setDiscountType('flat'); setDiscountValue(String(order.discount)); setMobileTab('cart');
       setCart(order.items.map((line, index) => {
@@ -574,10 +576,11 @@ const POS: React.FC = () => {
       const parsed = parseFloat(customerPaidAmount);
       return isNaN(parsed) ? 0 : roundCurrency(Math.max(0, parsed));
     }
-    if (customerPaidAmount === '') return grandTotal;
+    // A blank amount means "paid in full": what is still owed after any booking advance, as checkout records it.
+    if (customerPaidAmount === '') return roundCurrency(Math.max(0, grandTotal - bookingAdvance));
     const parsed = parseFloat(customerPaidAmount);
     return isNaN(parsed) ? 0 : roundCurrency(Math.max(0, parsed));
-  }, [selectedCustomerId, paymentMode, customerPaidAmount, grandTotal]);
+  }, [selectedCustomerId, paymentMode, customerPaidAmount, grandTotal, bookingAdvance]);
 
   const customerDueAmount = useMemo(() => {
     if (!selectedCustomerId) return 0;
@@ -622,8 +625,18 @@ const POS: React.FC = () => {
         holdOrderRef.current();
       } else if (e.key === 'F9') {
         e.preventDefault();
+        // A held-down key must not fire the sale again and again.
+        if (e.repeat) return;
         if (!isSubmittingRef.current) {
-          void checkoutRef.current();
+          // A typed sum (e.g. paid "500+200") is applied only when its field loses focus.
+          // Blur first and read the sale after that update renders, or the bill saves 500.
+          const active = document.activeElement as HTMLElement | null;
+          if (active && active.tagName === 'INPUT') {
+            active.blur();
+            setTimeout(() => { if (!isSubmittingRef.current) void checkoutRef.current(); }, 0);
+          } else {
+            void checkoutRef.current();
+          }
         }
       } else if (e.key === 'Escape') {
         // A confirm dialog on top (e.g. "close shift?") handles its own Escape.
@@ -650,7 +663,7 @@ const POS: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cart, selectedCustomerId, paymentMode, discountType, discountValue, cashReceived, isSubmitting, quickModalOpen, newCustomerModalOpen, heldOrdersModalOpen, shortcutsModalOpen, completedSaleModalOpen, isShiftModalOpen, editingCartItem, showProductSearch]);
+  }, [cart, selectedCustomerId, paymentMode, discountType, discountValue, cashReceived, isSubmitting, quickModalOpen, newCustomerModalOpen, heldOrdersModalOpen, shortcutsModalOpen, completedSaleModalOpen, isShiftModalOpen, editingCartItem, showProductSearch, customerDropdownOpen]);
 
   // Cart Operations
   const addToCart = (product: any, qty = 1, variantName?: string, priceOverride?: number, stockDeduction?: number, variantId?: string, customTotal?: number): boolean => {
@@ -862,7 +875,7 @@ const POS: React.FC = () => {
     const r = parseFloat(newRateStr);
     const q = parseFloat(editQty);
     if (!isNaN(r) && !isNaN(q)) {
-      setEditTotal(Number((r * q).toFixed(1)).toString());
+      setEditTotal(roundCurrency(r * q).toString());
     }
   };
 
@@ -871,7 +884,7 @@ const POS: React.FC = () => {
     const q = parseFloat(newQtyStr);
     const r = parseFloat(editRate);
     if (!isNaN(r) && !isNaN(q)) {
-      setEditTotal(Number((r * q).toFixed(1)).toString());
+      setEditTotal(roundCurrency(r * q).toString());
     }
   };
 
@@ -1071,6 +1084,9 @@ const POS: React.FC = () => {
     setPaymentMode(held.paymentMode);
     setDiscountType(held.discountType);
     setDiscountValue(held.discountValue);
+    // Money typed for the replaced cart belongs to that bill, never to the recalled one.
+    setCashReceived('');
+    setCustomerPaidAmount('');
     setHeldOrders(prev => prev.filter(h => h.id !== held.id));
     setHeldOrdersModalOpen(false);
     showToast(`Recalled held order`, "info");
@@ -1103,6 +1119,13 @@ const POS: React.FC = () => {
 
     if (isTodayLocked) {
       showToast("Business Day has been closed & locked! Reopen day or contact Owner to punch bills.", "error");
+      return false;
+    }
+
+    // A deleted customer (restored draft or parked bill) would save as a walk-in Credit bill with the
+    // unpaid amount on no khata.
+    if (!bookingId && selectedCustomerId && !(customers || []).some(c => c.id === selectedCustomerId)) {
+      showToast('Ye customer ab list mein nahi hai. Customer dobara select karein ya Walk-in karein.', 'warning');
       return false;
     }
 
@@ -1379,7 +1402,7 @@ const POS: React.FC = () => {
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-black"><ClipboardCheck size={20} className="text-lime-600" />Customer Order Billing</h2><p className="mt-1 text-xs text-slate-500">{booking?.order_number || 'Loading booking'} · Products and prices are saved with the order.</p></div><button type="button" disabled={isSubmitting} onClick={() => { setCompletedSaleModalOpen(false); navigate('/customer-orders'); }} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900"><ArrowLeft size={16} />Customer Orders</button></div>
     {bookingLoading ? <div role="status" className="flex items-center justify-center gap-2 p-10 text-sm text-slate-500"><Loader2 size={20} className="animate-spin" />Loading order…</div> : bookingError ? <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"><p className="flex items-center gap-2"><AlertCircle size={18} />{bookingError}</p><button type="button" onClick={() => setBookingReload(value => value + 1)} className="mt-4 font-bold underline">Reload order</button></div> : booking && <>
       <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><h3 className="font-bold">{booking.customer_name}</h3><p className="mt-1 text-xs text-slate-500">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>{booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-slate-500">{booking.address}</p>}{booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{booking.notes}</p>}{Number(booking.advance_paid || 0) > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs dark:border-emerald-900/60 dark:bg-emerald-950/40"><div className="flex items-center justify-between font-bold text-emerald-800 dark:text-emerald-300"><span className="flex items-center gap-1.5"><Banknote size={15} /> Advance Paid on Booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span><span className="font-mono text-sm font-black">{formatCurrency(Number(booking.advance_paid))}</span></div><div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300"><span>Remaining Balance to Collect:</span><span className="font-mono font-bold text-amber-700 dark:text-amber-400">{formatCurrency(Math.max(0, Number(booking.total) - Number(booking.advance_paid)))}</span></div></div>}<div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{booking.items.map((line, index) => <div key={index} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p><p className="mt-1 text-xs text-slate-500">{line.qty} {line.unit} × {formatCurrency(line.price)}</p></div><span className="text-sm font-bold">{formatCurrency(roundCurrency(line.qty * line.price))}</span></div>)}</div></div>
-      {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} lockDiscount onStartShift={() => setIsShiftModalOpen(true)} isDayLocked={isTodayLocked} /></div>}
+      {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} amountDue={roundCurrency(Math.max(0, grandTotal - bookingAdvance))} lockDiscount onStartShift={() => setIsShiftModalOpen(true)} isDayLocked={isTodayLocked} /></div>}
     </>}
     <PosReceiptModal open={completedSaleModalOpen} onClose={() => setCompletedSaleModalOpen(false)} lastCompletedSale={lastCompletedSale} settings={settings} />
     <PosShiftModal isOpen={isShiftModalOpen} onClose={() => setIsShiftModalOpen(false)} />

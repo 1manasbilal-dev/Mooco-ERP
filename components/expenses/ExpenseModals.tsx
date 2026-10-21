@@ -33,6 +33,9 @@ const defaultAccountFor = (mode: string, accounts: any[], settings: any) => (
 const submitOnCtrlEnter = (event: React.KeyboardEvent<HTMLFormElement>) => {
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
+    // requestSubmit() ignores a disabled Save button (locked date / already saving).
+    const submitButton = event.currentTarget.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (submitButton?.disabled) return;
     event.currentTarget.requestSubmit();
   }
 };

@@ -100,8 +100,7 @@ const MODAL_PRESETS: { id: DatePreset; label: string; desc: string }[] = [
 ];
 
 export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
-  if (!props.isOpen) return null;
-
+  // Hooks run on every render; returning before them breaks React when isOpen changes.
   const [preset, setPreset] = useState<DatePreset>(props.initialPreset || 'all');
   const [from, setFrom] = useState<string>(() => {
     if (props.initialFrom) return props.initialFrom;
@@ -165,6 +164,8 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
       props.onSendWhatsApp(props.supplier, statement);
     }
   };
+
+  if (!props.isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">

@@ -15,7 +15,7 @@ const MODULE_ROUTE_MAP: Record<PermissionModule, string> = {
   pos: '/pos',
   sales_history: '/sales-history',
   customer_orders: '/customer-orders',
-  retail_stock: '/retail-stock',
+  retail_stock: '/cash-control',
   cash_control: '/cash-control',
   production: '/production',
   items: '/items',
@@ -65,7 +65,9 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ module, children
     );
   }
 
-  const isAllowed = hasPermission(module);
+  // Settings also holds the Users & Access tab, so a user manager without the settings
+  // permission still gets in (Settings then shows only that tab).
+  const isAllowed = hasPermission(module) || (module === 'settings' && hasPermission('user_management'));
 
   if (isAllowed) {
     // Never present initial zero balances as actual data, or remount a working
@@ -85,13 +87,25 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ module, children
     ...(currentRole?.permissions || []),
     ...(currentUser?.permissions || [])
   ];
-  let fallbackRoute = '/pos';
+  // Permissions are stored as modules ('pos') or actions ('pos:view'); only redirect to a page
+  // this user can actually open, never back to this one (that would redirect forever).
+  // Settings is the last resort.
+  const reachable = allowedModules
+    .map(perm => String(perm).split(':')[0] as PermissionModule)
+    .filter(mod => MODULE_ROUTE_MAP[mod] && MODULE_ROUTE_MAP[mod] !== MODULE_ROUTE_MAP[module] && hasPermission(mod))
+    .map(mod => MODULE_ROUTE_MAP[mod]);
+  const fallbackRoute: string | null = reachable.find(route => route !== '/settings') || reachable[0] || null;
 
-  for (const mod of allowedModules) {
-    if (MODULE_ROUTE_MAP[mod as PermissionModule] && MODULE_ROUTE_MAP[mod as PermissionModule] !== '/settings') {
-      fallbackRoute = MODULE_ROUTE_MAP[mod as PermissionModule];
-      break;
-    }
+  if (!fallbackRoute) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center">
+        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mb-4">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">Access nahi hai</h3>
+        <p className="text-xs text-slate-500 mt-1 max-w-xs">Is page ki ijazat aap ke role mein nahi hai. Admin se rabta karein.</p>
+      </div>
+    );
   }
 
   return <Navigate to={fallbackRoute} replace />;

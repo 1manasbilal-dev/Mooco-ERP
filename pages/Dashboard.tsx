@@ -29,6 +29,18 @@ const RANGES = [
 const OPTIONAL_PANELS = { products: 'Best sellers', collections: 'Collection priorities', expenses: 'Expense breakdown', activity: 'Recent activity' };
 type PanelKey = keyof typeof OPTIONAL_PANELS;
 
+const inPeriod = (value: string | undefined, start: string, end: string) => {
+  if (!value) return false;
+  const day = businessDate(value);
+  return day >= start && day <= end;
+};
+/** Supply rows are loaded with their details spread onto the row; older rows may still nest them. */
+const isCountedSupply = (ds: any) => {
+  const status = ds?.status ?? ds?.details?.status;
+  return Boolean(ds?.date) && status !== 'Cancelled' && status !== 'Pending';
+};
+const isLiveExpense = (e: any) => e?.status !== 'Cancelled' && e?.status !== 'Returned';
+
 function ChangeBadge({ current, previous, inverse = false }: { current: number; previous: number; inverse?: boolean }) {
   const change = percentageChange(current, previous);
   if (change === null) return <span className="overview-change neutral">{current > 0 ? 'New activity' : 'No activity'}</span>;
@@ -219,18 +231,15 @@ const Dashboard: React.FC = () => {
       });
     });
 
-    const rangeSupplies = (dailySupplyEntries || []).filter(ds => {
-      if (!ds.date || ds.details?.status === 'Cancelled' || ds.details?.status === 'Pending') return false;
-      const d = businessDate(ds.date);
-      return d >= dateFilter.start && d <= dateFilter.end;
-    });
+    const rangeSupplies = (dailySupplyEntries || []).filter(ds => isCountedSupply(ds) && inPeriod(ds.date, dateFilter.start, dateFilter.end));
     rangeSupplies.forEach(ds => {
       const supplyAmt = Number(ds.total_amount) || 0;
       totalSalesAmount += supplyAmt;
-      const rec = Number(ds.details?.payment_received) || 0;
+      // Supply rows are loaded with their details spread onto the row.
+      const rec = Number((ds as any).payment_received ?? (ds as any).details?.payment_received) || 0;
       cashSalesAmount += rec;
       creditSalesAmount += Math.max(0, supplyAmt - rec);
-      addSold('L', Number(ds.quantity) || 0);
+      addSold('L', Number((ds as any).net_qty ?? (ds as any).quantity ?? (ds as any).details?.net_qty) || 0);
     });
     // A single headline number only exists when every sale shares one unit.
     const soldUnitKeys = Object.keys(soldUnitsByUnit);
@@ -374,7 +383,7 @@ const Dashboard: React.FC = () => {
   }, [
     rangePurchases, rangeSales, rangeExpenses, rangeAllocations, 
     accounts, suppliers, customers, inventory, cashInTransit, items,
-    productionBatches, inventoryLogs, allocations, dateFilter
+    productionBatches, inventoryLogs, allocations, dateFilter, dailySupplyEntries
   ]);
 
   // 4. In-Depth Operational Expense Analytics
@@ -394,7 +403,10 @@ const Dashboard: React.FC = () => {
       pendingAmount += due;
 
       const mode = (e.paymentMode || 'Cash').toLowerCase();
-      if (mode.includes('bank') || mode.includes('online') || mode.includes('digital')) {
+      // Non-cash settlements (bad-debt write-off) are fully "paid" but no money left any account.
+      if (mode === 'adjustment') {
+        // neither cash nor bank
+      } else if (mode.includes('bank') || mode.includes('online') || mode.includes('digital')) {
         bankPaid += paid;
       } else {
         cashPaid += paid;
@@ -646,14 +658,16 @@ const Dashboard: React.FC = () => {
 
 
 
-  const previousSalesTotal = prevSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  // Same basis as the current period: bills net of returns plus delivery supply.
+  const previousSalesTotal = prevSales.reduce((sum, sale) => sum + saleNetCollection(sale).net, 0)
+    + (dailySupplyEntries || []).filter(ds => isCountedSupply(ds) && inPeriod(ds.date, dateFilter.previousStart, dateFilter.previousEnd))
+      .reduce((sum, ds) => sum + (Number(ds.total_amount) || 0), 0);
   const previousMilkTotal = prevPurchases.reduce((sum, purchase) => sum + Number(purchase.quantity || 0), 0);
-  const previousExpensesTotal = expenses.filter(e => {
-    const date = businessDate(e.date); return date >= dateFilter.previousStart && date <= dateFilter.previousEnd;
-  }).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const previousExpensesTotal = expenses.filter(e => isLiveExpense(e) && inPeriod(e.date, dateFilter.previousStart, dateFilter.previousEnd))
+    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
   const collected = stats.cashSalesAmount + stats.onlineSalesAmount;
   const collectionRate = stats.totalSalesAmount > 0 ? (collected / stats.totalSalesAmount) * 100 : 0;
-  const allUnpaidExpenses = expenses.reduce((sum, e) => sum + Math.max(0, Number(e.amount || 0) - Number(e.paidAmount ?? (e.paymentStatus === 'Unpaid' ? 0 : e.amount))), 0);
+  const allUnpaidExpenses = expenses.filter(isLiveExpense).reduce((sum, e) => sum + Math.max(0, Number(e.amount || 0) - Number(e.paidAmount ?? (e.paymentStatus === 'Unpaid' ? 0 : e.amount))), 0);
   const debtors = useMemo(() => customers.filter(c => Number(c.balance) > 0).sort((a, b) => Number(b.balance) - Number(a.balance)).slice(0, 4), [customers]);
   const [visiblePanels, setVisiblePanels] = useState<Record<PanelKey, boolean>>(() => {
     const defaults = { products: true, collections: true, expenses: true, activity: true };

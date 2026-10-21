@@ -688,7 +688,8 @@ const Suppliers: React.FC = () => {
     }));
   };
 
-  const handleSendWhatsAppReminder = (supplier: Supplier) => {
+  // The print modal passes the statement for the range chosen there; without it the page range is used.
+  const handleSendWhatsAppReminder = (supplier: Supplier, chosenStatement?: ReturnType<typeof buildSupplierStatement>) => {
     const cleanPhone = (supplier.whatsapp || supplier.phone || '').replace(/[^0-9]/g, '');
     if (!cleanPhone) {
       showToast('Supplier ka sahi phone number nahi hai', 'warning');
@@ -704,7 +705,7 @@ const Suppliers: React.FC = () => {
     const msg = whatsappStatementText({
       companyName: statementCompany.name,
       supplier: statementSupplier(supplier),
-      statement: buildSupplierStatement({
+      statement: chosenStatement || buildSupplierStatement({
         supplier: statementSupplier(supplier),
         purchases,
         materialPurchases,

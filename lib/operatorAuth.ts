@@ -16,6 +16,8 @@ const LOGIN_FAILED = 'Ghalat Username ya PIN code!';
 const OFFLINE = 'Internet nahi hai. Login ke liye connection zaroori hai.';
 
 const readFunctionError = async (error: any): Promise<string> => {
+  // The request never reached the login service (network drop, DNS, relay): not a wrong PIN.
+  if (error?.name === 'FunctionsFetchError' || error?.name === 'FunctionsRelayError') return OFFLINE;
   try {
     const body = await error?.context?.json?.();
     if (body?.message) return String(body.message);

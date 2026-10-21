@@ -13,6 +13,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { isDateOnlyOrMidnight, formatCurrency, formatMoneyRaw } from '../lib/formatters';
 import { saleLineStock } from '../lib/sellUnits';
 import { useManagerApproval } from '../components/ui/ManagerApproval';
+import { proportionalRefund } from '../lib/moneyFlow';
+import { businessDate } from '../lib/dashboardAnalytics';
 
 const MotionDiv = motion.div as any;
 
@@ -70,10 +72,8 @@ const getLocalDateString = (dStr?: string | Date): string => {
     if (isNaN(d.getTime())) {
       return typeof dStr === 'string' ? (dStr.includes('T') ? dStr.split('T')[0] : dStr) : '';
     }
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    // Pakistan calendar day, whatever the terminal's clock zone is.
+    return businessDate(d);
   } catch {
     return typeof dStr === 'string' ? (dStr.includes('T') ? dStr.split('T')[0] : dStr) : '';
   }
@@ -83,27 +83,31 @@ const normalizeSearchToken = (str: string): string => {
   return str.toLowerCase().replace(/[^a-z0-9]/g, '');
 };
 
+// The shop's own calendar day of a bill. Timestamps are UTC, so their raw "YYYY-MM-DD" prefix is the
+// wrong day for bills made between 00:00 and 05:00 PKT; only a plain date string is taken as written.
+const saleDayKey = (saleDateStr?: string): string => {
+  if (!saleDateStr) return '';
+  const trimmed = String(saleDateStr).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const d = new Date(trimmed.replace(' ', 'T'));
+  return isNaN(d.getTime()) ? trimmed.slice(0, 10) : getLocalDateString(d);
+};
+
 const checkSaleDateMatches = (saleDateStr?: string, range: string = 'today', customD: string = ''): boolean => {
   if (!saleDateStr) return true;
   if (range === 'all') return true;
 
-  const saleIsoDate = saleDateStr.includes('T') ? saleDateStr.split('T')[0] : saleDateStr;
-  const saleLocalDate = getLocalDateString(saleDateStr);
-
-  const now = new Date();
-  const todayIso = now.toISOString().split('T')[0];
-  const todayLocal = getLocalDateString(now);
+  const saleLocalDate = saleDayKey(saleDateStr);
+  const todayLocal = getLocalDateString(new Date());
 
   if (range === 'today') {
-    return saleLocalDate === todayLocal || saleIsoDate === todayIso || saleLocalDate === todayIso;
+    return saleLocalDate === todayLocal;
   }
   if (range === 'month') {
-    const currentMonthLocal = todayLocal.slice(0, 7);
-    const currentMonthIso = todayIso.slice(0, 7);
-    return saleLocalDate.startsWith(currentMonthLocal) || saleIsoDate.startsWith(currentMonthIso);
+    return saleLocalDate.startsWith(todayLocal.slice(0, 7));
   }
   if (range === 'custom' && customD) {
-    return saleLocalDate === customD || saleIsoDate === customD;
+    return saleLocalDate === customD;
   }
   return true;
 };
@@ -517,9 +521,10 @@ const SalesHistory: React.FC = () => {
     return returnItems.filter(i => i.isSelected && i.returnQty > 0);
   }, [returnItems]);
 
+  // Same figure the return posts: line prices are before the bill discount, so the refund keeps that discount.
   const currentRefundAmount = useMemo(() => {
-    return activeReturnItems.reduce((sum, i) => sum + (i.returnQty * i.price), 0);
-  }, [activeReturnItems]);
+    return proportionalRefund(returnModalSale, activeReturnItems.map(i => ({ qty: i.returnQty, price: i.price })));
+  }, [activeReturnItems, returnModalSale]);
 
   // Tokenized search query
   const searchTokens = useMemo(() => {
@@ -611,23 +616,19 @@ const SalesHistory: React.FC = () => {
 
   // Counts for date filter options
   const { todayCount, monthCount } = useMemo(() => {
-    const now = new Date();
-    const todayIso = now.toISOString().split('T')[0];
-    const todayLocal = getLocalDateString(now);
+    const todayLocal = getLocalDateString(new Date());
     const monthLocal = todayLocal.slice(0, 7);
-    const monthIso = todayIso.slice(0, 7);
 
     let todayC = 0;
     let monthC = 0;
 
     for (const s of sales) {
       if (!s.date) continue;
-      const sIso = s.date.includes('T') ? s.date.split('T')[0] : s.date;
-      const sLocal = getLocalDateString(s.date);
-      if (sLocal === todayLocal || sIso === todayIso || sLocal === todayIso) {
+      const sLocal = saleDayKey(s.date);
+      if (sLocal === todayLocal) {
         todayC++;
       }
-      if (sLocal.startsWith(monthLocal) || sIso.startsWith(monthIso)) {
+      if (sLocal.startsWith(monthLocal)) {
         monthC++;
       }
     }
@@ -1104,7 +1105,7 @@ const SalesHistory: React.FC = () => {
                           <span className="font-mono">- {formatCurrency(sale.discount)}</span>
                         </div>
                       )}
-                      {sale.refund_amount && sale.refund_amount > 0 && (
+                      {Number(sale.refund_amount || 0) > 0 && (
                         <div className="flex justify-between text-red-600 text-[11px] font-semibold">
                           <span>Refunded Amount:</span>
                           <span className="font-mono">- {formatCurrency(sale.refund_amount)}</span>
@@ -1219,9 +1220,7 @@ const SalesHistory: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setFilterDateRange('all');
-                    setFilterMode('All');
-                    setFilterStatus('All');
+                    updateFilters({ range: 'all', mode: 'All', status: 'All' });
                     setSearchTerm('');
                   }}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-lime-500 hover:bg-lime-600 text-slate-900 transition-colors shadow-xs cursor-pointer"
@@ -1316,7 +1315,7 @@ const SalesHistory: React.FC = () => {
                             Disc: {formatCurrency(sale.discount)}
                           </span>
                         )}
-                        {sale.refund_amount && sale.refund_amount > 0 && (
+                        {Number(sale.refund_amount || 0) > 0 && (
                           <span className="text-xs text-red-600 font-semibold font-mono">
                             Ref: {formatCurrency(sale.refund_amount)}
                           </span>
@@ -1455,9 +1454,7 @@ const SalesHistory: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            setFilterDateRange('all');
-                            setFilterMode('All');
-                            setFilterStatus('All');
+                            updateFilters({ range: 'all', mode: 'All', status: 'All' });
                             setSearchTerm('');
                           }}
                           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-lime-500 hover:bg-lime-600 text-slate-900 transition-colors shadow-xs cursor-pointer"
@@ -1637,7 +1634,7 @@ const SalesHistory: React.FC = () => {
                     <span className="font-mono">- {formatCurrency(selectedDetailSale.discount)}</span>
                   </div>
                 )}
-                {selectedDetailSale.refund_amount && selectedDetailSale.refund_amount > 0 && (
+                {Number(selectedDetailSale.refund_amount || 0) > 0 && (
                   <div className="flex justify-between text-red-600 font-semibold">
                     <span>Refunded Amount:</span>
                     <span className="font-mono">- {formatCurrency(selectedDetailSale.refund_amount)}</span>

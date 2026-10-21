@@ -1,5 +1,6 @@
 import type { POSBill, PurchaseEntry, ExpenseEntry } from '../types';
 import { businessDate, offsetDate, reportingHalfHour, getDashboardPeriod, DashboardRange } from './dashboardAnalytics';
+import { returnedQtyForLine } from './stockProfit';
 
 export type PerformanceMetric = 'sales' | 'milk' | 'expenses' | 'products';
 
@@ -36,14 +37,13 @@ export function buildPerformanceSeries({ sales, purchases, expenses, metric, sel
       value = Number((entry as ExpenseEntry).amount) || 0;
     } else if (metric === 'products') {
       const bill = entry as POSBill;
-      const subtotal = bill.items.reduce((s, it) => s + (Number(it.total) || Number(it.qty) * Number(it.price) || 0), 0);
+      const lines = bill.items || [];
+      const subtotal = lines.reduce((s, it) => s + (Number(it.total) || Number(it.qty) * Number(it.price) || 0), 0);
       const discountRatio = subtotal > 0 ? (Number(bill.total) || 0) / subtotal : 1;
-      const returnedItems = (bill as any).returned_items || (bill as any).details?.returned_items || [];
-      value = bill.items.filter(i => i.name === selectedProduct).reduce((sum, i) => {
-        const retQty = returnedItems
-          .filter((r: any) => r.action !== 'replace' && (r.itemId === i.itemId || r.name === i.name) && (r.variantId || '') === (i.variantId || ''))
-          .reduce((rs: number, r: any) => rs + (Number(r.qty) || 0), 0);
-        const netQty = Math.max(0, (Number(i.qty) || 0) - retQty);
+      value = lines.reduce((sum, i, lineIndex) => {
+        if (i.name !== selectedProduct) return sum;
+        // Two lines of the same product must not both lose the same returned quantity.
+        const netQty = Math.max(0, (Number(i.qty) || 0) - returnedQtyForLine(bill as any, i as any, lineIndex));
         const grossLine = (Number(i.qty) || 0) > 0 ? ((Number(i.total) || Number(i.qty) * Number(i.price) || 0) * (netQty / Number(i.qty))) : 0;
         return sum + grossLine * discountRatio;
       }, 0);

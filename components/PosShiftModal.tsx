@@ -28,6 +28,7 @@ import { SmartNumberInput } from './SmartNumberInput';
 import { ShiftCashFlow } from './ShiftCashFlow';
 import { confirmAction } from './ui/ConfirmDialog';
 import { syncService } from '../lib/syncService';
+import { evaluateMathExpression } from '../lib/mathEvaluator';
 
 interface PosShiftModalProps {
   isOpen: boolean;
@@ -42,6 +43,12 @@ const QUICK_DIFFERENCE_REASONS = [
   'Counting error',
 ];
 const RECEIVE_ACCOUNT_KEY = 'mooco_shift_receive_account';
+
+/** Typed cash ("5000", "5,000", "5000+3260") as a number, or null when it is not a valid amount of 0 or more. */
+const parseCashAmount = (raw: string): number | null => {
+  const parsed = evaluateMathExpression(raw)?.result;
+  return typeof parsed === 'number' && Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
 
 export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose }) => {
   const {
@@ -125,8 +132,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
 
   const openingAmount = useMemo(() => {
     if (isEditingOpening && openingCashInput.trim() !== '') {
-      const parsed = Number(openingCashInput);
-      return isNaN(parsed) || parsed < 0 ? 0 : parsed;
+      return parseCashAmount(openingCashInput) ?? 0;
     }
     return defaultOpeningAmount;
   }, [isEditingOpening, openingCashInput, defaultOpeningAmount]);
@@ -307,10 +313,15 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     () => DENOMINATIONS.reduce((sum, d) => sum + d * Number(closingDenominations[d] || 0), 0),
     [closingDenominations]
   );
-  const effectiveCountedCash = closingDenomTotal > 0 ? closingDenomTotal : Number(countedCash || 0);
+  // A typo ("5000abc", "-500") used to become NaN, which matched every check and closed as "count matches".
+  const countedParsed = parseCashAmount(countedCash);
+  const countInvalid = closingDenomTotal <= 0 && countedCash.trim() !== '' && countedParsed === null;
+  const effectiveCountedCash = closingDenomTotal > 0 ? closingDenomTotal : (countedParsed ?? 0);
   const hasCount = countedCash.trim() !== '' || closingDenomTotal > 0;
+  const leaveParsed = parseCashAmount(leaveInDrawer);
+  const leaveInvalid = leaveTouched && leaveInDrawer.trim() !== '' && leaveParsed === null;
   const effectiveLeaveInDrawer = leaveTouched
-    ? Math.max(0, Number(leaveInDrawer || 0))
+    ? (leaveParsed ?? 0)
     : (hasCount ? Math.min(defaultLeave, effectiveCountedCash) : defaultLeave);
   const effectiveRemitToHead = Math.max(0, Math.round((effectiveCountedCash - effectiveLeaveInDrawer) * 100) / 100);
 
@@ -330,6 +341,8 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
   })();
   const closeBlocker = !hasCount
     ? 'Drawer ki cash gin kar likhein.'
+    : countInvalid || leaveInvalid
+      ? 'Raqam sahi likhein — sirf number (jaise 5000 ya 5000+3260).'
     : effectiveCountedCash < effectiveLeaveInDrawer
       ? 'Drawer mein rakhi raqam gini hui cash se zyada nahi ho sakti.'
       : hasVariance && !reasonOk
@@ -663,7 +676,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                     {/* Single 1-Click Action Button */}
                     <button
                       type="button"
-                      disabled={isStarting || !activeAccount || Boolean(drawerActiveShift) || (isEditingOpening && openingCashInput.trim() === '')}
+                      disabled={isStarting || !activeAccount || Boolean(drawerActiveShift) || (isEditingOpening && (openingCashInput.trim() === '' || parseCashAmount(openingCashInput) === null))}
                       onClick={handleStartShift}
                       className="w-full inline-flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl bg-lime-500 hover:bg-lime-400 active:scale-[0.99] text-slate-950 font-black text-sm shadow-lg shadow-lime-500/25 transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
                     >

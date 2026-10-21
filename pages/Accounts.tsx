@@ -122,9 +122,12 @@ const Accounts: React.FC = () => {
 
   // Helper to build hierarchy for manual accounts
   const buildManualNodes = (items: ManualAccount[], rootType: AccountType, specificParentId?: string): COANode[] => {
+    // Structural headings offered as parents in the Add form have no manual-node slot of their own;
+    // without this their children were never shown or totalled.
+    const structuralParentIds = ['1000', '1001', '1400', '2000', '2001', '2400', '3000', '4000', '5000'];
     const buildTree = (parentId: string | undefined): COANode[] => {
         return items
-            .filter(item => item.parentId === parentId || (!parentId && !item.parentId))
+            .filter(item => item.parentId === parentId || (!parentId && (!item.parentId || structuralParentIds.includes(item.parentId))))
             .filter(item => item.type === rootType)
             .map(item => {
                 const children = buildTree(item.id);
@@ -168,7 +171,9 @@ const Accounts: React.FC = () => {
         Object.entries(inv.variant_stocks).forEach(([varName, count]) => {
           const vCount = Number(count) || 0;
           if (vCount <= 0) return;
-          const variantDef = (itemDef?.variants || []).find((v: any) => v.name === varName);
+          // variant_stocks is keyed by variant id; matching on name always missed and valued a pack as one base unit.
+          const variantDef = (itemDef?.variants || []).find((v: any) => v.id === varName || v.variantId === varName || v.name === varName);
+          if (variantDef?.deduct_from_base === true) return;
           const factor = Number(variantDef?.quantity_in_base_unit || variantDef?.pack_size || 1);
           invSum += vCount * factor * cost;
         });
@@ -199,7 +204,9 @@ const Accounts: React.FC = () => {
       const refund = s.status === 'Partially Returned' ? (Number(s.refund_amount) || 0) : 0;
       return sum + Math.max(0, (Number(s.total) || 0) - refund);
     }, 0);
-    const supplyRevenue = dailySupplyEntries.filter(s => s.details?.status !== 'Cancelled' && s.details?.status !== 'Pending').reduce((sum, s) => sum + Number(s.total_amount || 0), 0);
+    // Loaded rows have `details` spread onto the row, so the status lives on the row itself.
+    const supplyStatus = (s: any) => s.status ?? s.details?.status;
+    const supplyRevenue = dailySupplyEntries.filter(s => supplyStatus(s) !== 'Cancelled' && supplyStatus(s) !== 'Pending').reduce((sum, s) => sum + Number(s.total_amount || 0), 0);
     
     const systemSalesNodes: COANode[] = [ 
        { id: 'inc_pos', code: '4101', name: 'POS / Counter Sales', type: 'Income', balance: posRevenue, icon: Store, isSystem: true, sourceModule: 'Sales', reportType: 'transaction', isActive: true }, 
@@ -414,13 +421,16 @@ const Accounts: React.FC = () => {
 
     setIsSubmittingJournal(true);
     try {
-      await addJournalEntry({
+      // The posting engine reads `account_id` on each line; `accountId` alone made every line "unknown".
+      const ok = await addJournalEntry({
         date: journalDate,
         referenceNo: journalRef,
         narration: journalNarration,
-        lines: journalLines,
+        lines: journalLines.map(line => ({ ...line, account_id: line.accountId })),
         totalAmount: totalDebit
       });
+      // Keep the form on failure so nothing typed is lost. addJournalEntry already toasts the reason on every failure.
+      if (!ok) return;
 
       showToast("Journal entry post ho gayi", "success");
       setJournalRef('');

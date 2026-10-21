@@ -245,8 +245,36 @@ export function rangeLabel(from: string, to: string) {
   return `Until ${formatLedgerDate(to)}`;
 }
 
+const pktDayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+const pktDayCache = new Map<string, string>();
+
+/**
+ * The Pakistan business day of a stored value. Dates are saved as UTC timestamps, so slicing the
+ * text moved anything recorded between 00:00 and 05:00 PKT (early morning milk, night payments)
+ * to the previous day in statements and ranges.
+ */
+export function ledgerDay(value?: string) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const cached = pktDayCache.get(text);
+  if (cached !== undefined) return cached;
+  const parsed = new Date(text);
+  let day = text.slice(0, 10);
+  if (Number.isFinite(parsed.getTime())) {
+    const parts = pktDayFormatter.formatToParts(parsed);
+    const part = (name: string) => parts.find(p => p.type === name)?.value;
+    day = `${part('year')}-${part('month')}-${part('day')}`;
+  }
+  if (pktDayCache.size > 20000) pktDayCache.clear();
+  pktDayCache.set(text, day);
+  return day;
+}
+
 function dayKey(value?: string) {
-  return (value || '').slice(0, 10);
+  return ledgerDay(value);
 }
 
 function inRange(date: string, from: string, to: string) {
@@ -416,9 +444,15 @@ export function buildSupplierStatement(input: {
   [...purchases, ...materials].forEach(row => {
     if (isVoid(row.status)) voidedIds.add(row.id);
   });
+  // Payments hidden together with a returned (voided) purchase, per purchase.
+  const voidPaid = new Map<string, number>();
   [...purchases, ...materials].filter(row => voidedIds.has(row.id)).forEach(row => {
-    matchPayments(row, transactions, allocated).forEach(tx => khataSkip.add(tx.id));
+    const matched = matchPayments(row, transactions, allocated);
+    matched.forEach(tx => khataSkip.add(tx.id));
+    voidPaid.set(row.id, matched.reduce((sum, tx) => sum + Number(tx.amount || 0), 0));
   });
+  // Cash refunds on returns of voided purchases, per purchase.
+  const voidRefunds = new Map<string, { refund: number; date: string; mode: string; note: string; accountName: string }>();
 
   const billCovered = coverBillPayments(materials.filter(row => !voidedIds.has(row.id)), transactions, allocated);
 
@@ -535,7 +569,11 @@ export function buildSupplierStatement(input: {
     if (isPaymentType(tx.type)) {
       // A waiver / discount settles the khata but no money left any account.
       const isWaiver = Boolean((tx.details as any)?.waiver) || /waiver|discount/i.test(mode);
-      if (!voided && amount > 0.5 && !isWaiver) {
+      // Only Payment / Advance rows can be deleted (delete_supplier_transaction_effects), never spot payments.
+      const deletable = (tx.type === 'Payment' || tx.type === 'Advance') && !isSpotPayment(tx);
+      // Money paid for a purchase that was later returned still left the account (the refund is its
+      // own cash-in line), so the cash register keeps it even though the khata hides it.
+      if (amount > 0.5 && !isWaiver) {
         pushCash({
           id: tx.id,
           date,
@@ -548,7 +586,7 @@ export function buildSupplierStatement(input: {
           note,
           subtype: tx.type === 'Advance' ? 'Advance' : 'Payment',
           accountName,
-          canDelete: !isSpotPayment(tx)
+          canDelete: deletable && !voided
         });
       }
       if (!voided && amount > 0.5) {
@@ -564,7 +602,7 @@ export function buildSupplierStatement(input: {
           mode,
           note,
           accountName,
-          canDelete: !isSpotPayment(tx)
+          canDelete: deletable
         });
       }
       return;
@@ -602,6 +640,17 @@ export function buildSupplierStatement(input: {
           accountName,
           canDelete: false
         });
+      } else if (voided && link && voidedIds.has(link)) {
+        // A fully returned purchase is hidden with its payments; what is left is the money the
+        // supplier refunded minus what was paid for it (paid but kept on khata = an advance).
+        const prev = voidRefunds.get(link);
+        voidRefunds.set(link, {
+          refund: (prev?.refund || 0) + refund,
+          date: prev && prev.date > date ? prev.date : date,
+          mode: prev?.mode || mode,
+          note: prev?.note || note,
+          accountName: prev?.accountName || accountName
+        });
       } else if (!voided && !link) {
         const drop = money(amount - refund);
         if (drop > 0.5) {
@@ -632,9 +681,28 @@ export function buildSupplierStatement(input: {
         kind: 'Charge',
         subtype: tx.type,
         note,
-        canDelete: true
+        // The server only deletes Payment / Advance rows; a delete button here always failed.
+        canDelete: false
       });
     }
+  });
+
+  voidRefunds.forEach((info, purchaseId) => {
+    const net = money(info.refund - (voidPaid.get(purchaseId) || 0));
+    if (Math.abs(net) <= 0.5) return;
+    khata.push({
+      id: `void_${purchaseId}`,
+      date: info.date,
+      description: net > 0 ? 'Cash refund on return' : 'Paid amount kept on khata after return',
+      credit: net > 0 ? net : 0,
+      debit: net < 0 ? Math.abs(net) : 0,
+      kind: net > 0 ? 'Refund' : 'Payment',
+      subtype: net > 0 ? 'Refund' : 'Return',
+      mode: info.mode,
+      note: info.note,
+      accountName: net > 0 ? info.accountName : undefined,
+      canDelete: false
+    });
   });
 
   const movement = khata.reduce((sum, row) => sum + row.credit - row.debit, 0);
@@ -859,13 +927,17 @@ export function buildDailySummary(rows: LedgerRow[]): DailySummaryRow[] {
     const matCredit = money(matRows.reduce((sum, r) => sum + r.credit, 0));
     const matDetails = matRows.map(r => r.description).join(', ');
 
-    const paymentDebit = money(payRows.reduce((sum, r) => sum + r.debit, 0));
+    // A cash refund (credit on a Refund row) nets off the day's payments; it used to be dropped,
+    // so the day's Cr/Dr did not explain the change in the running balance.
+    const netPaidToday = money(payRows.reduce((sum, r) => sum + r.debit - (r.kind === 'Refund' ? r.credit : 0), 0));
+    const paymentDebit = Math.max(0, netPaidToday);
+    const refundCredit = Math.max(0, -netPaidToday);
     const paymentDetails = payRows.map(r => `${r.description}${r.mode ? ` (${r.mode})` : ''}`).join(', ');
 
     const otherCredit = money(otherRows.reduce((sum, r) => sum + r.credit, 0));
     const otherDebit = money(otherRows.reduce((sum, r) => sum + r.debit, 0));
 
-    const dayCredit = money(milkCredit + matCredit + otherCredit);
+    const dayCredit = money(milkCredit + matCredit + otherCredit + refundCredit);
     const dayDebit = money(paymentDebit + otherDebit);
     const runningBalance = dayRows[dayRows.length - 1].runningBalance;
 
@@ -1518,9 +1590,18 @@ export function printSupplierLedger(input: PrintSupplierLedgerOptions) {
 
   let tableRows = '';
   let theadHtml = '';
+  // Footer totals add up the rows actually printed. With a type filter or search the period totals
+  // (which include every kind) did not match the table above them. Unfiltered, these equal
+  // statement.totalCredit / statement.netPaid.
+  const printedRefunds = statement.printRows.filter(row => row.kind === 'Refund').reduce((sum, row) => sum + row.credit, 0);
+  let footCredit = money(statement.printRows.filter(row => row.kind !== 'Refund').reduce((sum, row) => sum + row.credit, 0));
+  let footDebit = money(statement.printRows.reduce((sum, row) => sum + row.debit, 0) - printedRefunds);
 
   if (viewMode === 'daily_summary') {
     const summaries = buildDailySummary(statement.printRows);
+    // Daily view: the footer must equal the day columns, which net refunds per day.
+    footCredit = money(summaries.reduce((sum, row) => sum + row.dayCredit, 0));
+    footDebit = money(summaries.reduce((sum, row) => sum + row.dayDebit, 0));
     theadHtml = `
       <thead>
         <tr>
@@ -1707,8 +1788,8 @@ export function printSupplierLedger(input: PrintSupplierLedgerOptions) {
             <td colspan="${viewMode === 'daily_summary' ? 3 : 4}" style="text-align: right; text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em;">
               Grand Totals:
             </td>
-            <td class="col-num text-cr">${escapeHtml(formatMoney(statement.totalCredit))}</td>
-            <td class="col-num text-dr">${escapeHtml(formatMoney(statement.netPaid))}</td>
+            <td class="col-num text-cr">${escapeHtml(formatMoney(footCredit))}</td>
+            <td class="col-num text-dr">${footDebit < -0.5 ? '-' : ''}${escapeHtml(formatMoney(footDebit))}</td>
             <td class="col-num">${escapeHtml(balancePhrase(statement.closingBalance))}</td>
           </tr>
         </tfoot>
@@ -1757,7 +1838,7 @@ export function printPaymentRegister(input: {
       <td colspan="${input.showSupplier ? 5 : 4}" style="color: #0f172a; padding: 6px 8px;">
         ${escapeHtml(formatLedgerDate(day.date, true))}
       </td>
-      <td class="col-num" style="padding: 6px 8px;">${escapeHtml(formatMoney(day.net))}</td>
+      <td class="col-num" style="padding: 6px 8px;">${day.net < -0.5 ? "-" : ""}${escapeHtml(formatMoney(day.net))}</td>
     </tr>
     ${day.rows.map((row, idx) => `
       <tr>
@@ -1815,7 +1896,7 @@ export function printPaymentRegister(input: {
         </div>
         <div class="kpi-box kpi-balance">
           <div class="kpi-box-title">Net Cash Disbursed</div>
-          <div class="kpi-box-amount">${escapeHtml(formatMoney(input.net))}</div>
+          <div class="kpi-box-amount">${input.net < -0.5 ? "-" : ""}${escapeHtml(formatMoney(input.net))}</div>
           <div class="kpi-box-sub">Net Outflow</div>
         </div>
         <div class="kpi-box">

@@ -295,6 +295,8 @@ export const UsersTab: React.FC = () => {
           {filtered.length === 0 && <p className="p-6 text-center text-sm text-slate-400">Koi user nahi mila.</p>}
           {filtered.map(u => {
             const owner = u.role_id === SUPER_ADMIN;
+            // Disabling or deleting your own login locks this terminal out mid-session.
+            const isSelf = currentUser?.id === u.id;
             const extras = (u.permissions || []).length;
             return (
               <div key={u.id} className="flex items-center gap-3 p-3 sm:px-4">
@@ -315,13 +317,13 @@ export const UsersTab: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {!owner && (
+                  {!owner && !isSelf && (
                     <button type="button" onClick={() => updateUser(u.id, { is_active: u.is_active === false })} className={`${buttonClass.ghost} hidden sm:inline-flex`}>
                       {u.is_active === false ? 'Enable' : 'Disable'}
                     </button>
                   )}
                   <button type="button" aria-label={`${u.name} edit karein`} onClick={() => setUserModal({ user: u })} className={buttonClass.ghost}><Edit2 size={14} /></button>
-                  {!owner && <button type="button" aria-label={`${u.name} delete karein`} onClick={() => removeUser(u)} className={`${buttonClass.ghost} hover:text-rose-600`}><Trash2 size={14} /></button>}
+                  {!owner && !isSelf && <button type="button" aria-label={`${u.name} delete karein`} onClick={() => removeUser(u)} className={`${buttonClass.ghost} hover:text-rose-600`}><Trash2 size={14} /></button>}
                 </div>
               </div>
             );

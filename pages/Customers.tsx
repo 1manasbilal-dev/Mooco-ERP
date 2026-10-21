@@ -15,10 +15,20 @@ import { useToast } from '../context/ToastContext';
 import { salePaidAmount } from '../lib/moneyFlow';
 import { roundCurrency } from '../lib/db';
 import { getTodayLocalDate, formatCurrency } from '../lib/formatters';
+import { businessDate } from '../lib/dashboardAnalytics';
 import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { LoadMoreRow } from '../components/ui/LoadMoreRow';
 import { confirmAction } from '../components/ui/ConfirmDialog';
+
+// The shop's own day of an entry. Stored timestamps are UTC, so their "YYYY-MM-DD" prefix is the
+// previous day for anything posted between 00:00 and 05:00 PKT; a plain date is kept as written.
+// Pakistan time (businessDate), not the device clock, like the rest of the reporting.
+const localDay = (value?: string): string => {
+  if (!value) return '';
+  const trimmed = String(value).trim();
+  return businessDate(trimmed.replace(' ', 'T')) || trimmed.slice(0, 10);
+};
 
 interface AdditionalPhone {
   phone: string;
@@ -275,7 +285,7 @@ const Customers: React.FC = () => {
 
         entries.push({
           id: s.id,
-          date: s.date.includes('T') ? s.date.split('T')[0] : s.date.slice(0, 10),
+          date: localDay(s.date),
           timestamp: s.date,
           description: `POS Bill #${s.bill_number} (${itemNames || 'Dairy Items'})`,
           debit: s.total || 0,
@@ -330,7 +340,7 @@ const Customers: React.FC = () => {
 
         entries.push({
           id: tx.id,
-          date: tx.date ? (tx.date.includes('T') ? tx.date.split('T')[0] : tx.date.slice(0, 10)) : '',
+          date: localDay(tx.date),
           timestamp: (tx as any).created_at || tx.date,
           description,
           debit: isCharge ? tx.amount : 0,
@@ -341,7 +351,8 @@ const Customers: React.FC = () => {
           status: isReturn ? 'Returned' : undefined,
           isReturned: isReturn,
           // Returns are undone from Sales History; an order advance is refunded, not deleted.
-          canDelete: !isReturn && (tx as any).details?.source !== 'customer_order_advance' && !String(tx.id).startsWith('ctx_adv_'),
+          // Deleting an entry moves khata and account money back, so it needs the delete right.
+          canDelete: canDelete && !isReturn && (tx as any).details?.source !== 'customer_order_advance' && !String(tx.id).startsWith('ctx_adv_'),
           sale: matchedSale,
           rawTx: tx
         });
@@ -364,7 +375,11 @@ const Customers: React.FC = () => {
     });
 
     const returnedEntries = entries.filter(e => e.isReturned);
-    const returnedAmount = returnedEntries.reduce((sum, e) => sum + (e.debit || e.credit || 0), 0);
+    // Value returned, once per bill. The khata Return row of a bill is the same goods as the bill's
+    // refund, so adding both (or a returned bill's full debit) counted the return twice.
+    const returnedAmount = roundCurrency(entries
+      .filter(e => e.sale && !e.rawTx && (e.isReturned || e.isPartiallyReturned))
+      .reduce((sum, e) => sum + (Number(e.refund_amount || 0) || (e.isReturned ? e.debit : 0)), 0));
 
     // Filter by search & type, and reverse (latest first)
     const filtered = withRunningBalance
@@ -415,7 +430,7 @@ const Customers: React.FC = () => {
       returnedCount: returnedEntries.length,
       returnedAmount
     };
-  }, [activeCustomer, sales, customerTransactions, ledgerTypeFilter, ledgerSearchTerm]);
+  }, [activeCustomer, sales, customerTransactions, ledgerTypeFilter, ledgerSearchTerm, canDelete]);
 
   // Render only the layout for the current screen, and long lists a page at a time.
   const isLgScreen = useMediaQuery(BREAKPOINTS.lg);
@@ -474,10 +489,22 @@ const Customers: React.FC = () => {
     setDeleteConfig({ isOpen: false, id: null, name: '', isBulk: false });
   };
 
+  // A second click while the first is still posting would write the khata off (or forfeit the advance) twice.
+  const deleteBusyRef = useRef(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const handleSmartDelete = async (action: 'hard_delete' | 'deactivate' | 'write_off_bad_debt') => {
-    if (!deleteConfig.id) return;
+    if (!deleteConfig.id || deleteBusyRef.current) return;
     const targetId = deleteConfig.id;
-    const success = await safeDeleteCustomer(targetId, action);
+    deleteBusyRef.current = true;
+    setIsDeleting(true);
+    let success = false;
+    try {
+      success = await safeDeleteCustomer(targetId, action);
+    } finally {
+      deleteBusyRef.current = false;
+      setIsDeleting(false);
+    }
     if (success) {
       if (activeCustomerId === targetId) {
         setActiveCustomerId(null);
@@ -492,8 +519,16 @@ const Customers: React.FC = () => {
   };
 
   const handleBulkDeactivate = async () => {
-    for (const id of Array.from(selectedIds)) {
-      await safeDeleteCustomer(id, 'deactivate');
+    if (deleteBusyRef.current) return;
+    deleteBusyRef.current = true;
+    setIsDeleting(true);
+    try {
+      for (const id of Array.from(selectedIds)) {
+        await safeDeleteCustomer(id, 'deactivate');
+      }
+    } finally {
+      deleteBusyRef.current = false;
+      setIsDeleting(false);
     }
     setSelectedIds(new Set());
     setDeleteConfig({ isOpen: false, id: null, name: '', isBulk: false });
@@ -568,7 +603,11 @@ const Customers: React.FC = () => {
     setIsSubmitting(true);
     try {
       if (editingCustomer) {
-        const ok = await updateCustomer(editingCustomer.id, payload);
+        // Balance only changes through khata entries (payment / charge). Sending the form's copy would
+        // set the khata to the figure seen when the form opened, undoing any payment or sale posted
+        // since, with no ledger entry behind the change.
+        const { balance: _openingOnly, ...profile } = payload;
+        const ok = await updateCustomer(editingCustomer.id, profile);
         if (!ok) return;
         showToast('Customer ki maloomat update ho gayi', 'success');
       } else {
@@ -646,6 +685,7 @@ const Customers: React.FC = () => {
     }
   };
 
+  const deletingTxRef = useRef<Set<string>>(new Set());
   const handleDeleteTransaction = async (id: string) => {
      const tx: any = customerTransactions.find(t => t.id === id);
      const customer = tx ? customers.find(c => c.id === tx.customer_id) : undefined;
@@ -664,9 +704,15 @@ const Customers: React.FC = () => {
          'Ye wapas nahi hoga.',
        ],
      });
-     if (!ok) return;
-     const deleted = await deleteCustomerTransaction(id);
-     if (deleted) showToast("Entry delete ho gayi", "success");
+     if (!ok || deletingTxRef.current.has(id)) return;
+     // The row stays on screen until the server answers; a second confirm must not reverse it twice.
+     deletingTxRef.current.add(id);
+     try {
+       const deleted = await deleteCustomerTransaction(id);
+       if (deleted) showToast("Entry delete ho gayi", "success");
+     } finally {
+       deletingTxRef.current.delete(id);
+     }
   };
 
   const handleSendWhatsAppReminder = (customer: Customer) => {
@@ -835,7 +881,8 @@ const Customers: React.FC = () => {
             <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 900; margin-top: 4px; border-top: 1px solid #0f172a; padding-top: 4px;">
               <span>TOTAL:</span> <span>${formatCurrency(Number(sale.total || 0))}</span>
             </div>
-            ${sale.payment_mode === 'Credit' ? `<div style="display: flex; justify-content: space-between; color: #d97706; font-weight: bold;"><span>Charged to Khata:</span> <span>${formatCurrency(Number(sale.total || 0))}</span></div>` : ''}
+            ${sale.payment_mode === 'Credit' && salePaidAmount(sale) > 0 ? `<div style="display: flex; justify-content: space-between;"><span>Paid:</span> <span>${formatCurrency(salePaidAmount(sale))}</span></div>` : ''}
+            ${sale.payment_mode === 'Credit' ? `<div style="display: flex; justify-content: space-between; color: #d97706; font-weight: bold;"><span>Charged to Khata:</span> <span>${formatCurrency(roundCurrency(Math.max(0, Number(sale.total || 0) - salePaidAmount(sale))))}</span></div>` : ''}
             ${sale.return_reason ? `<div style="margin-top: 4px; padding: 4px; background: #fee2e2; color: #991b1b; font-size: 10px;"><strong>Reason:</strong> ${sale.return_reason}</div>` : ''}
           </div>
           <div class="divider"></div>
@@ -1544,17 +1591,18 @@ const Customers: React.FC = () => {
                         <span>Print</span>
                       </button>
 
+                      {canPay && (
                       <button
                         onClick={() => {
                           setSelectedPaymentCustomerId(activeCustomer.id);
                           setPaymentType('Payment');
                           const defaultAcc = getDefaultAccountForMode('Cash');
-                          setPaymentData({ 
-                            amount: activeCustomer.balance > 0 ? activeCustomer.balance.toString() : '', 
-                            date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }), 
-                            mode: 'Cash', 
-                            accountId: defaultAcc, 
-                            note: '' 
+                          setPaymentData({
+                            amount: activeCustomer.balance > 0 ? activeCustomer.balance.toString() : '',
+                            date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
+                            mode: 'Cash',
+                            accountId: defaultAcc,
+                            note: ''
                           });
                         }}
                         className="bg-lime-600 hover:bg-lime-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-lime-500/20 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
@@ -1562,6 +1610,7 @@ const Customers: React.FC = () => {
                         <Plus size={15} />
                         <span>Record Payment</span>
                       </button>
+                      )}
                     </div>
                   </div>
 
@@ -2250,12 +2299,14 @@ const Customers: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className={labelClass}>Initial Balance (Rs)</label>
-                  <input 
-                    type="number" 
+                  <label className={labelClass}>{editingCustomer ? 'Current Balance (Rs)' : 'Initial Balance (Rs)'}</label>
+                  <input
+                    type="number"
                     placeholder="0"
-                    className={inputClass}
+                    className={`${inputClass} disabled:bg-slate-100 disabled:text-slate-500`}
                     value={formData.balance}
+                    disabled={!!editingCustomer}
+                    title={editingCustomer ? 'Balance khaate ki entries (Payment / Charge) se badalta hai' : undefined}
                     onChange={e => setFormData({...formData, balance: parseFloat(e.target.value) || 0})}
                   />
                 </div>
@@ -2343,6 +2394,8 @@ const Customers: React.FC = () => {
             </div>
 
             <form onSubmit={handleRecordPaymentSubmit} className="p-6 space-y-4">
+              {/* A khata Charge needs customers:edit (the context refuses it otherwise): payment-only users get no toggle. */}
+              {canEdit && (
               <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
                 <button 
                   type="button" 
@@ -2359,6 +2412,7 @@ const Customers: React.FC = () => {
                   Charge (Debit Khata)
                 </button>
               </div>
+              )}
 
               <div>
                 <label className={labelClass}>Amount (Rs) *</label>
@@ -2539,6 +2593,7 @@ const Customers: React.FC = () => {
                   </button>
                   <button 
                     onClick={handleBulkDeactivate}
+                    disabled={isDeleting}
                     className="flex-1 py-2.5 bg-amber-600 text-white font-bold rounded-xl hover:bg-amber-700 text-xs shadow-md shadow-amber-200 cursor-pointer"
                   >
                     Make Inactive
@@ -2574,6 +2629,7 @@ const Customers: React.FC = () => {
                     <div className="space-y-2.5">
                       <button
                         onClick={() => handleSmartDelete('write_off_bad_debt')}
+                        disabled={isDeleting}
                         className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex flex-col items-center justify-center gap-0.5 shadow-md shadow-rose-200 cursor-pointer transition-all"
                       >
                         <span>Write Off as Bad Debt & Make Inactive</span>
@@ -2582,6 +2638,7 @@ const Customers: React.FC = () => {
 
                       <button
                         onClick={() => handleSmartDelete('deactivate')}
+                        disabled={isDeleting}
                         className="w-full py-2.5 px-4 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
                       >
                         <Archive size={14} />
@@ -2638,6 +2695,7 @@ const Customers: React.FC = () => {
                       </button>
                       <button
                         onClick={() => handleSmartDelete('deactivate')}
+                        disabled={isDeleting}
                         className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs shadow-md shadow-amber-200 cursor-pointer"
                       >
                         Make Inactive
@@ -2667,6 +2725,7 @@ const Customers: React.FC = () => {
                     </button>
                     <button
                       onClick={() => handleSmartDelete('hard_delete')}
+                      disabled={isDeleting}
                       className="flex-1 py-2.5 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 text-xs shadow-md shadow-red-200 cursor-pointer"
                     >
                       Delete Permanently

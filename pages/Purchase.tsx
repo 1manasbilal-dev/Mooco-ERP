@@ -326,6 +326,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const [refundAs, setRefundAs] = useState<'cash' | 'khata'>('cash');
   const [customReturnReason, setCustomReturnReason] = useState('');
   const [isProcessingReturn, setIsProcessingReturn] = useState(false);
+  const isReturningRef = useRef(false);
 
   // Configured shifts from Settings (Company Profile -> Daily Milk Collection Shifts)
   const configuredShifts = useMemo(() => {
@@ -691,7 +692,9 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
   const handleConfirmReturnPurchase = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!returnModalEntry) return;
+    // Enter pressed twice submits before the disabled button re-renders; a second return would
+    // refund and lower the khata again.
+    if (!returnModalEntry || isProcessingReturn || isReturningRef.current) return;
 
     const numQty = parseFloat(returnQty.toString());
     if (isNaN(numQty) || numQty <= 0) {
@@ -708,14 +711,19 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
       ? (customReturnReason.trim() || 'Other Return')
       : returnReason;
 
+    isReturningRef.current = true;
     setIsProcessingReturn(true);
     let success = false;
-    if (returnModalType === 'milk') {
-      success = await returnPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
-    } else {
-      success = await returnMaterialPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
+    try {
+      if (returnModalType === 'milk') {
+        success = await returnPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
+      } else {
+        success = await returnMaterialPurchase(returnModalEntry.id, numQty, finalReason, refundAs);
+      }
+    } finally {
+      isReturningRef.current = false;
+      setIsProcessingReturn(false);
     }
-    setIsProcessingReturn(false);
 
     if (success) {
       setReturnModalEntry(null);
@@ -958,7 +966,12 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
   const unpaidInvoiceBalance = Math.max(0, invoiceTotal - effectivePaid);
   const isCashPaidFull = invoiceTotal > 0 && unpaidInvoiceBalance <= 0.01;
 
-  const submitInvoice = async () => { 
+  const isSubmittingInvoiceRef = useRef(false);
+
+  const submitInvoice = async () => {
+    // The state flag only blocks after a re-render; a fast double click saved the bill twice
+    // (addBulkMaterialPurchase has no lock), doubling stock and the supplier khata.
+    if (isSubmittingInvoiceRef.current) return;
     if (invoiceItems.length === 0 || isSubmittingInvoice) {
       if (invoiceItems.length === 0) showToast("Please add products to the invoice first.", "warning");
       return; 
@@ -981,9 +994,10 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
 
     const submissionDate = normalizeTransactionTimestamp(invoiceDate);
 
+    isSubmittingInvoiceRef.current = true;
     setIsSubmittingInvoice(true);
     try {
-      const success = await addBulkMaterialPurchase({ 
+      const success = await addBulkMaterialPurchase({
         supplier_id: invoiceSupplier || null, 
         date: submissionDate, 
         items: invoiceItems, 
@@ -1010,6 +1024,7 @@ const Purchase: React.FC<{ view?: 'milk' | 'supplies' }> = ({ view = 'milk' }) =
     } catch (err: any) {
       showToast("Error saving purchase: " + (err?.message || "Failed"), "error");
     } finally {
+      isSubmittingInvoiceRef.current = false;
       setIsSubmittingInvoice(false);
     }
   };

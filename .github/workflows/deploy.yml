@@ -24,8 +24,18 @@ jobs:
       - name: 📦 Install Dependencies
         run: npm ci
 
+      # lib/supabase.ts throws at start-up without these (.env.local is not in git), so a build
+      # without them deploys a blank page. Set them as repository secrets.
       - name: 🏗️ Build Production Bundle
-        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY repository secrets are missing; refusing to deploy a build that cannot start."
+            exit 1
+          fi
+          npm run build
 
       - name: 🚀 Upload to Hostinger FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5

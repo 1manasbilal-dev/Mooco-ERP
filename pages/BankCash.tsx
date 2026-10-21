@@ -183,6 +183,8 @@ const BankCash: React.FC = () => {
     expenses.forEach(exp => {
       if ((exp as any).status === 'Cancelled' || (exp as any).status === 'Returned') return;
       if (exp.paymentStatus === 'Unpaid' || (exp as any).payment_status === 'Unpaid') return;
+      // Bad-debt write-offs are non-cash adjustments: no account moved.
+      if (exp.paymentMode === 'Adjustment' || (exp as any).details?.write_off || (exp as any).write_off) return;
       const actualPaid = exp.paymentStatus === 'Partial'
         ? Number(exp.paidAmount || 0)
         : Number(exp.paidAmount ?? (exp as any).paid_amount ?? exp.amount ?? 0);
@@ -607,30 +609,31 @@ const BankCash: React.FC = () => {
     if (!transactionData.accountId || !transactionData.amount || isSubmitting) return;
 
     const amount = parseFloat(transactionData.amount);
+    if (isNaN(amount) || amount <= 0) {
+      showToast("Amount 0 se zyada likhein", "warning");
+      return;
+    }
     let categoryName: string = transactionType;
 
-    // Handle Double Entry Logic if Contra Account selected
-    if (transactionData.relatedAccountId) {
-       const contraAccount = manualAccounts.find(a => a.id === transactionData.relatedAccountId);
-       if (contraAccount) {
-          categoryName = contraAccount.name;
-          
-          let impact = 0;
-          const isCreditNormal = ['Liability', 'Equity', 'Income'].includes(contraAccount.type);
-          
-          if (transactionType === 'Deposit') {
-             impact = isCreditNormal ? amount : -amount;
-          } else {
-             impact = isCreditNormal ? -amount : amount;
-          }
-
-          updateManualAccount(contraAccount.id, { balance: contraAccount.balance + impact });
+    // Double entry: the contra account moves only after the bank side is recorded, so a
+    // refused or failed entry (locked date, network) no longer leaves the contra changed alone.
+    const contraAccount = transactionData.relatedAccountId
+      ? manualAccounts.find(a => a.id === transactionData.relatedAccountId)
+      : undefined;
+    let contraImpact = 0;
+    if (contraAccount) {
+       categoryName = contraAccount.name;
+       const isCreditNormal = ['Liability', 'Equity', 'Income'].includes(contraAccount.type);
+       if (transactionType === 'Deposit') {
+          contraImpact = isCreditNormal ? amount : -amount;
+       } else {
+          contraImpact = isCreditNormal ? -amount : amount;
        }
     }
 
     setIsSubmitting(true);
     try {
-      await recordBankTransaction({
+      const ok = await recordBankTransaction({
          account_id: transactionData.accountId,
          amount: amount,
          date: transactionData.date,
@@ -639,6 +642,13 @@ const BankCash: React.FC = () => {
          category: categoryName,
          related_account_id: transactionData.relatedAccountId
       });
+      if (!ok) {
+        showToast(`${transactionType} record nahi hua — tareekh lock to nahi? Dobara koshish karein.`, "error");
+        return;
+      }
+      if (contraAccount && contraImpact !== 0) {
+        await updateManualAccount(contraAccount.id, { balance: (contraAccount.balance || 0) + contraImpact });
+      }
 
       showToast(`${transactionType} record ho gaya`, "success");
       setIsTransactionOpen(false);
@@ -1228,7 +1238,7 @@ const BankCash: React.FC = () => {
                            <tr key={tx.id} className="hover:bg-lime-50/20 transition-colors group">
                               <td className="px-4 py-3 whitespace-nowrap">
                                  <span className="font-semibold text-slate-800 font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded">
-                                    {new Date(tx.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                    {new Date(tx.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' })}
                                  </span>
                               </td>
                               <td className="px-4 py-3">
@@ -1288,7 +1298,7 @@ const BankCash: React.FC = () => {
                      >
                         <div className="flex items-center justify-between gap-2">
                            <span className="text-[10px] font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
-                              {new Date(tx.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              {new Date(tx.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' })}
                            </span>
                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
                               isTransfer 

@@ -92,6 +92,11 @@ export const optimizeImage = async (
 
           // Some older browsers might ignore webp and return png
           if (preferredFormat === 'image/webp' && !outputDataUrl.startsWith('data:image/webp')) {
+            // JPEG has no transparency: paint a white background under the image so clear areas don't turn black.
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalCompositeOperation = 'source-over';
             outputDataUrl = canvas.toDataURL('image/jpeg', quality);
             mime = 'image/jpeg';
           }

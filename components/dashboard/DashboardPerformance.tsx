@@ -31,7 +31,7 @@ export default function DashboardPerformance({ sales, purchases, expenses, range
   };
   const moveMetric = (direction: number) => changeMetric(METRICS[(METRICS.indexOf(metric) + direction + METRICS.length) % METRICS.length], direction);
   const id = useId().replace(/:/g, '');
-  const products = useMemo(() => [...new Set(sales.filter(s => s.status !== 'Returned').flatMap(s => s.items.map(i => i.name)))].sort(), [sales]);
+  const products = useMemo(() => [...new Set(sales.filter(s => s.status !== 'Returned').flatMap(s => (s.items || []).map(i => i.name)))].sort(), [sales]);
   const selectedProduct = products.includes(product) ? product : products[0] || '';
   const intraday = period.days === 1;
   const data = useMemo(() => buildPerformanceSeries({ sales, purchases, expenses, metric, selectedProduct, period, range }),

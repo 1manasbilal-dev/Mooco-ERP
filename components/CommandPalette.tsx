@@ -35,7 +35,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 }) => {
   const navigate = useNavigate();
   const { openTab } = useTabs();
-  const { customers, suppliers, items: dairyItems } = useDairy();
+  const { customers, suppliers, items: dairyItems, hasPermission } = useDairy();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -250,6 +250,24 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       }
     ];
 
+    // Only offer pages this operator may open (same rule as the sidebar).
+    const NAV_MODULE: Record<string, string> = {
+      'nav-dashboard': 'dashboard', 'nav-pos': 'pos', 'nav-purchase': 'purchase', 'nav-purchase-supplies': 'purchase',
+      'nav-purchase-details': 'purchase', 'nav-allocation': 'allocation', 'nav-production': 'production',
+      'nav-sales-history': 'sales_history', 'nav-customer-orders': 'customer_orders', 'nav-cash-control': 'cash_control',
+      'nav-customers': 'customers', 'nav-suppliers': 'suppliers', 'nav-expenses': 'expenses', 'nav-bank-cash': 'bank_cash',
+      'nav-accounts': 'accounts', 'nav-reports': 'reports', 'nav-items': 'items', 'nav-inventory': 'inventory',
+      'nav-settings': 'settings', 'act-new-sale': 'pos', 'act-milk-purchase': 'purchase', 'act-record-expense': 'expenses',
+    };
+    const canOpen = (id: string) => {
+      const module = NAV_MODULE[id];
+      if (!module) return true;
+      return hasPermission(module) || (module === 'settings' && hasPermission('user_management'));
+    };
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (!canOpen(items[i].id)) items.splice(i, 1);
+    }
+
     if (toggleTheme) {
       items.push({
         id: 'act-toggle-theme',
@@ -261,8 +279,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       });
     }
 
-    // Live Customers
-    (customers || []).forEach(c => {
+    // Live Customers (names, phones and balances only for operators who may open the khata)
+    (hasPermission('customers') ? customers || [] : []).forEach(c => {
       if (!c) return;
       const bal = c.balance || 0;
       items.push({
@@ -282,7 +300,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     });
 
     // Live Suppliers
-    (suppliers || []).forEach(s => {
+    (hasPermission('suppliers') ? suppliers || [] : []).forEach(s => {
       if (!s) return;
       const bal = (s as any).pending_balance ?? s.total_due ?? s.balance ?? 0;
       items.push({
@@ -302,7 +320,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     });
 
     // Live Products
-    const catalog = dairyItems || [];
+    const catalog = hasPermission('pos') ? dairyItems || [] : [];
     catalog.filter(p => p && p.isActive !== false && Array.isArray(p.item_type) && p.item_type.includes('Sale product')).forEach(p => {
       items.push({
         id: `prod-${p.id}`,
@@ -321,7 +339,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     });
 
     return items;
-  }, [isOpen, customers, suppliers, dairyItems, openTab, onClose, toggleTheme, themeMode]);
+  }, [isOpen, customers, suppliers, dairyItems, openTab, onClose, toggleTheme, themeMode, hasPermission]);
 
   // Filter items based on query
   const filteredItems = useMemo(() => {

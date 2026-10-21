@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { getOperatorSession } from './operatorAuth';
 import { saleItemSnapshot } from './saleSnapshot';
 import { db, LocalOrder, LocalCustomer, LocalOutboxItem, OutboxActionType, generateUUID, SyncStatus, roundCurrency, roundQuantity } from './db';
-import { loadRead } from './loadRequest';
+import { loadRead, withDeadline } from './loadRequest';
 import { isPermanentSyncError, readyToRetry } from './syncErrors';
 
 export interface SyncState {
@@ -27,6 +27,7 @@ class SyncService {
   private lastError: string | null = null;
   private listeners: Set<SyncListener> = new Set();
   private syncTimer: any = null;
+  private syncInFlight: boolean = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -196,31 +197,40 @@ class SyncService {
   }
 
   public async syncPending(): Promise<{ success: boolean; syncedOrders: number; syncedCustomers: number; syncedOutbox: number }> {
-    if (this.isSyncing || !this.isOnline) {
+    // syncInFlight is set before the first await, so two calls in the same tab (online event,
+    // timer, a new sale) can never both reach executeSyncRoutine — Web Locks is not there to
+    // stop them on plain-http LAN addresses or older browsers.
+    if (this.isSyncing || this.syncInFlight || !this.isOnline) {
       await this.updateCounts();
       return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
     }
+    this.syncInFlight = true;
 
-    // Without an operator session the database refuses every write; leave the queue untouched
-    // (no retry counts, no dead-letters) until someone signs in.
-    if (!(await getOperatorSession())) {
-      await this.updateCounts();
-      return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
+    try {
+      // Without an operator session the database refuses every write; leave the queue untouched
+      // (no retry counts, no dead-letters) until someone signs in.
+      const session = await withDeadline(() => getOperatorSession(), SYNC_TIMEOUT_MS).catch(() => null);
+      if (!session) {
+        await this.updateCounts();
+        return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
+      }
+
+      // Use Web Locks API if supported to prevent multi-tab concurrency
+      if (typeof navigator !== 'undefined' && 'locks' in navigator) {
+        return await (navigator as any).locks.request('mooco_pos_sync_lock', { ifAvailable: true }, async (lock: any) => {
+          if (!lock) {
+            console.log('[SyncService] Another tab is currently synchronizing. Skipping concurrent sync.');
+            return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
+          }
+          return await this.executeSyncRoutine();
+        });
+      }
+
+      // Fallback if Web Locks not supported
+      return await this.executeSyncRoutine();
+    } finally {
+      this.syncInFlight = false;
     }
-
-    // Use Web Locks API if supported to prevent multi-tab concurrency
-    if (typeof navigator !== 'undefined' && 'locks' in navigator) {
-      return await (navigator as any).locks.request('mooco_pos_sync_lock', { ifAvailable: true }, async (lock: any) => {
-        if (!lock) {
-          console.log('[SyncService] Another tab is currently synchronizing. Skipping concurrent sync.');
-          return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
-        }
-        return await this.executeSyncRoutine();
-      });
-    }
-
-    // Fallback if Web Locks not supported
-    return await this.executeSyncRoutine();
   }
 
   // Core Sync Routine with Idempotency & Dead-Letter Queue
@@ -252,8 +262,14 @@ class SyncService {
             data: cust.data || {}
           };
 
-          // Upsert Customer (Idempotent by PK)
-          const { error: custError } = await loadRead(supabase.from('customers').upsert([custPayload]), SYNC_TIMEOUT_MS);
+          // Insert Customer (Idempotent by PK). A customer is only queued when it is created, so a
+          // row already on the server came from an earlier attempt of this same sync. It is never
+          // overwritten: by now synced bills/receipts may have moved its balance, and re-sending the
+          // opening balance would wipe those khata entries out of the balance.
+          const { error: custError } = await loadRead(
+            supabase.from('customers').upsert([custPayload], { onConflict: 'id', ignoreDuplicates: true }),
+            SYNC_TIMEOUT_MS
+          );
           if (custError) {
             throw custError;
           }
@@ -282,7 +298,9 @@ class SyncService {
                   note: cust.balance > 0 ? 'Opening Balance (Initial Receivable)' : 'Opening Balance (Initial Advance/Credit)'
                 }
               }]), SYNC_TIMEOUT_MS);
-              if (opTxError) throw opTxError;
+              // 23505: the same ctx_op_ row landed in between (addCustomer also inserts it
+              // directly), so the ledger row is in place — not a reason to dead-letter the customer.
+              if (opTxError && String(opTxError.code) !== '23505') throw opTxError;
             }
           }
 
@@ -376,7 +394,10 @@ class SyncService {
           // were recorded before receipt_account_id existed.
           let receiptAccountId: string | null = order.receipt_account_id || null;
           if (!receiptAccountId && actualPaid > 0) {
-            const { data: accounts } = await loadRead(supabase.from('financial_accounts').select('id, type'), SYNC_TIMEOUT_MS);
+            const { data: accounts, error: accountsError } = await loadRead(supabase.from('financial_accounts').select('id, type'), SYNC_TIMEOUT_MS);
+            // Without an account the RPC skips the receipt, and the order would still be marked
+            // synced — the cash would never reach any account. Retry instead.
+            if (accountsError) throw accountsError;
             if (accounts && accounts.length > 0) {
               const targetAcc = order.payment_mode === 'Online'
                 ? accounts.find((a: any) => a.type === 'Bank' || a.type === 'Wallet') || accounts[0]

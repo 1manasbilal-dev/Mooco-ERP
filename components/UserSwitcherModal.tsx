@@ -30,6 +30,7 @@ const UserSwitcherModal: React.FC = () => {
 
   const usernameInputRef = useRef<HTMLInputElement>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
+  const modalCardRef = useRef<HTMLDivElement>(null);
 
   const activeUsers = users.filter(u => u.is_active !== false);
   const roleName = (user: AppUser) => roles.find(r => r.id === user.role_id)?.name || 'Staff';
@@ -131,11 +132,27 @@ const UserSwitcherModal: React.FC = () => {
     }
   };
 
+  // While the switcher / lock screen is up, the workspace behind it cannot be focused or
+  // clicked (Tab + Enter would otherwise reach POS buttons on a locked terminal).
+  useEffect(() => {
+    if (!isUserSwitcherOpen) return;
+    const app = document.querySelector<HTMLElement>('.mooco-app');
+    if (!app) return;
+    const wasInert = app.inert;
+    app.inert = true;
+    return () => { app.inert = wasInert; };
+  }, [isUserSwitcherOpen]);
+
   // Physical keyboard support for counter terminals: digits type the PIN,
   // Backspace deletes, Enter submits, Escape goes back to the user list.
+  // Runs in the capture phase so the page behind the lock screen never sees the keys
+  // (POS F9 checkout, F8 hold, Ctrl+K palette would otherwise still work while locked).
   useEffect(() => {
-    if (!isUserSwitcherOpen || mode !== 'pin' || !selectedUser) return;
+    if (!isUserSwitcherOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as Node | null;
+      if (!(target && modalCardRef.current?.contains(target))) event.stopPropagation();
+      if (mode !== 'pin' || !selectedUser) return;
       if (event.key === 'Enter') {
         event.preventDefault();
         if (!isAuthenticating && pin.length >= 4) verifySelectedUserPin(selectedUser, pin);
@@ -150,8 +167,8 @@ const UserSwitcherModal: React.FC = () => {
         setMode('select'); setSelectedUser(null); setPin(''); setErrorMsg('');
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isUserSwitcherOpen, mode, selectedUser, pin, isAuthenticating]);
 
   if (!isUserSwitcherOpen) return null;
@@ -179,6 +196,9 @@ const UserSwitcherModal: React.FC = () => {
 
         {/* Modal Card */}
         <MotionDiv
+          ref={modalCardRef}
+          role="dialog"
+          aria-modal="true"
           initial={{ scale: 0.95, opacity: 0, y: 15 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.95, opacity: 0, y: 15 }}

@@ -158,7 +158,7 @@ const DenominationDialog: React.FC<{
                     min="0"
                     step="1"
                     value={value[denomination] || ''}
-                    onChange={event => onChange({ ...value, [denomination]: Math.max(0, Number(event.target.value || 0)) })}
+                    onChange={event => onChange({ ...value, [denomination]: Math.max(0, Math.floor(Number(event.target.value || 0)) || 0) })}
                     className="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 text-sm font-bold outline-none focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 text-slate-900 dark:text-white"
                     placeholder="0"
                   />
@@ -206,7 +206,7 @@ const CashControl: React.FC = () => {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const {
-    currentUser, currentRole, sales, purchases, materialPurchases, supplierTransactions, customerTransactions, expenses,
+    currentUser, currentRole, sales, purchases, materialPurchases, supplierTransactions, customerTransactions, expenses, expenseVendorTransactions,
     accounts, dailySupplyEntries, items, inventory,
     activeShiftSession, shiftSessions, businessDays, cashDrawers, cashHandovers,
     cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
@@ -828,7 +828,7 @@ const CashControl: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
-                  {shift.date} · {shift.drawer_name || shift.drawer_id || 'Drawer'} · opening {money(shift.opening_counted || shift.opening_float)}
+                  {shift.date} · {shift.drawer_name || shift.drawer_id || 'Drawer'} · opening {money(shift.opening_counted ?? shift.opening_float)}
                 </p>
                 {shift.closed_at && (
                   <p className="text-xs text-slate-500 mt-1">
@@ -864,14 +864,16 @@ const CashControl: React.FC = () => {
                       />
                       <div className="flex gap-2">
                         <button
+                          disabled={busy}
                           onClick={() => run(() => resolveCashVariance(variance.id, 'Approved', varianceNotes[variance.id] || 'Approved by head'))}
-                          className="flex-1 sm:flex-none rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 cursor-pointer"
+                          className="flex-1 sm:flex-none rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50"
                         >
                           Approve
                         </button>
                         <button
+                          disabled={busy}
                           onClick={() => run(() => resolveCashVariance(variance.id, 'Rejected', varianceNotes[variance.id] || 'Rejected by head'))}
-                          className="flex-1 sm:flex-none rounded-lg border border-rose-200 px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
+                          className="flex-1 sm:flex-none rounded-lg border border-rose-200 px-3 py-2 text-xs font-black text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer disabled:opacity-50"
                         >
                           Reject
                         </button>
@@ -1038,11 +1040,18 @@ const CashControl: React.FC = () => {
                   {addCashSourceId && (() => {
                     const source = accounts.find(a => a.id === addCashSourceId);
                     const amount = denominationTotalOf(addCashDenoms) > 0 ? denominationTotalOf(addCashDenoms) : Number(addCashAmount || 0);
+                    // A pending handover on this drawer is replaced, and its cash is already in the drawer,
+                    // so only the difference moves from the source (same rule as addDrawerOpeningCash).
+                    const replacedSum = roundCurrency(cashHandovers
+                      .filter(h => h.drawer_id === addCashDrawerId && h.status === 'Pending')
+                      .reduce((sum, h) => sum + Number(h.declared_amount || 0), 0));
+                    const netMove = roundCurrency(Math.max(0, amount - replacedSum));
                     return (
-                      <p className={`text-[11px] font-bold mt-1.5 ${source && Number(source.balance || 0) < amount ? 'text-rose-500' : 'text-slate-500 dark:text-slate-400'}`}>
-                        {source && Number(source.balance || 0) < amount
-                          ? `Source mein sirf ${formatCurrency(Number(source.balance || 0))} hai — ${formatCurrency(amount)} transfer nahi ho sakti.`
-                          : `${source?.name} -${formatCurrency(amount)} → Drawer +${formatCurrency(amount)} (dono taraf ledger entry).`}
+                      <p className={`text-[11px] font-bold mt-1.5 ${source && Number(source.balance || 0) < netMove ? 'text-rose-500' : 'text-slate-500 dark:text-slate-400'}`}>
+                        {source && Number(source.balance || 0) < netMove
+                          ? `Source mein sirf ${formatCurrency(Number(source.balance || 0))} hai — ${formatCurrency(netMove)} transfer nahi ho sakti.`
+                          : `${source?.name} -${formatCurrency(netMove)} → Drawer +${formatCurrency(netMove)} (dono taraf ledger entry).`}
+                        {replacedSum > 0 && ` Drawer mein pehle se ${formatCurrency(replacedSum)} pending hai — nayi opening ${formatCurrency(amount)} us ki jagah legi.`}
                       </p>
                     );
                   })()}
@@ -1209,6 +1218,14 @@ const CashControl: React.FC = () => {
         const daySupplierCashTx = (supplierTransactions || []).filter(stx => stx.type === 'Payment' && String((stx as any).mode || '').toLowerCase().includes('cash') && Number(stx.amount || 0) > 0 && onBusinessDay(stx.date) && !isSpotSupplierPayment(stx) && !(stx as any).details?.waiver);
         const supplierCashTxTotal = roundCurrency(daySupplierCashTx.reduce((sum, stx) => sum + Number(stx.amount || 0), 0));
 
+        // Expense vendor / staff khata settled in cash (the shift totals count these too; leaving them out
+        // overstated expected cash and showed a false shortage).
+        const dayVendorCashTx = (expenseVendorTransactions || []).filter(evt => String(evt.payment_mode || '').toLowerCase().includes('cash') && Number(evt.amount || 0) > 0 && onBusinessDay(evt.date));
+        const dayVendorPayments = dayVendorCashTx.filter(evt => evt.type === 'Payment');
+        const vendorPaymentsTotal = roundCurrency(dayVendorPayments.reduce((sum, evt) => sum + Number(evt.amount || 0), 0));
+        const dayVendorRefunds = dayVendorCashTx.filter(evt => evt.type === 'Refund');
+        const vendorRefundsTotal = roundCurrency(dayVendorRefunds.reduce((sum, evt) => sum + Number(evt.amount || 0), 0));
+
         const dayPriorRefunds = shiftCashEvents.filter(ev => {
           if (ev.business_day_id !== day.id || ev.direction !== 'Out' || !String(ev.event_type || '').toLowerCase().includes('refund')) return false;
           const source = String(ev.source_id || '');
@@ -1217,8 +1234,8 @@ const CashControl: React.FC = () => {
         const refundsTotal = roundCurrency(dayPriorRefunds.reduce((sum, ev) => sum + Number(ev.amount || 0), 0));
         const dayRemits = cashRemittances.filter(r => r.business_day_id === day.id && r.status === 'Accepted');
         const remittedTotal = roundCurrency(dayRemits.reduce((sum, r) => sum + Number(r.counted_amount ?? r.declared_amount ?? 0), 0));
-        const cashInTotal = roundCurrency(cashSalesTotal + ledgerTotal + deliveryTotal);
-        const cashOutTotal = roundCurrency(expensesTotal + purchasesTotal + materialPurchasesTotal + supplierCashTxTotal + refundsTotal);
+        const cashInTotal = roundCurrency(cashSalesTotal + ledgerTotal + deliveryTotal + vendorRefundsTotal);
+        const cashOutTotal = roundCurrency(expensesTotal + purchasesTotal + materialPurchasesTotal + supplierCashTxTotal + vendorPaymentsTotal + refundsTotal);
         const openingCashNum = roundCurrency(Number(dayCashOpening || 0));
         const expectedCash = roundCurrency(openingCashNum + cashInTotal - cashOutTotal - remittedTotal);
         const dayCountedRaw = dayCashCounted.trim();
@@ -1226,8 +1243,8 @@ const CashControl: React.FC = () => {
         const dayCashVariance = dayCountedNum !== null ? roundCurrency(dayCountedNum - expectedCash) : null;
         const buildCashClose = (counted: number, variance: number, source: 'physical' | 'expected') => ({
           opening: openingCashNum,
-          cash_in: { pos_sales: cashSalesTotal, ledger_collections: ledgerTotal, delivery_collections: deliveryTotal, total: cashInTotal, bill_count: dayCashSales.length, receipt_count: dayLedger.length, delivery_count: dayDelivery.length },
-          cash_out: { expenses: expensesTotal, purchases: purchasesTotal, material_purchases: materialPurchasesTotal, supplier_payments: supplierCashTxTotal, refunds: refundsTotal, total: cashOutTotal },
+          cash_in: { pos_sales: cashSalesTotal, ledger_collections: ledgerTotal, delivery_collections: deliveryTotal, vendor_refunds: vendorRefundsTotal, total: cashInTotal, bill_count: dayCashSales.length, receipt_count: dayLedger.length, delivery_count: dayDelivery.length },
+          cash_out: { expenses: expensesTotal, purchases: purchasesTotal, material_purchases: materialPurchasesTotal, supplier_payments: supplierCashTxTotal, vendor_payments: vendorPaymentsTotal, refunds: refundsTotal, total: cashOutTotal },
           remitted_to_head: remittedTotal,
           expected: expectedCash,
           counted,
@@ -1311,7 +1328,8 @@ const CashControl: React.FC = () => {
                         {[
                           { label: 'POS Cash Sales', detail: `${dayCashSales.length} bills`, amount: cashSalesTotal },
                           { label: 'Customer Khata Cash', detail: `${dayLedger.length} payments`, amount: ledgerTotal },
-                          { label: 'Daily Delivery Cash', detail: `${dayDelivery.length} entries`, amount: deliveryTotal }
+                          { label: 'Daily Delivery Cash', detail: `${dayDelivery.length} entries`, amount: deliveryTotal },
+                          ...(vendorRefundsTotal > 0 ? [{ label: 'Vendor / Staff Refunds', detail: `${dayVendorRefunds.length} refunds`, amount: vendorRefundsTotal }] : [])
                         ].map(row => (
                           <div key={row.label} className="flex items-center justify-between gap-3 px-4 py-2 text-xs">
                             <span className="font-bold text-slate-700 dark:text-slate-200 truncate">{row.label} <span className="text-slate-400 font-normal">· {row.detail}</span></span>
@@ -1332,6 +1350,7 @@ const CashControl: React.FC = () => {
                           { label: 'Milk Cash Purchases', detail: `${dayPurchases.length} purchases`, amount: purchasesTotal },
                           { label: 'Material Cash Purchases', detail: `${dayMaterialPurchases.length} purchases`, amount: materialPurchasesTotal },
                           { label: 'Supplier Cash Payments', detail: `${daySupplierCashTx.length} payments`, amount: supplierCashTxTotal },
+                          { label: 'Vendor / Staff Payments', detail: `${dayVendorPayments.length} payments`, amount: vendorPaymentsTotal },
                           { label: 'Cash Refunds', detail: `${dayPriorRefunds.length} refunds`, amount: refundsTotal }
                         ].filter(row => row.amount > 0 || row.label === 'Cash Expenses' || row.label === 'Milk Cash Purchases').map(row => (
                           <div key={row.label} className="flex items-center justify-between gap-3 px-4 py-2 text-xs">
@@ -1340,7 +1359,7 @@ const CashControl: React.FC = () => {
                           </div>
                         ))}
                       </div>
-                      {(dayExpenses.length > 0 || dayPurchases.length > 0 || dayMaterialPurchases.length > 0 || daySupplierCashTx.length > 0 || dayPriorRefunds.length > 0) && (
+                      {(dayExpenses.length > 0 || dayPurchases.length > 0 || dayMaterialPurchases.length > 0 || daySupplierCashTx.length > 0 || dayVendorPayments.length > 0 || dayPriorRefunds.length > 0) && (
                         <div className="max-h-36 overflow-y-auto bg-slate-50/70 dark:bg-slate-900/40 px-4 py-2 space-y-1">
                           {dayExpenses.map(expense => (
                             <p key={expense.id} className="text-[11px] text-slate-500 dark:text-slate-400 flex justify-between gap-3">
@@ -1351,13 +1370,19 @@ const CashControl: React.FC = () => {
                           {dayPurchases.map(purchase => (
                             <p key={purchase.id} className="text-[11px] text-slate-500 dark:text-slate-400 flex justify-between gap-3">
                               <span className="truncate">Milk · {(purchase as any).supplier_name || 'Supplier'}</span>
-                              <span className="font-bold shrink-0 text-rose-600 dark:text-rose-400">-{money(purchase.paid_amount)}</span>
+                              <span className="font-bold shrink-0 text-rose-600 dark:text-rose-400">-{money(purchaseCashPaid(purchase))}</span>
                             </p>
                           ))}
                           {dayMaterialPurchases.map(mp => (
                             <p key={mp.id} className="text-[11px] text-slate-500 dark:text-slate-400 flex justify-between gap-3">
                               <span className="truncate">Material · {(mp as any).supplier_name || 'Supplier'} ({(mp as any).item_name || 'Supplies'})</span>
-                              <span className="font-bold shrink-0 text-rose-600 dark:text-rose-400">-{money((mp as any).paid_amount || mp.total_amount)}</span>
+                              <span className="font-bold shrink-0 text-rose-600 dark:text-rose-400">-{money(materialCashPaid(mp))}</span>
+                            </p>
+                          ))}
+                          {dayVendorPayments.map(evt => (
+                            <p key={evt.id} className="text-[11px] text-slate-500 dark:text-slate-400 flex justify-between gap-3">
+                              <span className="truncate">Vendor / Staff · {evt.vendor_name || evt.note || 'Vendor'}</span>
+                              <span className="font-bold shrink-0 text-rose-600 dark:text-rose-400">-{money(evt.amount)}</span>
                             </p>
                           ))}
                           {daySupplierCashTx.map(stx => (

@@ -39,6 +39,8 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
       const evalRes = evaluateMathExpression(internalText);
       if (evalRes?.isExpression) return;
       if (internalText === stringVal) return;
+      // Keep "1,000" on screen while the parent holds 1000.
+      if (evalRes && stringVal !== '' && evalRes.result === Number(stringVal)) return;
       if (Number(internalText) === Number(stringVal) && !isNaN(Number(internalText)) && !isNaN(Number(stringVal))) {
         return;
       }
@@ -70,7 +72,8 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
 
     const evalRes = evaluateMathExpression(val);
     if (!evalRes?.isExpression) {
-      onChange(val);
+      // "1,000" goes up as 1000: parents read it with parseFloat (gives 1) or Number (gives NaN).
+      onChange(evalRes && /[,\s]/.test(val) ? String(evalRes.result) : val);
     }
 
     // Preserve cursor position across parent re-renders

@@ -26,6 +26,8 @@ interface PosPaymentPanelProps {
   isSubmitting: boolean;
   activeShiftSession: any;
   handleCheckout: () => void;
+  /** What the customer still owes on this bill (total less a booking advance). Defaults to the grand total. */
+  amountDue?: number;
   lockDiscount?: boolean;
   /** Opens the shift dialog; the pay button turns into "Start shift" while no shift is open. */
   onStartShift?: () => void;
@@ -55,10 +57,13 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   isSubmitting,
   activeShiftSession,
   handleCheckout,
+  amountDue,
   lockDiscount = false,
   onStartShift,
   isDayLocked = false
 }) => {
+  // "Full paid" fills what is still owed, so a booking advance is never handed back as change.
+  const payableNow = amountDue ?? grandTotal;
   const noShift = !activeShiftSession || activeShiftSession.status !== 'Active';
   // A walk-in has no khata to carry the unpaid part, so a short cash payment cannot be completed.
   const walkInShort = !selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal
@@ -151,7 +156,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                 <span className="text-xs font-mono text-slate-400">Rs</span>
                 <SmartNumberInput
                   step="any"
-                  placeholder={paymentMode === 'Credit' ? '0' : grandTotal.toString()}
+                  placeholder={paymentMode === 'Credit' ? '0' : payableNow.toString()}
                   aria-label="Customer payment received" value={customerPaidAmount}
                   onChange={setCustomerPaidAmount}
                   className="w-28 px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-black text-slate-900 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
@@ -193,11 +198,11 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                   type="button"
                   onClick={() => {
                     if (paymentMode === 'Credit') setPaymentMode('Cash');
-                    setCustomerPaidAmount(grandTotal.toString());
+                    setCustomerPaidAmount(payableNow.toString());
                   }}
                   className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer"
                 >
-                  Full (Rs {grandTotal})
+                  Full (Rs {payableNow})
                 </button>
               </div>
             </div>
@@ -254,7 +259,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                 <span className="text-xs font-bold text-slate-400 font-mono">Rs</span>
                 <SmartNumberInput 
                   step="any"
-                  placeholder={paymentMode === 'Credit' ? '0' : grandTotal.toString()}
+                  placeholder={paymentMode === 'Credit' ? '0' : payableNow.toString()}
                   className="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-black text-slate-900 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
                   aria-label="Customer payment received" value={customerPaidAmount}
                   onChange={setCustomerPaidAmount}
@@ -295,7 +300,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
                   type="button"
                   onClick={() => {
                     if (paymentMode === 'Credit') setPaymentMode('Cash');
-                    setCustomerPaidAmount(grandTotal.toString());
+                    setCustomerPaidAmount(payableNow.toString());
                   }}
                   className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 transition-colors cursor-pointer"
                   title="Full payment received"

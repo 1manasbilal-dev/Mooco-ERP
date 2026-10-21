@@ -85,7 +85,12 @@ export function exportXlsx(input: ExportInput) {
 
 /* ------------------------------------------------------------------- csv */
 
-const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+/** Text that a spreadsheet would run as a formula (=, +, -, @) is prefixed with ' so it stays text. Numbers pass through. */
+const csvSafe = (value: unknown) => {
+  const text = String(value ?? '');
+  return typeof value === 'string' && /^[=+\-@\t\r]/.test(text) && !/^[+-]?\d[\d,.]*$/.test(text) ? `'${text}` : text;
+};
+const csvCell = (value: unknown) => `"${csvSafe(value).replace(/"/g, '""')}"`;
 
 export function exportCsv(input: ExportInput) {
   const lines: string[] = [csvCell(input.report.title), csvCell(input.rangeLabel), ''];

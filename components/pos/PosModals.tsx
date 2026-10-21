@@ -204,7 +204,8 @@ export const PosReceiptModal: React.FC<PosReceiptModalProps> = ({
                   <tr key={idx} className="border-b border-slate-100 last:border-0">
                     <td className="py-1 pr-1 truncate max-w-[120px]">{item.name} {item.variantName ? `(${item.variantName})` : ''}</td>
                     <td className="py-1 text-center">{formatQty(item.qty)}</td>
-                    <td className="py-1 text-right">{formatCurrency(item.price * item.qty, '')}</td>
+                    {/* A "Rs 100 of milk" line bills its typed amount, not rate x rounded qty, so lines add up to the subtotal. */}
+                    <td className="py-1 text-right">{formatCurrency(item.customTotal !== undefined && item.customTotal !== null && Number.isFinite(Number(item.customTotal)) ? Number(item.customTotal) : (Number(item.total) || (Number(item.price) || 0) * (Number(item.qty) || 0)), '')}</td>
                   </tr>
                 ))}
               </tbody>

@@ -27,7 +27,7 @@ export function evaluateMathExpression(input: string | number | null | undefined
   const hasOperator = /[+\-*/]/.test(expr);
   if (!hasOperator) {
     const num = Number(expr);
-    return isNaN(num) ? null : { result: num, isExpression: false };
+    return !Number.isFinite(num) ? null : { result: num, isExpression: false };
   }
 
   // Check for allowed characters only (0-9, ., +, -, *, /, (, ))
@@ -52,7 +52,8 @@ export function evaluateMathExpression(input: string | number | null | undefined
           i++;
         }
         if (numStr === '-' || numStr === '+') return null; // Trailing operator
-        const n = parseFloat(numStr);
+        // Number(), not parseFloat(): "1.2.3" is a typo, not 1.2.
+        const n = Number(numStr);
         if (isNaN(n)) return null;
         tokens.push(n);
         continue;
@@ -65,7 +66,7 @@ export function evaluateMathExpression(input: string | number | null | undefined
         numStr += expr[i];
         i++;
       }
-      const n = parseFloat(numStr);
+      const n = Number(numStr);
       if (isNaN(n)) return null;
       tokens.push(n);
     } else {

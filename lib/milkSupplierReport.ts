@@ -3,6 +3,7 @@ import {
   StatementSupplier,
   formatLedgerDate,
   formatMoney,
+  ledgerDay,
   localIsoDate,
   money,
   rangeLabel
@@ -87,7 +88,7 @@ export interface MilkSupplierReport {
 const MILK_ORDER = ['Buffalo', 'Cow', 'Mixed'];
 
 function dayKey(value?: string) {
-  return (value || '').slice(0, 10);
+  return ledgerDay(value);
 }
 
 function inRange(date: string, from: string, to: string) {

@@ -107,7 +107,8 @@ const Inventory: React.FC = () => {
   const syncedInventory = useMemo(() => {
     return items.map(master => {
        const stockRecord = inventory.find(i => i.item_id === master.id || i.name.toLowerCase() === master.name.toLowerCase());
-       const variantStocks = master.variant_stocks || {};
+       // Pack counts come from the same live row as loose stock; returns and audits update that row first.
+       const variantStocks = stockRecord?.variant_stocks || master.variant_stocks || {};
        
        return {
           ...master,
@@ -856,12 +857,16 @@ const Inventory: React.FC = () => {
                   ) : (
                      <div className="divide-y divide-slate-100 bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                         {inventoryLogs.length > 0 ? (
-                           inventoryLogs.map(log => (
+                           inventoryLogs.map(log => {
+                              // Pack movements keep loose `difference` at 0 and carry the pack count in details.
+                              const packDelta = Number((log as any).details?.variant_delta) || 0;
+                              const diff = Number(log.difference) || packDelta;
+                              return (
                               <div key={log.id} className="p-3.5 sm:p-4 hover:bg-slate-50 transition-colors">
                                  <div className="flex justify-between font-bold text-xs sm:text-sm">
                                     <span className="text-slate-800">{log.item_name}</span>
-                                    <span className={`font-mono ${log.difference > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                      {log.difference > 0 ? '+' : ''}{log.difference.toFixed(2)}
+                                    <span className={`font-mono ${diff > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                      {diff > 0 ? '+' : ''}{diff.toFixed(2)}{!Number(log.difference) && packDelta ? ' packs' : ''}
                                     </span>
                                  </div>
                                  <div className="flex justify-between items-end mt-2">
@@ -874,7 +879,8 @@ const Inventory: React.FC = () => {
                                     </p>
                                  </div>
                               </div>
-                           ))
+                              );
+                           })
                         ) : (
                           <div className="p-16 text-center flex flex-col items-center gap-2">
                             <HistoryIcon size={32} className="text-slate-300"/>

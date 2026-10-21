@@ -29,7 +29,7 @@ const Expenses: React.FC = () => {
     recordExpenseVendorPayment, deleteExpenseVendorTransaction,
     manualAccounts, addManualAccount, deleteManualAccount, updateManualAccount,
     accounts, settings, updateSettings, canPerform,
-    getDeleteAssessment, safeDeleteExpense
+    getDeleteAssessment, safeDeleteExpense, isDayLocked
   } = useDairy();
   
   const { showToast } = useToast();
@@ -114,13 +114,11 @@ const Expenses: React.FC = () => {
   const [filterVendor, setFilterVendor] = useState('All');
   const [filterPaymentStatus, setFilterPaymentStatus] = useState('All');
   const [filterVendorTabStatus, setFilterVendorTabStatus] = useState<'All' | 'With Dues' | 'Advance' | 'Active' | 'Inactive'>('All');
-  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
+  // Pakistan month: a UTC slice showed last month between 00:00 and 05:00 on the 1st.
+  const [filterMonth, setFilterMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }).slice(0, 7));
   const [dateFilterMode, setDateFilterMode] = useState<ExpenseDateFilterMode>('this_month');
   const [filterSingleDate, setFilterSingleDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
-  const [filterStartDate, setFilterStartDate] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  });
+  const [filterStartDate, setFilterStartDate] = useState<string>(() => `${new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }).slice(0, 7)}-01`);
   const [filterEndDate, setFilterEndDate] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
   const [expandedExpenseRowId, setExpandedExpenseRowId] = useState<string | null>(null);
 
@@ -370,8 +368,9 @@ const Expenses: React.FC = () => {
     d30.setDate(d30.getDate() - 29);
     const d30Str = pkDay(d30);
 
-    const now = new Date();
-    const prevMonthStr = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
+    // Built from the Pakistan date: toISOString() on a local midnight rolled back to the month before last.
+    const [curYear, curMonth] = todayStr.split('-').map(Number);
+    const prevMonthStr = curMonth === 1 ? `${curYear - 1}-12` : `${curYear}-${String(curMonth - 1).padStart(2, '0')}`;
 
     return expenses.filter(exp => {
       const matchesSearch = 
@@ -916,9 +915,13 @@ const Expenses: React.FC = () => {
     showToast(`${target.name} hata diya gaya`, 'info');
   };
 
-  const localToday = () => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const localToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+
+  const toPkDay = (value?: string) => {
+    const text = String(value || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text.slice(0, 10)) && text.length <= 10) return text;
+    const parsed = new Date(text.replace(' ', 'T'));
+    return isNaN(parsed.getTime()) ? text.slice(0, 10) : parsed.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
   };
 
   const handleUseSavedExpense = (preset: SavedExpense) => {
@@ -968,7 +971,8 @@ const Expenses: React.FC = () => {
     }
     setEditingExpenseId(exp.id);
     setFormData({
-      date: exp.date,
+      // Stored dates are full timestamps; the date input only accepts YYYY-MM-DD and showed blank.
+      date: toPkDay(exp.date),
       category: exp.category,
       subcategory: exp.subcategory || '',
       description: exp.description,
@@ -1006,6 +1010,12 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    // The disabled Save button is not enough: Ctrl+Enter calls requestSubmit(), and addExpense only checks the books lock date.
+    if (formData.date && isDayLocked && isDayLocked(formData.date)) {
+      showToast(`${formData.date} ka din lock hai — is tareekh par kharcha save nahi ho sakta.`, "error");
+      return;
+    }
+
     let actualPaid = 0;
     if (formData.paymentStatus === 'Paid') {
       actualPaid = formData.amount;
@@ -1021,17 +1031,26 @@ const Expenses: React.FC = () => {
     }
 
     let vendorName = '';
-    if (formData.vendor_id) { 
-      vendorName = expenseVendors.find(v => v.id === formData.vendor_id)?.name || ''; 
+    if (formData.vendor_id) {
+      vendorName = expenseVendors.find(v => v.id === formData.vendor_id)?.name || '';
     }
-    
+
     const chosenAccount = accounts.find(a => a.id === formData.account_id);
+    // A paid amount with no account would be recorded as paid while no balance moves.
+    if (actualPaid > 0 && !chosenAccount) {
+      showToast("Paisa kis account se diya gaya? Account chunein", "warning");
+      return;
+    }
+    // Same day as before: keep the original timestamp instead of re-stamping the entry.
+    const originalExpense = editingExpenseId ? expenses.find(item => item.id === editingExpenseId) : undefined;
+    const submitDate = originalExpense && toPkDay(originalExpense.date) === formData.date ? originalExpense.date : formData.date;
 
     isSubmittingExpenseRef.current = true;
     setIsSubmitting(true);
     try {
       const expensePayload = {
         ...formData,
+        date: submitDate,
         amount: formData.amount,
         paidAmount: actualPaid,
         paymentStatus: formData.paymentStatus,
@@ -1305,6 +1324,12 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    // Ctrl+Enter submits past the disabled button, and the payment engine only checks the books lock date.
+    if (paymentFormData.date && isDayLocked && isDayLocked(paymentFormData.date)) {
+      showToast(`${paymentFormData.date} ka din lock hai — is tareekh par payment save nahi ho sakti.`, "error");
+      return;
+    }
+
     const isRefund = paymentFormData.type === 'refund';
     const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
     if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
@@ -1346,6 +1371,12 @@ const Expenses: React.FC = () => {
   const handleDeleteVendorTx = async (txId: string) => {
     if (!canDelete) {
       showToast("Sirf Admin vendor payment delete kar sakta hai.", "error");
+      return;
+    }
+    // Reversing a payment from a closed day would change that day's reconciled cash.
+    const vendorTx = expenseVendorTransactions.find(t => t.id === txId);
+    if (vendorTx?.date && isDayLocked && isDayLocked(vendorTx.date)) {
+      showToast("Yeh payment lock din ki hai, is liye delete nahi ho sakti.", "error");
       return;
     }
     if (!(await confirmAction({
@@ -1441,7 +1472,6 @@ const Expenses: React.FC = () => {
 
     rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    const now = new Date();
     let startDateLimit = '';
     let endDateLimit = '';
 
@@ -1467,15 +1497,18 @@ const Expenses: React.FC = () => {
       startDateLimit = khataStartDate;
       endDateLimit = khataStartDate;
     } else if (khataDateRange === 'this_month') {
-      startDateLimit = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      startDateLimit = `${todayStr.slice(0, 7)}-01`;
     } else if (khataDateRange === 'last_month') {
-      const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastDay = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
-      startDateLimit = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}-01`;
-      endDateLimit = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      // Pakistan calendar month; the device clock / UTC slice could land on the wrong month.
+      const [curYear, curMonth] = todayStr.split('-').map(Number);
+      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+      const prevMonthNum = curMonth === 1 ? 12 : curMonth - 1;
+      const lastDay = new Date(Date.UTC(prevYear, prevMonthNum, 0)).getUTCDate();
+      startDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-01`;
+      endDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     } else if (khataDateRange === 'last_30_days') {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      startDateLimit = thirtyDaysAgo.toISOString().split('T')[0];
+      startDateLimit = pkDay(thirtyDaysAgo);
     } else if (khataDateRange === 'custom') {
       startDateLimit = khataStartDate;
       endDateLimit = khataEndDate;
@@ -1571,7 +1604,8 @@ const Expenses: React.FC = () => {
 
   const formatDateDisplay = (dateStr: string) => {
     if (!dateStr) return '-';
-    const cleanStr = dateStr.split('T')[0];
+    // Pakistan day: the UTC part of a timestamp is the previous day for entries before 05:00.
+    const cleanStr = toPkDay(dateStr);
     try {
       const parts = cleanStr.split('-');
       if (parts.length === 3) {
