@@ -7,7 +7,7 @@ description: Brand identity of Mooco (Mooco.pk), a Pakistani dairy shop with hom
 
 Every Mooco output = **chosen style + Mooco identity**. A style (from the style library) decides the look of a post; this kit decides what must stay Mooco in every post. When a style conflicts with this kit, the kit wins on logo, colors of brand elements, product truth and voice.
 
-Visual reference: `assets/brand-board.jpg` (palette, gradients, fonts, color rules, sample light and dark layouts) and `assets/mooki-concept.jpg` (mascot).
+Visual reference: `assets/brand-board.jpg` (palette, gradients, fonts, color rules, sample light and dark layouts).
 
 ## 1. Brand core
 
@@ -99,7 +99,7 @@ Rules:
 
 ## 6. Mascot: Mooki
 
-Mooki is Mooco's joyful baby calf (bachra), the little version of the logo cow: lime body, cream belly, huge logo-style round eyes and a gold bell. Mooki is a supporting character and should appear often, but never replaces the logo or the real product. Full character bible, usage rules, sticker pack and Gemini prompts: `references/mooki.md`.
+**Status: on hold — do not use Mooki in any post until the owner approves a master design.** Mooki will be Mooco's joyful baby calf (bachra), a supporting character that never replaces the logo or the real product. Current design direction, rejected drafts and Gemini prompts: `references/mooki.md`.
 
 ## 7. Content plan
 
