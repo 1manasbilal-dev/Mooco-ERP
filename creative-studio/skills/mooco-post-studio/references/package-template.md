@@ -27,12 +27,12 @@ Always deliver the package in this exact structure, in Roman Urdu with copy-read
 3. Headline (Fredoka Bold, [color hex]): `[headline]`
 4. Subline (Nunito SemiBold, [color hex]): `[subline]`
 5. CTA pill ([pill color] + [text color]): `[CTA]`
-6. [Badge/price only for offers]
+6. Badge/price: [only for offer posts — otherwise write "Nahi — ye offer post nahi hai"]
 7. Export: PNG, "05_Outputs" folder mein save karein.
 
 ### 5. Caption
 ```
-[2–4 short lines, Roman Urdu + English, emoji 1–3, CTA line, tagline "Promise of purity & freshness"]
+[4–5 short lines: hook · 1–2 value lines · CTA · tagline "Mooco — Promise of purity & freshness." Roman Urdu + English, 1–3 emoji]
 ```
 
 ### 6. Hashtags
@@ -41,15 +41,19 @@ Always deliver the package in this exact structure, in Roman Urdu with copy-read
 ```
 
 ### 7. Story version (9:16)
-[one line: what changes — crop/size 1080 × 1920, one line of text, CTA sticker, safe zones]
+Isi Gemini chat mein: `Make a vertical 9:16 version of this same image: extend the scene above and below, keep the product exactly unchanged, keep the top 13% and bottom 18% free of important details, no text.`
+Canva 1080 × 1920: [one line of text + logo + CTA sticker], sab kuch top 250 px ke neeche aur bottom 340 px ke upar.
 
 ### 8. Post Log line (sheet mein paste karein)
 ```
-[date] | [product] | [purpose] | [style] | [concept] | [platforms] | 4:5 + 9:16 | Gemini | | | | | | | |
+[22 Oct 2026] | [product] | [purpose] | [style] | [concept] | [platforms] | 4:5 + 9:16 | Gemini | | | | | | | |
 ```
+Sheet mein paste karke: Data › Split text to columns › Separator: Custom `|`.
 ````
 
 ## Caption formula
+
+Four to five short lines in total, in this order:
 
 1. **Hook** (line 1, ≤ 8 words): the headline idea or a question ("Garmi ne haal bura kar diya? 🥵").
 2. **Value** (1–2 lines): proof point or recipe hint in warm, homely words.
@@ -57,3 +61,7 @@ Always deliver the package in this exact structure, in Roman Urdu with copy-read
 4. **Tagline**: "Mooco — Promise of purity & freshness."
 
 Recipe posts may carry the full recipe in the caption (ingredients + 3–5 short steps).
+
+## Post Log columns
+
+The line fills the sheet's 16 columns in order: Date · Product · Purpose · Style · Concept · Platform · Format · Image Tool · Output Link · Reach · Likes · Saves · Shares · Comments · DMs / Orders · Notes. Date format: `22 Oct 2026`. The owner fills Output Link and the results later.

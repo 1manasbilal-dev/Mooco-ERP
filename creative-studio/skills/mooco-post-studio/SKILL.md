@@ -19,7 +19,7 @@ The owner writes Roman Urdu. Reply in simple Roman Urdu with common English word
 ## Modes
 
 - **Guided (default):** two short checkpoints — confirm the brief, then pick one of three concepts. Use when the request is new or vague.
-- **Express:** the owner says "express", "jaldi", "seedha prompt do", or the request is already specific. Make the choices yourself, state them in one line each, and deliver the Post Package directly.
+- **Express:** the owner says "express", "jaldi", "seedha prompt do", or the request is already specific. Make the choices yourself and reply as: a short "Faislay" block (season/occasion call, style, concept — one line each) → the Post Package → one line naming the other two concepts → one line with the next step.
 - **Single stage:** "sirf caption", "bas Gemini prompt", "3 concepts do" — run only that stage, still applying the brand kit.
 - **Weekly plan:** "is hafte ki posts plan karo" — see "Weekly plan" below.
 - **Review & fix:** the owner shares a generated image — see step 7.
@@ -30,7 +30,7 @@ The owner writes Roman Urdu. Reply in simple Roman Urdu with common English word
 Turn the input into an 8-line brief: goal, product, one message, proof point, audience, platform + format, occasion/date, CTA. Infer what you can (product from the photo, occasion from the date and `occasions-pakistan.md`, CTA from the brand kit). Ask **at most 3 questions**, only for things that change the post (e.g. offer details for an offer post). In Guided mode show the brief and ask "Theek hai?".
 
 ### 2. Style match — `mooco-style-library`
-Score every style 1–5 on: goal fit, product fit, occasion fit, brand fit, feed freshness (not used in the last 3 posts, if the owner mentions recent posts or the Post Log is available) and past results (if known). Keep the top 2–3 with a one-line reason. Respect the 80/20 rule: core styles most of the time, experiments occasionally.
+Score every style 1–5 on: goal fit, product fit, occasion fit, brand fit, feed freshness (not used in the last 3 posts) and past results. Freshness and results need the Post Log or the owner's word; when neither is available, skip those two criteria rather than guessing. Keep the top 2–3 with a one-line reason. Respect the 80/20 rule: core styles most of the time, experiments occasionally.
 
 ### 3. Concept lab — `references/concepts.md`
 Write three concepts — **Safe / Bold / Wild** — each in its best-fitting shortlisted style: big idea (1 line), what we see (2 lines), headline (≤ 6 words). Creativity lives here, before the design is fixed, because a fresh idea changes *what* we show, while late "creativity" only decorates. In Guided mode ask the owner to pick one (they may mix).

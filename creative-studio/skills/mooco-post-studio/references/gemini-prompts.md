@@ -13,7 +13,7 @@ Write one prompt in this order:
 5. **Light & mood** — soft morning window light / warm golden side light / studio with rim light; 3–5 mood words.
 6. **Colors** — palette in words + hex from the brand kit and the chosen style.
 7. **Text space** — "Leave the top third calm and empty (soft background only) for a headline added later."
-8. **Format** — "Portrait 4:5." (Story: "Vertical 9:16, keep the top 15% and bottom 20% free of important details.")
+8. **Format** — "Portrait 4:5." (Story: "Vertical 9:16, keep the top 13% and bottom 18% free of important details." — the same safe zones as 250 px / 340 px on 1080 × 1920.) To turn a finished 4:5 image into a story, ask in the same chat: "Make a vertical 9:16 version of this same image: extend the scene above and below, keep the product exactly unchanged, no text."
 9. **Exclusions** — "No text, letters, numbers, logos or watermarks anywhere except what is already printed on the pack. No people's faces." (Allow hands when the concept needs them.)
 
 ## Example — Dahi, Safe, Doodh Fresh style

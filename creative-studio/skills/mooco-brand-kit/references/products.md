@@ -11,7 +11,7 @@ Prices, sizes beyond the label and nationwide availability are pending from the 
 | Product | Pack (as on the photo) | Drive file | Status |
 |---|---|---|---|
 | Fresh Milk | 1 liter pouch, lime green with white milk splash and soft cow-spot pattern, script "Fresh Milk", "Promise of Purity & Freshness" | `Mooco Fresh Milk 1 Liter.jpg` | Final pack |
-| Dahi | 500 g pouch, white top with lime farm scene (barn, cows, bowl of dahi), script "Dahi", "Fresh, Sweet & Thick" | `Mooco Dahi 500g.jpg` | Final pack |
+| Dahi | 500 g pouch, white top with lime farm scene (barn, cows, bowl of dahi), script "Dahi", "Fresh, Sweet & Thick" (in Urdu copy say "gaarha aur taaza"; avoid "meetha dahi", which can read as sweetened, until the owner confirms) | `Mooco Dahi 500g.jpg` | Final pack |
 | Cow Desi Ghee | 1 kg glass jar, deep green label with saffron-gold ornamental frame, "Clarified Butter · Desi Ghee · Organic, Fresh, Healthy"; golden-yellow ghee | `Mooco Cow Desi Ghee 1kg.jpg` | Final pack |
 | Buffalo Desi Ghee | Same 1 kg jar and label; creamy-white ghee | `Mooco Buffalo Desi Ghee 1kg.png` | Final pack |
 | Badam Doodh | 250 ml bottle, lime cap, white/cream label with lime band, "Badam Doodh · Almond milk", almonds | `Mooco Badam Doodh 250ml.jpg` | Final pack |
