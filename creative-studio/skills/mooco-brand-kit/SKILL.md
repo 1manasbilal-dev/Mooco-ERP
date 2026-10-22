@@ -1,6 +1,6 @@
 ---
 name: mooco-brand-kit
-description: Brand identity of Mooco (Mooco.pk), a Pakistani dairy shop with home delivery — logo usage, color palette with hex codes, gradients, fonts, tone of voice, hero promise "Khalis aur Taaza", tagline, audience, products and contact details. Use whenever creating, reviewing or prompting anything for Mooco — social media posts, ads, stories, banners, packaging, WhatsApp messages, captions or AI image prompts — so every output looks and sounds like Mooco.
+description: Brand identity of Mooco (Mooco.pk), a dairy brand from Shorkot, Pakistan, selling through its Android app, the website mooco.pk and home delivery — logo usage, color palette with hex codes, gradients, fonts, tone of voice, hero promise "Khalis aur Taaza", tagline, audience, products and contact details. Use whenever creating, reviewing or prompting anything for Mooco — social media posts, ads, stories, banners, packaging, WhatsApp messages, captions or AI image prompts — so every output looks and sounds like Mooco.
 ---
 
 # Mooco Brand Kit
@@ -14,7 +14,8 @@ Visual reference: `assets/brand-board.jpg` (palette, gradients, fonts, color rul
 | | |
 |---|---|
 | Name | **Mooco** (web/handle form: **Mooco.pk**) |
-| Business | Dairy shop/outlet + home delivery |
+| Business | Dairy shop/outlet + home delivery in **Shorkot** (Punjab); selected "nationwide" products ship across Pakistan |
+| Order channels | **Mooco Android app (Google Play)** — main; website **mooco.pk** (also for iPhone users, no iOS app); WhatsApp as backup |
 | Tagline (official, English) | **Promise of purity & freshness** |
 | Hero promise (Roman Urdu) | **Khalis aur Taaza** — appears in some form in every post |
 | Personality | **Desi dil + modern look**: talks warm, homely and trustworthy; looks clean, fresh and modern; light humour now and then, never silly |
@@ -91,7 +92,9 @@ Rules:
 - Headlines: short — ideally 2–6 words, one idea. Body/caption: 1–3 short lines + a clear CTA.
 - Warm and homely, like a trusted neighbourhood dairy: "Roz subah farm se taaza doodh, bina kisi milawat ke."
 - Light humour and cow wordplay ("Moo") are allowed occasionally; never mock customers or competitors.
-- CTA style: "WhatsApp par order karein", "Aaj hi mangwayein", "Abhi order karein".
+- **Main CTA = the Android app:** "Mooco App download karein", "App se order karein". Add "iPhone? mooco.pk par order karein" where space allows. WhatsApp only as a backup line (stories, replies).
+- Use the official "Get it on Google Play" badge from Google's badge page, unedited — never redraw it. For printed material add a QR code to the app link.
+- Delivery wording: local posts say "Shorkot mein ghar tak delivery"; nationwide products say "Poore Pakistan mein delivery". Never promise nationwide delivery for local-only products.
 
 **Examples**
 - ✅ "Khalis. Taaza. Mooco." · "Garmi ka Asli Ilaaj!" · "Farm se seedha aap ke ghar"
@@ -105,6 +108,7 @@ Rules:
 
 - **Cadence:** 5 feed posts a week + daily stories (Instagram, Facebook, WhatsApp Status, TikTok).
 - **Content mix:** Product showcase ~40% · Recipes / use ideas ~30% · Offers / deals ~30%. Occasion posts replace a regular slot that week.
+- **App growth:** every post's CTA points to the app. Once a month add an app post ("3 steps mein order", app-only deal).
 - **Prices:** show prices **only on offer posts**. Showcase and recipe posts carry the CTA instead of a price.
 - **Occasions:** follow `references/occasions-pakistan.md` (live Google Sheet in Drive). Respectful occasions get no sale and no jokes.
 - **Tools:** images in **Gemini (Nano Banana, AI Pro plan)**; ChatGPT free as backup. Text, logo and Mooki stickers are added in **Canva Free**, which has no background remover, so use a free remover (Adobe Express, remove.bg) when a cut-out is needed.
@@ -131,9 +135,13 @@ To be filled from the owner's details:
 |---|---|---|---|
 | _pending_ | | | |
 
+- App: Mooco on Google Play (Android only) — link: _pending_
+- Website: mooco.pk
 - WhatsApp / phone: _pending_
 - Social handles: _pending_
-- City / area / delivery zone and timings: _pending_
+- City: Shorkot (local delivery); nationwide shipping for selected products — which products: _pending_
+- Delivery timings: _pending_
+- App-only offer: none yet (owner wants one) — do not advertise any app offer until the owner confirms it here
 
 Until this is filled, never invent prices, numbers or addresses — leave a clear placeholder like `[PRICE]` or `[WHATSAPP NO.]`.
 
