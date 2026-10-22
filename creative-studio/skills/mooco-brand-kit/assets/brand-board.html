@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --lime:#98C237; --leaf-light:#B9D96F; --mist:#E8F3CC;
+    --olive:#6F8A3C; --deep:#4E7A1E; --pasture:#2F5A1E;
+    --cream:#FFF8E8; --butter:#FFF0B3; --ghee:#F2C14E;
+    --night:#0F1C0A; --ink:#1A2412;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{width:1080px;background:var(--cream);font-family:'Nunito',sans-serif;color:var(--ink);padding:56px}
+  h1,h2,.fred{font-family:'Fredoka',sans-serif}
+  header{display:flex;align-items:center;gap:32px;margin-bottom:44px}
+  header img{height:150px;border-radius:24px;background:#fff;padding:10px 18px}
+  header h1{font-size:52px;font-weight:700;line-height:1}
+  header p{font-size:22px;color:var(--deep);font-weight:800;margin-top:10px}
+  h2{font-size:30px;font-weight:600;margin:40px 0 16px;display:flex;align-items:center;gap:12px}
+  h2 span{font-family:'Nunito';font-size:16px;font-weight:600;color:#5b6650}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .sw{border-radius:20px;overflow:hidden;background:#fff;border:1px solid #e9e4d3}
+  .sw .c{height:110px}
+  .sw .t{padding:10px 14px 14px}
+  .sw b{font-family:'Fredoka';font-weight:600;font-size:19px;display:block}
+  .sw code{font-size:15px;color:#4a5440;font-weight:800}
+  .sw small{display:block;font-size:13.5px;color:#5b6650;margin-top:4px;line-height:1.3}
+  .grads{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .g{height:190px;border-radius:20px;padding:14px;display:flex;flex-direction:column;justify-content:flex-end;font-family:'Fredoka';font-weight:600;font-size:20px}
+  .g small{font-family:'Nunito';font-size:13px;font-weight:600;opacity:.85}
+  .g1{background:linear-gradient(135deg,var(--butter) 0%,var(--leaf-light) 55%,var(--lime) 100%)}
+  .g2{background:radial-gradient(circle at 20% 25%,var(--butter) 0 22%,transparent 50%),radial-gradient(circle at 85% 30%,var(--mist) 0 25%,transparent 55%),radial-gradient(circle at 60% 90%,var(--leaf-light) 0 15%,transparent 50%),var(--cream)}
+  .g3{background:radial-gradient(circle at 70% 30%,rgba(152,194,55,.55) 0,transparent 55%),radial-gradient(circle at 15% 90%,rgba(47,90,30,.9) 0,transparent 60%),var(--night);color:var(--cream)}
+  .g4{background:linear-gradient(135deg,var(--lime) 0%,var(--deep) 100%);color:var(--ink)}
+  .type{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+  .card{background:#fff;border-radius:20px;padding:22px;border:1px solid #e9e4d3}
+  .card .lbl{font-size:13px;font-weight:800;letter-spacing:.08em;color:var(--olive);text-transform:uppercase}
+  .big{font-family:'Fredoka';font-weight:700;font-size:54px;line-height:1.02;margin:8px 0}
+  .rules{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .r{border-radius:18px;height:118px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Fredoka';font-weight:600;font-size:26px;position:relative}
+  .r i{font-style:normal;position:absolute;top:8px;right:12px;font-size:22px}
+  .r small{font-family:'Nunito';font-size:12.5px;font-weight:800;margin-top:6px}
+  .posts{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .post{aspect-ratio:4/5;border-radius:24px;padding:32px;position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .post .logo{height:62px;align-self:flex-start;border-radius:12px}
+  .post .hl{font-family:'Fredoka';font-weight:700;font-size:50px;line-height:1;margin-top:22px}
+  .post .sub{font-size:19px;font-weight:600;margin-top:10px}
+  .post .prod{flex:1;margin:18px 30px;border:3px dashed currentColor;border-radius:50%;opacity:.45;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px}
+  .post .badge{position:absolute;right:26px;top:300px;width:112px;height:112px;border-radius:50%;background:var(--ghee);color:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Fredoka';font-weight:700;font-size:30px;line-height:1;transform:rotate(-10deg)}
+  .post .badge small{font-size:15px;font-weight:600}
+  .post .cta{align-self:center;background:var(--ink);color:var(--cream);border-radius:999px;padding:12px 26px;font-weight:800;font-size:18px}
+  .p1{background:radial-gradient(circle at 15% 20%,var(--butter) 0 18%,transparent 48%),radial-gradient(circle at 90% 75%,var(--mist) 0 25%,transparent 55%),var(--cream);color:var(--ink)}
+  .p1 .hl{color:var(--deep)}
+  .p2{background:radial-gradient(circle at 70% 55%,rgba(152,194,55,.45) 0,transparent 55%),var(--night);color:var(--cream)}
+  .p2 .hl{color:var(--lime)}
+  .p2 .cta{background:var(--lime);color:var(--ink)}
+  footer{margin-top:36px;font-size:15px;color:#5b6650;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <img src="logo-reference-light.png" alt="">
+  <div>
+    <h1>Mooco Brand Kit</h1>
+    <p>Khalis aur Taaza · Desi dil + modern look</p>
+  </div>
+</header>
+
+<h2>1 · Greens <span>logo se nikle hue colors</span></h2>
+<div class="grid">
+  <div class="sw"><div class="c" style="background:var(--lime)"></div><div class="t"><b>Mooco Lime</b><code>#98C237</code><small>Main brand color: shapes, backgrounds, highlights</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--leaf-light)"></div><div class="t"><b>Fresh Leaf</b><code>#B9D96F</code><small>Halka green: gradients, chhoti highlights</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--olive)"></div><div class="t"><b>Olive Leaf</b><code>#6F8A3C</code><small>Logo ka dark green ("CO"): icons, bari headline</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--deep)"></div><div class="t"><b>Deep Leaf</b><code>#4E7A1E</code><small>Cream par green text ke liye (readable)</small></div></div>
+</div>
+
+<h2>2 · Doodh &amp; Makhan <span>cream aur light yellow</span></h2>
+<div class="grid">
+  <div class="sw"><div class="c" style="background:var(--cream)"></div><div class="t"><b>Doodh Cream</b><code>#FFF8E8</code><small>Main light background (pure white ki jagah)</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--butter)"></div><div class="t"><b>Makhan Yellow</b><code>#FFF0B3</code><small>Gradient/mesh ka light yellow</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--mist)"></div><div class="t"><b>Lime Mist</b><code>#E8F3CC</code><small>Bohot halka green: cards, mesh blobs</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--ghee)"></div><div class="t"><b>Ghee Gold</b><code>#F2C14E</code><small>Accent: offer badge, price tag (kam use)</small></div></div>
+</div>
+
+<h2>3 · Darks <span>dark posts aur text</span></h2>
+<div class="grid">
+  <div class="sw"><div class="c" style="background:var(--night)"></div><div class="t"><b>Raat Pasture</b><code>#0F1C0A</code><small>Dark post background (black ki jagah)</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--pasture)"></div><div class="t"><b>Pasture Green</b><code>#2F5A1E</code><small>Dark green background, glow layers</small></div></div>
+  <div class="sw"><div class="c" style="background:var(--ink)"></div><div class="t"><b>Ink</b><code>#1A2412</code><small>Saara body text aur lime par text</small></div></div>
+  <div class="sw"><div class="c" style="background:#fff"></div><div class="t"><b>Pure White</b><code>#FFFFFF</code><small>Sirf logo ke peeche ya doodh ke shots mein</small></div></div>
+</div>
+
+<h2>4 · Gradients &amp; Mesh</h2>
+<div class="grads">
+  <div class="g g1">Subah<small>Makhan → Fresh Leaf → Lime</small></div>
+  <div class="g g2">Doodh Mesh<small>Cream + makhan + mist blobs</small></div>
+  <div class="g g3">Raat Glow<small>Night + lime glow (dark posts)</small></div>
+  <div class="g g4">Lime Pop<small>Lime → Deep Leaf (sale banners)</small></div>
+</div>
+
+<h2>5 · Fonts <span>Google Fonts, free</span></h2>
+<div class="type">
+  <div class="card"><div class="lbl">Headline · Fredoka Bold</div><div class="big">Garmi ka<br>Asli Ilaaj!</div><div style="font-size:15px;color:#5b6650;font-weight:600">Gol, friendly letters, bilkul logo jaise</div></div>
+  <div class="card"><div class="lbl">Body &amp; caption · Nunito</div><p style="font-size:22px;font-weight:600;line-height:1.45;margin-top:10px">Roz subah farm se taaza doodh, bina kisi milawat ke. Abhi WhatsApp par order karein!</p><p style="font-size:15px;color:#5b6650;font-weight:600;margin-top:10px">Roman Urdu aur English dono ke liye saaf aur aasaan</p></div>
+</div>
+
+<h2>6 · Color rules <span>phone par parhne ke liye</span></h2>
+<div class="rules">
+  <div class="r" style="background:var(--lime);color:var(--ink)"><i>✅</i>Taaza<small>Ink on Lime · 7.7</small></div>
+  <div class="r" style="background:var(--lime);color:#fff"><i>❌</i>Taaza<small>White on Lime · 2.1</small></div>
+  <div class="r" style="background:var(--night);color:var(--lime)"><i>✅</i>Taaza<small>Lime on Raat · 8.5</small></div>
+  <div class="r" style="background:var(--cream);color:var(--lime);border:1px solid #e9e4d3"><i>❌</i>Taaza<small style="color:var(--ink)">Lime text on Cream · 2.0</small></div>
+</div>
+
+<h2>7 · Sample post layout <span>light aur dark</span></h2>
+<div class="posts">
+  <div class="post p1">
+    <img class="logo" src="logo-reference-light.png" style="background:#fff;padding:4px 8px">
+    <div class="hl">Khalis.<br>Taaza. Mooco.</div>
+    <div class="sub">Roz subah farm se seedha aap tak</div>
+    <div class="badge">Rs 300<small>1 kg dahi</small></div>
+    <div class="prod">Asli product photo</div>
+    <div class="cta">WhatsApp par order karein</div>
+  </div>
+  <div class="post p2">
+    <img class="logo" src="logo-reference-dark.png">
+    <div class="hl">Garmi ka<br>Asli Ilaaj!</div>
+    <div class="sub">Thandi lassi, khalis dahi se</div>
+    <div class="prod">Asli product photo</div>
+    <div class="cta">Order: WhatsApp</div>
+  </div>
+</div>
+<footer>Mooco Brand Kit v1 · draft for approval</footer>
+</body>
+</html>
