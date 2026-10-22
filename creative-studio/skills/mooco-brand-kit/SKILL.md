@@ -7,7 +7,7 @@ description: Brand identity of Mooco (Mooco.pk), a Pakistani dairy shop with hom
 
 Every Mooco output = **chosen style + Mooco identity**. A style (from the style library) decides the look of a post; this kit decides what must stay Mooco in every post. When a style conflicts with this kit, the kit wins on logo, colors of brand elements, product truth and voice.
 
-Visual reference: `assets/brand-board.jpg` (palette, gradients, fonts, color rules, sample light and dark layouts).
+Visual reference: `assets/brand-board.jpg` (palette, gradients, fonts, color rules, sample light and dark layouts) and `assets/mooki-concept.jpg` (mascot).
 
 ## 1. Brand core
 
@@ -97,13 +97,25 @@ Rules:
 - ✅ "Khalis. Taaza. Mooco." · "Garmi ka Asli Ilaaj!" · "Farm se seedha aap ke ghar"
 - ❌ "Pakistan ka No.1 doodh" (unverified claim) · "Sab se sasta" (wrong positioning) · long paragraphs on the image
 
-## 6. Product truth
+## 6. Mascot: Mooki
+
+Mooki is Mooco's joyful baby calf (bachra), the little version of the logo cow: lime body, cream belly, huge logo-style round eyes and a gold bell. Mooki is a supporting character and should appear often, but never replaces the logo or the real product. Full character bible, usage rules, sticker pack and Gemini prompts: `references/mooki.md`.
+
+## 7. Content plan
+
+- **Cadence:** 5 feed posts a week + daily stories (Instagram, Facebook, WhatsApp Status, TikTok).
+- **Content mix:** Product showcase ~40% · Recipes / use ideas ~30% · Offers / deals ~30%. Occasion posts replace a regular slot that week.
+- **Prices:** show prices **only on offer posts**. Showcase and recipe posts carry the CTA instead of a price.
+- **Occasions:** follow `references/occasions-pakistan.md` (live Google Sheet in Drive). Respectful occasions get no sale and no jokes.
+- **Tools:** images in **Gemini (Nano Banana, AI Pro plan)**; ChatGPT free as backup. Text, logo and Mooki stickers are added in **Canva Free**, which has no background remover, so use a free remover (Adobe Express, remove.bg) when a cut-out is needed.
+
+## 8. Product truth
 
 - Never let an AI tool generate or redraw a Mooco product, pack, label or price. Always start from the real product photo (`03_Brand-Kit / Product-Photos`) and instruct the tool to keep the product exactly unchanged; only the scene, light and background change.
 - Text, prices and the logo are added afterwards in Canva — not rendered by the image model.
 - Show products as they really look. No fake textures, sizes or garnish that the product does not have.
 
-## 7. Never say
+## 9. Never say
 
 - Medical or health cure claims (e.g. "immunity barhata hai", "bimari theek karta hai")
 - Unverified superlatives ("No.1", "best in Pakistan")
@@ -111,7 +123,7 @@ Rules:
 - Fake or expired offers, or prices not in the product list below
 - (Add the owner's own no-go list here when received.)
 
-## 8. Products, prices and contact
+## 10. Products, prices and contact
 
 To be filled from the owner's details:
 
@@ -125,7 +137,7 @@ To be filled from the owner's details:
 
 Until this is filled, never invent prices, numbers or addresses — leave a clear placeholder like `[PRICE]` or `[WHATSAPP NO.]`.
 
-## 9. Formats
+## 11. Formats
 
 | Platform | Format | Size |
 |---|---|---|
@@ -135,13 +147,14 @@ Until this is filled, never invent prices, numbers or addresses — leave a clea
 
 For 9:16 keep text, logo and price out of the top ~250 px and bottom ~340 px (app UI covers them).
 
-## 10. Brand check (before any output is final)
+## 12. Brand check (before any output is final)
 
 1. Real logo file, correct version for the background, untouched
 2. Real product photo, product unchanged
 3. Colors from this palette; text contrast rules followed
 4. Fredoka headline / Nunito body
-5. Hero promise "Khalis aur Taaza" (or one proof point) present
-6. Headline ≤ 6 words, one message, clear CTA
-7. No "Never say" items; no invented prices or numbers
-8. Correct size and safe zones for the platform
+5. Price only if it is an offer post
+6. Hero promise "Khalis aur Taaza" (or one proof point) present
+7. Headline ≤ 6 words, one message, clear CTA
+8. No "Never say" items; no invented prices or numbers
+9. Correct size and safe zones for the platform; respectful occasions have no sale or jokes
