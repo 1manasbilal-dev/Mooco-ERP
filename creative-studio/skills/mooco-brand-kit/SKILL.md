@@ -132,11 +132,9 @@ Rules:
 
 ## 10. Products, prices and contact
 
-To be filled from the owner's details:
+Mooco's own products (Fresh Milk 1 L, Dahi 500 g, Cow and Buffalo Desi Ghee 1 kg, Badam Doodh 250 ml, Shahi Kheer tub and cup), pack descriptions, Drive photo files and product rules: `references/products.md`. **Mooco's own products are the focus; other brands' grocery items are secondary.** Shahi Kheer's label is being redesigned.
 
-| Product | Size | Price (Rs) | Photo file |
-|---|---|---|---|
-| _pending_ | | | |
+Prices are still pending. Until they are added, never invent prices, numbers or addresses — leave a clear placeholder like `[PRICE]` or `[WHATSAPP NO.]`.
 
 - App: Mooco on Google Play (Android only) — **pending Play Store approval**; link to be added when live
 - Website: mooco.pk
@@ -145,8 +143,6 @@ To be filled from the owner's details:
 - City: Shorkot (local delivery); nationwide shipping for selected products — which products: _pending_
 - Delivery timings: _pending_
 - App-only offer: none yet (owner wants one) — do not advertise any app offer until the owner confirms it here
-
-Until this is filled, never invent prices, numbers or addresses — leave a clear placeholder like `[PRICE]` or `[WHATSAPP NO.]`.
 
 ## 11. Formats
 
