@@ -119,20 +119,29 @@ export const generateInvoiceNumber = (prefix: string): string => {
 };
 
 /**
+ * Halves round away from zero on the decimal value people see (10.075 -> 10.08, -10.075 -> -10.08),
+ * the same rule as cleanNumber in formatters.ts. Binary floats store 10.075 as 10.07499..., and
+ * adding Number.EPSILON only helps below 2, so the old rounding stored Rs 10.07 for a bill the
+ * screen showed as Rs 10.08. Never returns -0.
+ */
+const roundHalfAway = (value: number, decimals: number): number => {
+  if (isNaN(value) || !isFinite(value)) return 0;
+  const factor = Math.pow(10, decimals);
+  // 15 significant digits drop the binary noise (1007.4999999999999 -> 1007.5) before rounding.
+  const scaled = Number((Math.abs(value) * factor).toPrecision(15));
+  const rounded = (Math.sign(value) * Math.round(scaled)) / factor;
+  return rounded === 0 ? 0 : rounded;
+};
+
+/**
  * Rounds money to 2 decimal places without floating-point drift.
  */
-export const roundCurrency = (num: number): number => {
-  if (isNaN(num) || !isFinite(num)) return 0;
-  return Math.round((num + Number.EPSILON) * 100) / 100;
-};
+export const roundCurrency = (num: number): number => roundHalfAway(num, 2);
 
 /**
  * Rounds weights and volume quantities (liters, kilograms) to 3 decimal places.
  */
-export const roundQuantity = (qty: number): number => {
-  if (isNaN(qty) || !isFinite(qty)) return 0;
-  return Math.round((qty + Number.EPSILON) * 1000) / 1000;
-};
+export const roundQuantity = (qty: number): number => roundHalfAway(qty, 3);
 
 /**
  * Requests persistent storage from the browser to prevent IndexedDB eviction under disk pressure.
