@@ -104,7 +104,8 @@ export function PillGroup<T extends string>({
 }: {
   options: PillOption<T>[];
   value: T;
-  onChange: (value: T) => void;
+  /** NoInfer: T comes from `options` / `value`, so a useState setter can be passed straight in. */
+  onChange: (value: NoInfer<T>) => void;
   label: string;
   size?: 'sm' | 'md';
   className?: string;

@@ -13,7 +13,8 @@ export interface SegmentOption<T extends string> {
 export interface SegmentedControlProps<T extends string> {
   options: SegmentOption<T>[];
   value: T;
-  onChange: (value: T) => void;
+  /** NoInfer: T comes from `options` / `value`, so a useState setter can be passed straight in. */
+  onChange: (value: NoInfer<T>) => void;
   /** `pill`: filled track (filters, periods). `underline`: page-level tabs. */
   variant?: 'pill' | 'underline';
   size?: 'sm' | 'md';
