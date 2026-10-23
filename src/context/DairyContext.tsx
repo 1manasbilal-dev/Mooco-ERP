@@ -1242,6 +1242,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               expenses: { ...prev.expenses, ...dbSettings.expenses },
               security: { ...prev.security, ...(dbSettings.security || {}) },
            }));
+           if (Array.isArray(dbSettings.inventory?.categories) && dbSettings.inventory.categories.length) {
+             setCategories(dbSettings.inventory.categories.map(String));
+           }
         }
 
         // Pending local Dexie records, so unsynced work is not lost on re-fetch.
@@ -1385,7 +1388,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               item_type: (parsedTypes.length > 0 ? parsedTypes : ['Sale product']) as any,
               unit: i.unit || 'units', cost_price: Math.round((Number(i.cost_price) || 0) * 10000) / 10000, // per-g / per-ml costs need more than 2 decimals
               selling_price: roundCurrency(i.selling_price || 0),
-              isActive: i.is_active, isSystem: i.is_system, source: i.source || 'Both', reorder_level: i.reorder_level || 10,
+              isActive: i.is_active, isSystem: i.is_system, source: i.source || 'Both', reorder_level: i.reorder_level ?? 10, // 0 (no alert) is a real setting
               description: i.description || '',
               recipe: i.recipe || [], variants: i.variants || [],
               recipe_base_item_id: i.recipe_base_item_id,
@@ -1474,15 +1477,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         }
         if (purRes.status === 'fulfilled' && purRes.value.data) {
+          // details first: spread last, its raw paid/due overwrote the rounded figures computed here.
           const serverPurchases = purRes.value.data.map((p: any) => ({
             ...p,
+            ...p.details,
+            details: p.details,
             quantity: roundQuantity(p.quantity || 0),
             rate: roundCurrency(p.rate || 0),
             total_amount: roundCurrency(p.total_amount || 0),
             paid_amount: p.paid_amount !== undefined ? roundCurrency(p.paid_amount) : roundCurrency(p.details?.paid_amount || 0),
             due_amount: p.due_amount !== undefined ? roundCurrency(p.due_amount) : (p.details?.due_amount !== undefined ? roundCurrency(p.details.due_amount) : roundCurrency(Math.max(0, (p.total_amount || 0) - (p.details?.paid_amount || 0)))),
-            payment_mode: p.payment_mode || p.details?.payment_mode || 'Cash',
-            ...p.details
+            payment_mode: p.payment_mode || p.details?.payment_mode || 'Cash'
           }));
           const serverPurIds = new Set(serverPurchases.map((p: any) => p.id));
           const unmergedPurchases = pendingPurchases.filter(p => !serverPurIds.has(p.id));
@@ -1540,7 +1545,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               paidAmt = totalAmt;
             }
 
-            const status = isUnpaid ? 'Unpaid' : (rawStatus === 'Partial' || (paidAmt > 0 && paidAmt < totalAmt) ? 'Partial' : 'Paid');
+            // The amounts decide: a bill saved as "Partial" and then paid in full is Paid.
+            const fullyPaid = paidAmt >= totalAmt - 0.005;
+            const status = isUnpaid ? 'Unpaid' : fullyPaid ? 'Paid' : ((paidAmt > 0 || rawStatus === 'Partial') ? 'Partial' : 'Paid');
 
             return {
               id: ex.id,
@@ -2656,7 +2663,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const updatePromises = orderedItems.map(({ id, sort_order }) =>
         supabase.from('items').update({ sort_order }).eq('id', id)
       );
-      await Promise.all(updatePromises);
+      // supabase-js resolves with { error } instead of throwing: a refused row used to pass as saved.
+      const failed = (await Promise.all(updatePromises)).find(result => result.error);
+      if (failed) throw failed.error;
       showToast("Catalog order updated", "success");
       return true;
     } catch (err: any) {
@@ -3378,9 +3387,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         const { error: batchUpdateError } = await supabase.from('production_batches').update(updatePayload).eq('id', batchId);
         if (batchUpdateError) throw batchUpdateError;
-        if (newStage !== ProductionStage.CANCELLED) {
-            showToast("Batch Updated & Inventory Synced", "success");
-        }
+        // No success toast here: the Production screen announces each move and completion itself
+        // (two toasts appeared for every stage move).
         fetchData(['productionBatches', 'allocations', ...STOCK]);
         return true;
       } catch (e) {
@@ -4926,12 +4934,34 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               const dueAmt = roundCurrency(Number(det.balance_due ?? Math.max(0, totalAmt - paidAmt)));
 
               if (entry.customer_id && dueAmt > 0) {
-                  await adjustCustomerBalance(entry.customer_id, dueAmt);
+                  // The due goes on the khata as its own ledger row (fixed id, so a retry finds it); the
+                  // balance alone moved before, and the delivery never showed on the statement.
+                  const { error: chargeError } = await supabase.from('customer_transactions').insert([{
+                      id: `ctx_ds_${entry.id}`,
+                      customer_id: entry.customer_id,
+                      date: normalizeTransactionTimestamp(entry.date),
+                      type: 'Charge',
+                      amount: dueAmt,
+                      details: {
+                        mode: 'Delivery',
+                        note: `Daily supply${det.customer_name ? ` (${det.customer_name})` : ''}`,
+                        daily_supply_id: entry.id
+                      }
+                  }]);
+                  if (chargeError && String(chargeError.code) !== '23505') throw chargeError;
+                  if (!chargeError) {
+                    const { error: dueError } = await adjustCustomerBalance(entry.customer_id, dueAmt);
+                    if (dueError) {
+                      await supabase.from('customer_transactions').delete().eq('id', `ctx_ds_${entry.id}`);
+                      throw dueError;
+                    }
+                  }
               }
               if (paidAmt > 0) {
                   const targetAccId = activeShiftSession?.account_id || resolveDrawerAccountId(activeShiftSession?.drawer_id) || activeShiftSession?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash' && a.isActive !== false)?.id;
                   if (targetAccId) {
-                      await adjustAccountBalance(targetAccId, paidAmt);
+                      const { error: receiptError } = await adjustAccountBalance(targetAccId, paidAmt);
+                      if (receiptError) throw receiptError;
                       await supabase.from('bank_transactions').insert([{
                           id: `btx_ds_${entry.id}`,
                           account_id: targetAccId,
@@ -4952,7 +4982,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
           fetchData(['dailySupply', 'customers', 'customerTransactions', ...MONEY_ADDED]);
           return true;
-      } catch (e) { console.error(e); return false; }
+      } catch (e) {
+        console.error(e);
+        showToast('Delivery ka hisaab poora save nahi hua: ' + getErrorMessage(e), 'error');
+        fetchData(['dailySupply', 'customers', 'customerTransactions', ...MONEY_ADDED]);
+        return false;
+      }
   };
   const performRetailClosing = async (data: any) => { 
       try {
@@ -6414,6 +6449,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast(`Handover update nahi hua: ${error.message}`, 'error');
       return false;
     }
+    // The handover's count difference is settled with it: left Open, it kept the business day from
+    // closing although nothing was left to review.
+    const resolvedAt = new Date().toISOString();
+    const { data: settled, error: varianceError } = await supabase.from('cash_variances').update({
+      status: action === 'Cancel' ? 'Rejected' : 'Approved',
+      resolution_notes: notes || `Settled with handover (${newStatus}) by ${currentUser.name}`,
+      resolved_by: currentUser.id,
+      resolved_at: resolvedAt
+    }).eq('handover_id', handoverId).eq('status', 'Open').select('shift_id');
+    if (varianceError) {
+      console.error('[resolveCashHandover] Handover difference left open:', varianceError);
+      showToast('Handover update ho gaya, lekin uska cash difference open reh gaya. Differences mein resolve karein.', 'warning');
+    }
+    for (const shiftId of new Set((settled || []).map((row: any) => row.shift_id).filter(Boolean))) {
+      const { count } = await supabase.from('cash_variances').select('id', { count: 'exact', head: true }).eq('shift_id', shiftId).eq('status', 'Open');
+      if (!count) await supabase.from('cash_shifts').update({ status: 'Closed' }).eq('id', shiftId).eq('status', 'Pending Review');
+    }
     await refreshCashControl();
     showToast(`Handover marked as ${newStatus}.`, 'success');
     return true;
@@ -7124,7 +7176,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 () => supabase.rpc('record_customer_payment_effects', customerPaymentPayload)
               );
 
-              showToast("Customer Payment Recorded Successfully", "success");
+              showToast(type === 'Charge' ? 'Customer khata mein charge darj ho gaya' : 'Customer Payment Recorded Successfully', "success");
               return true;
           }
           return false;
@@ -7536,7 +7588,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return false;
     }
   };
-    const addRecurringExpense = async (e: Omit<RecurringExpense, 'id'>) => {
+
+  // Both used to report success whatever the database said.
+  const addRecurringExpense = async (e: Omit<RecurringExpense, 'id'>) => {
+    if (!requireRight('expenses', 'create', 'recurring kharcha banane')) return false;
     try {
       const id = `re_${generateUUID()}`;
       const { name, amount, ...extraDetails } = e;
@@ -7546,13 +7601,26 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         amount: amount || 0,
         details: extraDetails
       };
-      await supabase.from('recurring_expenses').insert([dbRecurring]);
+      const { error } = await supabase.from('recurring_expenses').insert([dbRecurring]);
+      if (error) throw error;
       fetchData(['recurringExpenses']);
       return true;
-    } catch (err) { return false; }
+    } catch (err) {
+      showToast('Recurring kharcha save nahi hua: ' + getErrorMessage(err), 'error');
+      return false;
+    }
   };
 
-  const deleteRecurringExpense = async (id: string) => { await supabase.from('recurring_expenses').delete().eq('id', id); fetchData(['recurringExpenses']); return true; };
+  const deleteRecurringExpense = async (id: string) => {
+    if (!requireRight('expenses', 'delete', 'recurring kharcha delete karne')) return false;
+    const { error } = await supabase.from('recurring_expenses').delete().eq('id', id);
+    if (error) {
+      showToast('Recurring kharcha delete nahi hua: ' + error.message, 'error');
+      return false;
+    }
+    fetchData(['recurringExpenses']);
+    return true;
+  };
   
   const addExpenseVendor = async (v: Omit<ExpenseVendor, 'id' | 'total_paid'> & { id?: string }): Promise<string | false> => {
     if (!requireRight('expenses', 'create', 'vendor banane')) return false;
@@ -8091,9 +8159,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return false; 
       }
   };
+  // Chart of Accounts edits: each used to report success (or keep its optimistic change) whatever
+  // the database answered.
   const addManualAccount = async (a: any) => {
+    const id = a.id || `ma_${generateUUID()}`;
     try {
-      const id = a.id || `ma_${generateUUID()}`;
       const { name, type, balance, ...extraDetails } = a;
       const dbAccount = {
         id,
@@ -8109,17 +8179,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch(e) { 
       console.error(e);
+      setManualAccounts(prev => prev.filter(m => m.id !== id));
+      showToast('Account save nahi hua: ' + getErrorMessage(e), 'error');
       return false; 
     }
   };
   const deleteManualAccount = async (id: string) => { 
     try {
+      const { error } = await supabase.from('manual_accounts').delete().eq('id', id);
+      if (error) throw error;
       setManualAccounts(prev => prev.filter(a => a.id !== id));
-      await supabase.from('manual_accounts').delete().eq('id', id); 
       fetchData(['manualAccounts']); 
       return true; 
     } catch(e) {
       console.error(e);
+      showToast('Account delete nahi hua: ' + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -8131,15 +8205,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (type !== undefined) dbUpdates.type = type;
       if (balance !== undefined) dbUpdates.balance = balance;
       if (Object.keys(extraDetails).length > 0) {
-        const { data: existing } = await supabase.from('manual_accounts').select('details').eq('id', id).single();
+        const { data: existing, error: readError } = await supabase.from('manual_accounts').select('details').eq('id', id).single();
+        if (readError) throw readError;
         dbUpdates.details = { ...(existing?.details || {}), ...extraDetails };
       }
-      await supabase.from('manual_accounts').update(dbUpdates).eq('id', id);
+      const { error } = await supabase.from('manual_accounts').update(dbUpdates).eq('id', id);
+      if (error) throw error;
       fetchData(['manualAccounts']);
       return true;
-    } catch(e) { return false; }
-  };
-  const addJournalEntry = async (entry: any) => {
+    } catch(e) {
+      console.error(e);
+      showToast('Account update nahi hua: ' + getErrorMessage(e), 'error');
+      return false;
+    }
+  };  const addJournalEntry = async (entry: any) => {
     try {
       const id = entry.id || `je_${generateUUID()}`;
       const { date, totalAmount, lines, ...extraDetails } = entry;
@@ -8526,14 +8605,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return true;
         });        if (writeOffResult === null) return false;
 
-        await updateCustomerRecord(id, { isActive: false });
+        if (!(await updateCustomerRecord(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Customer "${cust.name}" balance written off and marked Inactive!`, 'success');
         fetchData(['customers', 'customerTransactions', 'expenses']);
         return true;
       }
 
       if (action === 'deactivate') {
-        await updateCustomerRecord(id, { isActive: false });
+        if (!(await updateCustomerRecord(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Customer "${cust.name}" marked Inactive (Archived). Ledger and balance sheet preserved.`, 'info');
         fetchData(['customers']);
         return true;
@@ -8574,39 +8653,58 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!supp) return false;
 
       if (action === 'settle_discount') {
-        const bal = Number(supp.pending_balance || 0);
-        if (bal > 0) {
-          // A waiver settles the khata without any money leaving an account (waiver: true keeps it
-          // out of the cash-paid register and of any account reversal on delete).
+        // One settlement per supplier at a time (also across tabs), on the server's balance.
+        const settled = await actionLock.runExclusiveAcrossTabs(`settle_supplier_${id}`, async () => {
+          const { data: balanceRow, error: balanceReadError } = await supabase.from('suppliers').select('balance').eq('id', id).single();
+          if (balanceReadError) throw balanceReadError;
+          const bal = roundCurrency(Number(balanceRow?.balance) || 0);
+          if (isZeroBalance(bal)) return true;
+          // We owe (bal > 0): a waiver Payment settles the khata without any money leaving an account
+          // (waiver: true keeps it out of the cash-paid register and of any account reversal on delete).
+          // The supplier holds our advance (bal < 0): it is written off with a Charge, which the
+          // statement shows as a supplier charge. It used to be impossible to settle, only to archive.
+          const owed = bal > 0;
+          const txId = `stx_wo_${generateUUID()}`;
           const { error: waiverError } = await supabase.from('supplier_transactions').insert([{
-            id: `stx_wo_${generateUUID()}`,
+            id: txId,
             supplier_id: id,
             date: normalizeTransactionTimestamp(getTodayLocalDate()),
-            type: 'Payment',
-            amount: bal,
-            details: {
-              mode: 'Supplier Waiver / Discount',
-              note: 'Payable balance settled via discount waiver prior to vendor archival',
-              waiver: true
-            }
+            type: owed ? 'Payment' : 'Charge',
+            amount: Math.abs(bal),
+            details: owed
+              ? { mode: 'Supplier Waiver / Discount', note: 'Payable balance settled via discount waiver prior to vendor archival', waiver: true }
+              : { mode: 'Advance Written Off', note: 'Unrecovered advance written off prior to supplier archival', waiver: true }
           }]);
           if (waiverError) throw waiverError;
           const { error: waiverBalanceError } = await adjustSupplierBalance(id, -bal);
-          if (waiverBalanceError) throw waiverBalanceError;
+          if (waiverBalanceError) {
+            // No balance move: take the khata row back out so the two never disagree.
+            const { error: undoError } = await supabase.from('supplier_transactions').delete().eq('id', txId);
+            if (undoError) console.error('[safeDeleteSupplier] Waiver row could not be removed:', undoError);
+            throw waiverBalanceError;
+          }
+          return true;
+        });
+        if (settled === null) {
+          showToast('Is supplier ka hisaab pehle se settle ho raha hai.', 'warning');
+          return false;
         }
-        await updateSupplier(id, { isActive: false });
+        if (!(await updateSupplier(id, { isActive: false }))) {
+          showToast(`Supplier "${supp.name}" ka balance settle ho gaya, lekin Inactive nahi hua.`, 'warning');
+          fetchData(['suppliers', 'supplierTransactions']);
+          return false;
+        }
         showToast(`Supplier "${supp.name}" balance settled via waiver and marked Inactive!`, 'success');
         fetchData(['suppliers', 'supplierTransactions']);
         return true;
       }
 
       if (action === 'deactivate') {
-        await updateSupplier(id, { isActive: false });
+        if (!(await updateSupplier(id, { isActive: false }))) return false;
         showToast(`Supplier "${supp.name}" marked Inactive (Archived). Historical records preserved.`, 'info');
         fetchData(['suppliers']);
         return true;
       }
-
       if (action === 'hard_delete') {
         const assessment = getDeleteAssessment('supplier', id);
         if (!assessment.canHardDelete) {
@@ -8682,14 +8780,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           setInventory(prev => prev.map(iv => iv.item_id === id ? { ...iv, quantity: looseOff > 0 ? 0 : iv.quantity, variant_stocks: clearPacks(iv.variant_stocks) } : iv));
           setItems(prev => prev.map(i => i.id === id ? { ...i, stock: looseOff > 0 ? 0 : (i as any).stock, variant_stocks: clearPacks(i.variant_stocks) } as any : i));
         }
-        await updateItem(id, { isActive: false });
+        if (!(await updateItem(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Stock written off to spoilage and "${item.name}" marked Inactive (Discontinued)!`, 'success');
         fetchData(STOCK);
         return true;
       }
 
       if (action === 'deactivate') {
-        await updateItem(id, { isActive: false });
+        if (!(await updateItem(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Item "${item.name}" marked Inactive (Discontinued). Past sales bills preserved.`, 'info');
         fetchData(['items']);
         return true;
@@ -8740,11 +8838,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!acc) return false;
 
       if (action === 'deactivate') {
+        // Same rule as the delete assessment: the default cash / digital account receives every
+        // POS receipt, so archiving it left receipts with nowhere to go.
+        if (!getDeleteAssessment('account', id).canDeactivate) {
+          showToast('Default system account ya balance wala account archive nahi ho sakta.', 'error');
+          return false;
+        }
         if (!isZeroBalance(acc.balance)) {
           showToast(`Cannot archive account with non-zero balance (Rs ${acc.balance}). Transfer funds out first.`, 'error');
           return false;
         }
-        await updateAccount(id, { isActive: false });
+        if (!(await updateAccount(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Account "${acc.name}" marked Inactive. Past statements preserved.`, 'info');
         fetchData(['accounts', 'cashDrawers']);
         return true;
@@ -8787,19 +8891,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (!requireRight(right[entityType][0], right[entityType][1], 'dobara active karne')) return false;
     try {
       if (entityType === 'customer') {
-        await updateCustomerRecord(id, { isActive: true });
+        if (!(await updateCustomerRecord(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
         showToast("Customer reactivated successfully!", 'success');
       } else if (entityType === 'supplier') {
-        await updateSupplier(id, { isActive: true });
+        if (!(await updateSupplier(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
         showToast("Supplier reactivated successfully!", 'success');
       } else if (entityType === 'item') {
-        await updateItem(id, { isActive: true });
+        if (!(await updateItem(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
         showToast("Item reactivated successfully!", 'success');
       } else if (entityType === 'account') {
-        await updateAccount(id, { isActive: true });
+        if (!(await updateAccount(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
         showToast("Account reactivated successfully!", 'success');
       } else if (entityType === 'vendor') {
-        await updateExpenseVendor(id, { isActive: true });
+        if (!(await updateExpenseVendor(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
         showToast("Vendor reactivated successfully!", 'success');
       }
       fetchData(entityType === 'customer' ? ['customers'] : entityType === 'supplier' ? ['suppliers'] : entityType === 'item' ? ['items'] : entityType === 'account' ? ['accounts', 'cashDrawers'] : ['expenseVendors']);
@@ -9502,6 +9606,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Product categories are saved with the inventory settings, so every device keeps them; they used
+  // to live only in this tab's memory and were gone after a reload.
+  const saveCategories = async (next: string[], previous: string[]) => {
+    setCategories(next);
+    const saved = await updateSettings({ inventory: { ...settings.inventory, categories: next } as any });
+    if (!saved) setCategories(previous);
+    return saved;
+  };
+
   const addCategory = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -9509,15 +9622,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast(`Category "${trimmed}" already exists`, "warning");
       return;
     }
-    setCategories(prev => [...prev, trimmed]);
-    showToast(`Category "${trimmed}" added`, "success");
+    void saveCategories([...categories, trimmed], categories).then(saved => {
+      if (saved) showToast(`Category "${trimmed}" added`, "success");
+    });
   };
 
   const removeCategory = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    setCategories(prev => prev.filter(c => c.toLowerCase() !== trimmed.toLowerCase()));
-    showToast(`Category "${trimmed}" removed`, "info");
+    void saveCategories(categories.filter(c => c.toLowerCase() !== trimmed.toLowerCase()), categories).then(saved => {
+      if (saved) showToast(`Category "${trimmed}" removed`, "info");
+    });
   };
 
   latest.current = { loadData, rolloverStaleShift, accounts, cashDrawers, inventoryLogs, shiftSessions, activeShiftSession };

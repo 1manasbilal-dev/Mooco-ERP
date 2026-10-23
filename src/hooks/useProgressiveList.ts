@@ -31,12 +31,28 @@ export function useProgressiveList<T>(items: T[], pageSize = 60, resetKey?: unkn
     return () => observer.disconnect();
   }, [observed, hasMore, showMore]);
 
+  // Printing renders every row so the paper copy is complete; afterwards the screen goes back to the
+  // rows it showed, instead of keeping thousands of ledger rows mounted for the rest of the visit.
+  const limitBeforePrint = useRef<number | null>(null);
   useEffect(() => {
     if (!hasMore) return;
-    const expandForPrint = () => flushSync(showAll);
+    const expandForPrint = () => {
+      limitBeforePrint.current = limit;
+      flushSync(showAll);
+    };
     window.addEventListener('beforeprint', expandForPrint);
     return () => window.removeEventListener('beforeprint', expandForPrint);
-  }, [hasMore, showAll]);
+  }, [hasMore, showAll, limit]);
+  useEffect(() => {
+    const restoreAfterPrint = () => {
+      if (limitBeforePrint.current === null) return;
+      const previous = limitBeforePrint.current;
+      limitBeforePrint.current = null;
+      setLimit(previous);
+    };
+    window.addEventListener('afterprint', restoreAfterPrint);
+    return () => window.removeEventListener('afterprint', restoreAfterPrint);
+  }, []);
 
   return {
     visibleItems: hasMore ? items.slice(0, limit) : items,
