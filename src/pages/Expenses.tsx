@@ -357,10 +357,48 @@ const Expenses: React.FC = () => {
     return { byCategory, bySub };
   }, [expenses]);
 
-  const getCategoryUsageCount = (catName: string) => categoryUsage.byCategory.get(catName.toLowerCase()) || 0;
+  // Renaming a category does not rewrite past entries: they keep the old name. Counting only the
+  // new name let a renamed category with entries pass the delete guard ("no entries") and hid
+  // its old entries from the category filter. Lower-cased current name -> every name it has had.
+  const categoryNames = useMemo(() => {
+    const finalName = (name: string) => {
+      let current = name;
+      const seen = new Set<string>();
+      while (renamedCats[current] && !seen.has(current)) { seen.add(current); current = renamedCats[current]; }
+      return current;
+    };
+    const names = new Map<string, Set<string>>();
+    const add = (target: string, alias: string) => {
+      const key = target.toLowerCase();
+      if (!names.has(key)) names.set(key, new Set([key]));
+      names.get(key)!.add(alias.toLowerCase());
+    };
+    categoryTree.forEach(c => { add(c.name, c.name); if (c.originalName) add(c.name, c.originalName); });
+    Object.keys(renamedCats).forEach(from => add(finalName(from), from));
+    return names;
+  }, [categoryTree, renamedCats]);
 
-  const getSubcategoryUsageCount = (catName: string, subcatName: string) =>
-    categoryUsage.bySub.get(`${catName.toLowerCase()}::${subcatName.toLowerCase()}`) || 0;
+  const namesOfCategory = (name: string) => categoryNames.get(name.toLowerCase()) || new Set([name.toLowerCase()]);
+
+  const getCategoryUsageCount = (catName: string) => {
+    let count = 0;
+    namesOfCategory(catName).forEach(name => { count += categoryUsage.byCategory.get(name) || 0; });
+    return count;
+  };
+
+  const getSubcategoryUsageCount = (catName: string, subcatName: string) => {
+    const cats = namesOfCategory(catName);
+    const subs = new Set([subcatName.toLowerCase()]);
+    const original = categoryTree.find(c => c.name === catName)?.subcategories.find(s => s.name === subcatName)?.originalName;
+    if (original) subs.add(original.toLowerCase());
+    Object.entries(renamedSubcats as Record<string, string>).forEach(([key, to]) => {
+      const [fromCat, ...fromSub] = key.split('::');
+      if (String(to).toLowerCase() === subcatName.toLowerCase() && cats.has(fromCat.toLowerCase())) subs.add(fromSub.join('::').toLowerCase());
+    });
+    let count = 0;
+    cats.forEach(cat => subs.forEach(sub => { count += categoryUsage.bySub.get(`${cat}::${sub}`) || 0; }));
+    return count;
+  };
 
   // Day key and lower-cased search text per expense, worked out once per data change, not per keystroke.
   const indexedExpenses = useMemo(() => expenses.map(exp => ({
@@ -380,9 +418,10 @@ const Expenses: React.FC = () => {
     const range = periodRange(periodInput);
     const previous = previousPeriod(periodInput);
     const needle = searchTerm.trim().toLowerCase();
+    const categoryFilter = filterCategory === 'All' ? null : (categoryNames.get(filterCategory.toLowerCase()) || new Set([filterCategory.toLowerCase()]));
     const matches = (exp: ExpenseEntry, text: string) =>
       (!needle || text.includes(needle)) &&
-      (filterCategory === 'All' || exp.category === filterCategory) &&
+      (!categoryFilter || categoryFilter.has((exp.category || '').toLowerCase())) &&
       (filterVendor === 'All' || exp.vendor_id === filterVendor) &&
       (filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus);
 
@@ -397,7 +436,7 @@ const Expenses: React.FC = () => {
       if (inPrevious) prevTotal += Number(exp.amount || 0);
     });
     return { filteredExpenses: list, previousTotal: previous ? prevTotal : null, previousLabel: previous?.label };
-  }, [indexedExpenses, periodInput, searchTerm, filterCategory, filterVendor, filterPaymentStatus]);
+  }, [indexedExpenses, periodInput, searchTerm, filterCategory, categoryNames, filterVendor, filterPaymentStatus]);
 
   // Billed / paid per vendor in one pass over expenses and vendor payments (was one pass per vendor).
   const vendorsWithTotals = useMemo(() => {
@@ -468,11 +507,13 @@ const Expenses: React.FC = () => {
     return [...filteredVendors].sort((a, b) => (b.pending_balance || 0) - (a.pending_balance || 0) || a.name.localeCompare(b.name))[0];
   }, [selectedVendorId, filteredVendors, vendorsWithTotals]);
 
+  // Every vendor we owe, inactive ones too: switching a vendor off does not settle its dues. This
+  // tile left them out while the vendors tab and the Reports balance sheet count them.
   const totalOutstandingVendorDues = useMemo(() => {
-    return expenseVendors
-      .filter(v => v.isActive !== false)
-      .reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
+    return expenseVendors.reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
   }, [expenseVendors]);
+
+  const vendorsWithDuesCount = useMemo(() => expenseVendors.filter(v => (v.pending_balance || 0) > 0).length, [expenseVendors]);
 
   const expenseStats = useMemo<ExpenseStats>(() => {
     let total = 0, paid = 0, cash = 0, onCredit = 0;
@@ -490,14 +531,12 @@ const Expenses: React.FC = () => {
       digital: paid - cash,
       onCredit,
       vendorDues: totalOutstandingVendorDues,
-      vendorDueCount: expenseVendors.filter(v => v.isActive !== false && (v.pending_balance || 0) > 0).length,
+      vendorDueCount: vendorsWithDuesCount,
       trend: previousTotal && previousTotal > 0 ? ((total - previousTotal) / previousTotal) * 100 : null,
       trendLabel: previousTotal && previousTotal > 0 ? previousLabel : undefined,
     };
-  }, [filteredExpenses, totalOutstandingVendorDues, expenseVendors, previousTotal, previousLabel]);
+  }, [filteredExpenses, totalOutstandingVendorDues, vendorsWithDuesCount, previousTotal, previousLabel]);
   const totalExpense = expenseStats.total;
-
-  const vendorsWithDuesCount = useMemo(() => expenseVendors.filter(v => (v.pending_balance || 0) > 0).length, [expenseVendors]);
 
   const vendorRichOptions: RichSelectOption[] = useMemo(() => {
     return expenseVendors.filter(v => v.isActive !== false).map(v => {
@@ -1619,49 +1658,27 @@ const Expenses: React.FC = () => {
       }
     });
 
-    rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    // Opening balance first, then by Pakistan day, then by time. Comparing Date objects put a
+    // date-only entry (read as 05:00 PKT) after a same-day timestamp from the early morning.
+    const rowDay = (r: LedgerRow) => (r.id === `ob_${vId}` ? '' : dayKey(r.date));
+    rows.sort((a, b) => rowDay(a).localeCompare(rowDay(b)) || String(a.date).localeCompare(String(b.date)));
 
-    let startDateLimit = '';
-    let endDateLimit = '';
-
-    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    const todayStr = pkDay(new Date());
-    const yday = new Date();
-    yday.setDate(yday.getDate() - 1);
-    const ydayStr = pkDay(yday);
-    const d7 = new Date();
-    d7.setDate(d7.getDate() - 6);
-    const d7Str = pkDay(d7);
-
-    if (khataDateRange === 'today') {
-      startDateLimit = todayStr;
-      endDateLimit = todayStr;
-    } else if (khataDateRange === 'yesterday') {
-      startDateLimit = ydayStr;
-      endDateLimit = ydayStr;
-    } else if (khataDateRange === '7days') {
-      startDateLimit = d7Str;
-      endDateLimit = todayStr;
-    } else if (khataDateRange === 'single_date') {
-      startDateLimit = khataStartDate;
-      endDateLimit = khataStartDate;
-    } else if (khataDateRange === 'this_month') {
-      startDateLimit = `${todayStr.slice(0, 7)}-01`;
-    } else if (khataDateRange === 'last_month') {
-      // Pakistan calendar month; the device clock / UTC slice could land on the wrong month.
-      const [curYear, curMonth] = todayStr.split('-').map(Number);
-      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
-      const prevMonthNum = curMonth === 1 ? 12 : curMonth - 1;
-      const lastDay = new Date(Date.UTC(prevYear, prevMonthNum, 0)).getUTCDate();
-      startDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-01`;
-      endDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    } else if (khataDateRange === 'last_30_days') {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      startDateLimit = pkDay(thirtyDaysAgo);
-    } else if (khataDateRange === 'custom') {
-      startDateLimit = khataStartDate;
-      endDateLimit = khataEndDate;
-    }
+    // Same Pakistan-day ranges as the expense list, so "This month" ends on the month's last day and a
+    // reversed custom range still works.
+    const KHATA_MODE: Record<KhataDateRangeType, ExpenseDateFilterMode> = {
+      today: 'today', yesterday: 'yesterday', '7days': '7days', '30days': '30days', last_30_days: '30days',
+      this_month: 'this_month', last_month: 'last_month', single_date: 'single_date', custom: 'custom_range', all: 'all',
+    };
+    const range = periodRange({
+      mode: KHATA_MODE[khataDateRange] || 'all',
+      today,
+      month: today.slice(0, 7),
+      singleDate: khataStartDate,
+      startDate: khataStartDate,
+      endDate: khataEndDate,
+    });
+    const startDateLimit = range?.start || '';
+    const endDateLimit = range?.end || '';
 
     if (!startDateLimit && !endDateLimit) {
       let currentBalance = 0;
@@ -1678,7 +1695,9 @@ const Expenses: React.FC = () => {
     const periodRows: LedgerRow[] = [];
 
     rows.forEach(r => {
-      const rDate = r.date ? (r.date.includes('T') ? pkDay(new Date(r.date)) : r.date.slice(0, 10)) : '';
+      // The opening balance (day '') always counts before the period; it was dropped when a custom
+      // range started before its placeholder date.
+      const rDate = rowDay(r);
       if (startDateLimit && rDate < startDateLimit) {
         priorBalance = priorBalance + r.debit - r.credit;
       } else if (!endDateLimit || rDate <= endDateLimit) {
@@ -1712,10 +1731,21 @@ const Expenses: React.FC = () => {
     });
 
     return resultRows;
-  }, [activeTab, selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate]);
+  }, [activeTab, selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate, today]);
+
+  /** International number for wa.me: 0300…, 300…, +92 300… and 0092 300… all become 92300…. */
+  const whatsAppNumber = (phone: string) => {
+    const digits = phone.replace(/[^0-9]/g, '');
+    if (digits.startsWith('0092')) return digits.slice(2);
+    if (digits.startsWith('92')) return digits;
+    if (digits.startsWith('0')) return `92${digits.slice(1)}`;
+    // A local mobile number typed without the leading 0 opened a chat with a non-existent number.
+    if (digits.length === 10 && digits.startsWith('3')) return `92${digits}`;
+    return digits;
+  };
 
   const handleShareWhatsAppStatement = (vendor: ExpenseVendor) => {
-    const phoneClean = (vendor.phone || '').replace(/[^0-9]/g, '');
+    const phoneClean = whatsAppNumber(vendor.phone || '');
     if (!phoneClean) {
       showToast("Vendor ka phone number nahi hai", "warning");
       return;
@@ -1725,25 +1755,32 @@ const Expenses: React.FC = () => {
     const totalBilled = vendor.total_billed || 0;
     const totalPaid = vendor.total_paid || 0;
     const pendingDues = vendor.pending_balance || 0;
+    // An advance used to read "Net Outstanding Dues: -Rs 3,000".
+    const balanceLine = pendingDues > 0
+      ? `*Net Outstanding Dues:* ${formatCurrency(pendingDues)}`
+      : pendingDues < 0
+        ? `*Advance with you:* ${formatCurrency(Math.abs(pendingDues))}`
+        : '*Balance:* Settled';
 
     let text = `*${companyName} - Vendor Account Statement*\n`;
     text += `To: *${vendor.name}* (${vendor.service_type || 'Vendor'})\n`;
-    text += `Date: ${new Date().toLocaleDateString('en-GB')}\n\n`;
+    // Pakistan date, like every other date here (the device date could be a day off).
+    text += `Date: ${formatDateDisplay(pkToday())}\n\n`;
     text += `📊 *Summary*\n`;
     text += `• Total Billed: ${formatCurrency(totalBilled)}\n`;
     text += `• Total Paid: ${formatCurrency(totalPaid)}\n`;
-    text += `• *Net Outstanding Dues:* ${formatCurrency(pendingDues)}\n\n`;
+    text += `• ${balanceLine}\n\n`;
     text += `*Last Activity:*\n`;
-    
+
+    // Readable dates instead of raw ISO timestamps (2026-10-21T09:12:44.000Z).
     khataLedgerRows.slice(-5).forEach(r => {
-      text += `• ${r.date} | ${r.description} | Bill: ${formatCurrency(r.debit)} | Paid: ${formatCurrency(r.credit)}\n`;
+      text += `• ${formatDateDisplay(r.date)} | ${r.description} | Bill: ${formatCurrency(r.debit)} | Paid: ${formatCurrency(r.credit)}\n`;
     });
 
     text += `\nThank you!`;
 
     const encoded = encodeURIComponent(text);
-    const url = `https://wa.me/${phoneClean.startsWith('0') ? '92' + phoneClean.slice(1) : phoneClean}?text=${encoded}`;
-    window.open(url, '_blank');
+    window.open(`https://wa.me/${phoneClean}?text=${encoded}`, '_blank');
   };
 
   const handlePrintStatement = () => {
