@@ -19,7 +19,7 @@ Headline: ≤ 6 words (Roman Urdu/English)
 ## Creative techniques (pick one per concept)
 
 1. **Sensory close-up** — make it tasty: creamy swirl of dahi on a spoon, ghee glistening on a hot roti, condensation drops on a cold milk pouch, steam from a kheer bowl.
-2. **Proof shot** — show the claim: spoon standing upright in thick dahi; cup turned upside down and dahi stays; golden grainy texture of real ghee.
+2. **Proof shot** — show the claim: spoon standing upright in thick dahi; a clear glass bowl turned upside down and the dahi stays (use glass so the dahi is visible); golden grainy texture of real ghee. Only claim what the real product does.
 3. **Visual metaphor** — "Garmi ka asli ilaaj": dahi bowl as a cool oasis in a hot sunny scene; milk pouch with a sunrise = "subah ka pehla taaza".
 4. **Before → after / problem → solution** — dull dry roti → roti with Mooco ghee; plain biryani → biryani with raita.
 5. **Desi moment** — sehri table, Jumma lunch, chai time, dastarkhwan, mehman aa gaye, school lunchbox, barish + pakoray.

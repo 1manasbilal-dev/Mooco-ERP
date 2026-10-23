@@ -32,4 +32,5 @@ Look for these common Gemini problems and give an edit line for each:
 | Too dark / too flat | "Make the lighting brighter and softer, like natural morning light, keep the composition." |
 | Colors off-brand | "Shift the background colors to soft cream #FFF8E8 with a light lime #98C237 glow, keep the product unchanged." |
 | Food looks fake/plastic | "Make the food look real and appetizing: natural texture, soft highlights, slight imperfections, keep everything else." |
+| Small text on the pack slightly misspelled (tiny taglines) | "The small text on the pack must read exactly as in my original photo: '[exact text]'. Keep everything else exactly the same." If it still fails and the rest is good, keep the image and, if the text is visible at phone size, place a cut-out of the original pack over it in Canva. |
 | Wrong aspect ratio | "Make this a 4:5 portrait image with the same scene, product centered slightly low." |
