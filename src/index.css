@@ -449,29 +449,6 @@ select option {
   color: #bef264 !important;
 }
 
-/* POS sort-order badge, high contrast in both themes */
-.pos-sort-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  font-weight: 800;
-  background-color: #ecfccb;
-  color: #365314;
-  border: 1px solid #bef264;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-}
-.dark .pos-sort-badge {
-  background-color: rgba(132, 204, 22, 0.15) !important;
-  color: #bef264 !important;
-  border-color: rgba(132, 204, 22, 0.4) !important;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.4) !important;
-}
-
 /* Emerald / Green Badges */
 .dark .bg-emerald-50,
 .dark .bg-emerald-50\/50,

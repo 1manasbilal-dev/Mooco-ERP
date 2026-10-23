@@ -163,7 +163,7 @@ const Dashboard: React.FC = () => {
   const chartSales = useMemo(() => prevSalesDays.concat(curSales), [prevSalesDays, curSales]);
   const chartPurchases = useMemo(() => prevPurchasesDays.concat(curPurchases), [prevPurchasesDays, curPurchases]);
   const chartExpenses = useMemo(() => prevExpensesDays.concat(curExpenses), [prevExpensesDays, curExpenses]);
-  const supplyTotal = useMemo(() => curSupplies.reduce((sum, ds) => sum + (Number(ds.total_amount) || 0), 0), [curSupplies]);
+  const chartSupplies = useMemo(() => prevSuppliesDays.concat(curSupplies), [prevSuppliesDays, curSupplies]);
   const liveSlot = period.days === 1 && period.end === period.todayStr && nowMinute !== null ? Math.floor(nowMinute / 30) : null;
 
   /* ---------------------------------------------------------- customer orders */
@@ -311,7 +311,7 @@ const Dashboard: React.FC = () => {
         <Suspense fallback={<PerformanceSkeleton />}>
           <DashboardPerformance
             sales={chartSales} purchases={chartPurchases} expenses={chartExpenses}
-            range={range} period={period} supplyTotal={supplyTotal} liveSlot={liveSlot} onDetails={onChartDetails}
+            range={range} period={period} supplies={chartSupplies} liveSlot={liveSlot} onDetails={onChartDetails}
           />
         </Suspense>
         <RetailStockCard stock={retailMilk} />

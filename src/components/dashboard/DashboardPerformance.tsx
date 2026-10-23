@@ -4,7 +4,7 @@ import { ArrowUpRight, BarChart3 } from 'lucide-react';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import type { POSBill, PurchaseEntry, ExpenseEntry } from '../../types';
 import { offsetDate, type DashboardRange } from '../../lib/dashboardAnalytics';
-import { buildPerformanceSeries, type PerformanceMetric } from '../../lib/dashboardPerformanceData';
+import { buildPerformanceSeries, performanceProductName, type PerformanceMetric, type PerformanceSupply } from '../../lib/dashboardPerformanceData';
 import { formatCompactValue, formatCurrency, formatQty } from '../../lib/formatters';
 import { Card, CardHeader, IconButton, SegmentedControl, Select } from '../ui';
 import { cn } from '../../lib/cn';
@@ -37,8 +37,8 @@ interface Props {
   expenses: ExpenseEntry[];
   range: DashboardRange;
   period: DashboardPeriod;
-  /** Delivery supply is part of the Sales KPI but not of this chart's series. */
-  supplyTotal: number;
+  /** Delivery supply slips for the same window; the sales series counts them, like the Total sales card. */
+  supplies: PerformanceSupply[];
   /** Half-hour slot of "now" when the selected day is today; later slots have not happened yet. */
   liveSlot: number | null;
   onDetails: (metric: PerformanceMetric) => void;
@@ -65,25 +65,26 @@ function ChartTooltip({ active, payload, label, intraday, display, currentName, 
   );
 }
 
-function DashboardPerformance({ sales, purchases, expenses, range, period, supplyTotal, liveSlot, onDetails }: Props) {
+function DashboardPerformance({ sales, purchases, expenses, range, period, supplies, liveSlot, onDetails }: Props) {
   const [metric, setMetric] = useState<PerformanceMetric>('sales');
   const [product, setProduct] = useState('');
   const reducedMotion = useReducedMotion();
   const intraday = period.days === 1;
 
-  // Only products sold in these two periods can draw a line; best sellers first.
+  // Only products sold in these two periods can draw a line; best sellers first. Pack sizes of one product chart together.
   const products = useMemo(() => {
     const revenue = new Map<string, number>();
     for (const sale of sales) for (const line of sale.items || []) {
-      if (!line.name) continue;
-      revenue.set(line.name, (revenue.get(line.name) || 0) + (Number(line.total) || Number(line.qty) * Number(line.price) || 0));
+      const name = performanceProductName(line);
+      if (!name) continue;
+      revenue.set(name, (revenue.get(name) || 0) + (Number(line.total) || Number(line.qty) * Number(line.price) || 0));
     }
     return [...revenue.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
   }, [sales]);
   const selectedProduct = products.includes(product) ? product : products[0] || '';
 
-  const data = useMemo(() => buildPerformanceSeries({ sales, purchases, expenses, metric, selectedProduct, period, range }),
-    [sales, purchases, expenses, metric, selectedProduct, period, range]);
+  const data = useMemo(() => buildPerformanceSeries({ sales, purchases, expenses, supplies, metric, selectedProduct, period, range }),
+    [sales, purchases, expenses, supplies, metric, selectedProduct, period, range]);
   const total = data.length ? data[data.length - 1].currentTotal : 0;
   const previousTotal = data.length ? data[data.length - 1].previousTotal : 0;
   const hasData = data.some(row => row.current !== 0 || row.previous !== 0);
@@ -138,10 +139,6 @@ function DashboardPerformance({ sales, purchases, expenses, range, period, suppl
             <p className="text-sm font-semibold tabular-nums text-fg-muted">{display(previousTotal)}</p>
           </div>
         </div>
-        {metric === 'sales' && supplyTotal > 0 && (
-          <p className="mt-1 text-[11px] text-fg-subtle">Counter bills only · {formatCurrency(supplyTotal)} delivery supply is in the Total sales card.</p>
-        )}
-
         {/* data-no-swipe: scrubbing the tooltip sideways must not switch the metric. */}
         <div
           data-no-swipe
