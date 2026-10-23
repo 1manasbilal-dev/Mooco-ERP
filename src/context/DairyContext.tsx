@@ -2255,17 +2255,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
 
         if (paid_amount > 0) {
+          const stxDetails = {
+            mode: payment_mode,
+            note: `Spot Payment for Milk Intake (${entry.quantity}L ${entry.milk_type})`,
+            purchase_id: id
+          };
+          // Same shape as a loaded row (details spread on top), so the ledger shows its mode and note before a reload.
           setSupplierTransactions(prev => [{
             id: `stx_pur_${id}`,
             supplier_id: entry.supplier_id,
             date: normalizedPurchaseDate,
             type: 'Payment',
             amount: paid_amount,
-            details: {
-              mode: payment_mode,
-              note: `Spot Payment for Milk Intake (${entry.quantity}L ${entry.milk_type})`,
-              purchase_id: id
-            }
+            ...stxDetails,
+            details: stxDetails
           }, ...prev]);
 
           if (targetAccId) {
@@ -5821,25 +5824,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const refund = sameShiftCashRefund(s.id);
         return {
           id: s.id,
-          invoice_no: s.invoice_no || (s as any).invoice_number || (s as any).bill_number || s.id.slice(0, 10),
+          invoice_no: s.bill_number || s.id.slice(0, 10),
           customer_name: s.customer_name || 'Walk-in Customer',
           total: Number(s.total || 0),
           cash_paid: paid,
           refund_amount: refund,
           net_cash: Math.max(0, paid - refund),
           status: s.status || 'Completed',
-          time: s.created_at || (s as any).date
+          time: s.date
         };
       });
 
     const all_bills_list = allShiftSales.map(s => ({
       id: s.id,
-      invoice_no: s.invoice_no || (s as any).invoice_number || (s as any).bill_number || s.id.slice(0, 10),
+      invoice_no: s.bill_number || s.id.slice(0, 10),
       customer_name: s.customer_name || 'Walk-in Customer',
       total: Number(s.total || 0),
       payment_mode: s.payment_mode || 'Cash',
       status: s.status || 'Completed',
-      time: s.created_at || (s as any).date
+      time: s.date
     }));
 
     const cashRefunds = roundCurrency(shiftCashEvents

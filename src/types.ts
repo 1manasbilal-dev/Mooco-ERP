@@ -259,7 +259,7 @@ export interface POSBill {
   discount: number;
   total: number;
   payment_mode: 'Cash' | 'Online' | 'Credit';
-  status: 'Completed' | 'Returned';
+  status: 'Completed' | 'Returned' | 'Partially Returned';
   shift_session_id?: string;
   shift_name?: string;
   business_day_id?: string;
@@ -366,6 +366,7 @@ export interface DailySupplyEntry {
   payment_received: number;
   payment_mode: string;
   status: 'Completed' | 'Pending';
+  notes?: string;
   business_day_id?: string;
   shift_session_id?: string;
   drawer_id?: string;
@@ -579,6 +580,7 @@ export interface ShiftCashEvent {
   occurred_at: string;
   created_by?: string;
   metadata?: Record<string, any>;
+  created_at?: string;
 }
 
 export interface DayClosingEntry {
@@ -641,6 +643,10 @@ export interface CustomerTransaction {
   amount: number;
   mode?: string;
   note?: string;
+  /** Loaded rows also carry every `details` key at the top level (account_id, description, ...). */
+  account_id?: string;
+  description?: string;
+  details?: Record<string, any>;
   business_day_id?: string;
   shift_session_id?: string;
   drawer_id?: string;
@@ -656,6 +662,8 @@ export interface SupplierTransaction {
   amount: number;
   mode: string;
   note?: string;
+  /** Loaded rows also carry every `details` key at the top level (purchase_id, ...). */
+  details?: Record<string, any>;
   created_at?: string;
 }
 
@@ -719,6 +727,7 @@ export interface ItemDefinition {
   recipe_expected_output?: number;
   variants?: ItemVariant[];
   variant_stocks?: Record<string, number>; // Stock per variant
+  stock?: number; // Loose stock mirror kept by the catalog cache and local sale/stock updates; the inventory row is the source
   quick_amounts?: number[]; // Custom POS amount shortcuts (e.g. [50, 100, 150, 200])
   pos_primary_mode?: 'amount' | 'qty'; // Which entry the POS opens with: rupee amount or quantity
   allow_loose_sale?: boolean; // If false, item can only be sold as pre-packaged variants (e.g. Kheer pack)
@@ -820,6 +829,7 @@ export interface ExpenseVendorTransaction {
   reference_no?: string;
   note?: string;
   expense_id?: string;
+  created_at?: string;
 }
 
 export interface InventoryLog {
@@ -858,6 +868,8 @@ export interface BankTransaction {
   amount: number;
   description: string;
   reference_id?: string;
+  /** Only on rows made on this terminal before they sync; the table has no such column. */
+  related_expense_id?: string;
   business_day_id?: string;
   shift_session_id?: string;
   drawer_id?: string;
