@@ -1,0 +1,29 @@
+/*
+ * Printed receipts (POS and Sales History).
+ * `.receipt-paper` is white paper in both themes: inside it use these receipt-* classes for
+ * colour, never Tailwind colour utilities (the legacy dark-mode layer would repaint them).
+ * printReceipt() copies a receipt into #receipt-print-root and prints only that.
+ */
+.receipt-paper { background:#fff; color:#0f172a; color-scheme:light; }
+.receipt-paper .receipt-muted { color:#64748b; }
+.receipt-paper .receipt-faint { color:#94a3b8; }
+.receipt-paper .receipt-strong { color:#0f172a; }
+.receipt-paper .receipt-good { color:#047857; }
+.receipt-paper .receipt-warn { color:#b45309; }
+.receipt-paper .receipt-bad { color:#be123c; }
+/* !important: the legacy dark layer in index.css repaints .border / .border-t / .border-b with !important. */
+.receipt-paper .receipt-rule { border-color:#cbd5e1 !important; border-style:dashed !important; }
+.receipt-paper .receipt-line { border-color:#e2e8f0 !important; }
+.receipt-paper .receipt-strong-rule { border-color:#0f172a !important; border-style:solid !important; }
+.receipt-paper .receipt-stamp { display:inline-block; padding:2px 8px; border-radius:4px; background:#ffe4e6; color:#be123c; font-weight:700; text-transform:uppercase; }
+
+#receipt-print-root { display:none; }
+
+@page receipt { size:auto; margin:4mm; }
+
+@media print {
+  html.receipt-printing, html.receipt-printing body { background:#fff !important; height:auto !important; overflow:visible !important; }
+  html.receipt-printing body > *:not(#receipt-print-root) { display:none !important; }
+  html.receipt-printing #receipt-print-root { display:block; page:receipt; }
+  html.receipt-printing #receipt-print-root .receipt-paper { width:100%; max-width:80mm; max-height:none !important; overflow:visible !important; margin:0; padding:0; border:0; border-radius:0; box-shadow:none; }
+}

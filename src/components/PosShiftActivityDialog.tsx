@@ -1,7 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
-  Search,
   Receipt,
   ArrowDownLeft,
   ArrowUpRight,
@@ -16,11 +15,58 @@ import {
   Package,
   Trash2
 } from 'lucide-react';
-import { money } from './DenominationDialog';
-import { formatTransactionTime, formatCurrency } from '../lib/formatters';
+import { formatTransactionTime } from '../lib/formatters';
+import { useProgressiveList } from '../hooks/useProgressiveList';
 import { confirmAction, isConfirmOpen } from './ui/ConfirmDialog';
+import { Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl } from './ui';
 
 export type ShiftActivityTab = 'bills' | 'sales' | 'collections' | 'expenses';
+
+interface OutflowItem {
+  id: string;
+  referenceId?: string;
+  title: string;
+  amount: number;
+  category: string;
+  group?: string;
+  partyName?: string;
+  details?: string;
+  time?: string;
+}
+
+interface CollectionItem {
+  id: string;
+  referenceId?: string;
+  title: string;
+  partyName?: string;
+  amount: number;
+  category: string;
+  source: string;
+  details?: string;
+  time?: string;
+}
+
+interface CashSaleItem {
+  id: string;
+  invoice_no: string;
+  customer_name?: string;
+  total: number;
+  cash_paid: number;
+  refund_amount: number;
+  net_cash: number;
+  status: string;
+  time?: string;
+}
+
+interface BillItem {
+  id: string;
+  invoice_no: string;
+  customer_name?: string;
+  total: number;
+  payment_mode: string;
+  status: string;
+  time?: string;
+}
 
 interface PosShiftActivityDialogProps {
   isOpen: boolean;
@@ -39,52 +85,208 @@ interface PosShiftActivityDialogProps {
     cash_purchases: number;
     bills_count: number;
     expectedCash: number;
-    drawer_outflows?: Array<{
-      id: string;
-      referenceId?: string;
-      title: string;
-      amount: number;
-      category: string;
-      group?: string;
-      partyName?: string;
-      details?: string;
-      time?: string;
-    }>;
-    collections_list?: Array<{
-      id: string;
-      referenceId?: string;
-      title: string;
-      partyName?: string;
-      amount: number;
-      category: string;
-      source: string;
-      details?: string;
-      time?: string;
-    }>;
-    cash_sales_list?: Array<{
-      id: string;
-      invoice_no: string;
-      customer_name?: string;
-      total: number;
-      cash_paid: number;
-      refund_amount: number;
-      net_cash: number;
-      status: string;
-      time?: string;
-    }>;
-    all_bills_list?: Array<{
-      id: string;
-      invoice_no: string;
-      customer_name?: string;
-      total: number;
-      payment_mode: string;
-      status: string;
-      time?: string;
-    }>;
+    drawer_outflows?: OutflowItem[];
+    collections_list?: CollectionItem[];
+    cash_sales_list?: CashSaleItem[];
+    all_bills_list?: BillItem[];
   };
   canDelete?: boolean;
   onDeleteVendorTx?: (id: string) => Promise<boolean | void>;
 }
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const SEARCH_PLACEHOLDER: Record<ShiftActivityTab, string> = {
+  expenses: 'Search expenses, payee, or milk supplier...',
+  collections: 'Search customer name or collection note...',
+  sales: 'Search invoice number or customer name...',
+  bills: 'Search invoice number or customer name...',
+};
+
+const EMPTY_TEXT: Record<ShiftActivityTab, string> = {
+  expenses: 'No payouts matching your search/filter',
+  collections: 'No collections recorded in this shift',
+  sales: 'No cash sales found',
+  bills: 'No bills found',
+};
+
+const FOOTER_LABEL: Record<ShiftActivityTab, string> = {
+  expenses: 'Total Shift Payouts',
+  collections: 'Total Shift Collections',
+  sales: 'Net POS Cash Sales',
+  bills: 'Total Shift Bills',
+};
+
+const categoryIcon = (category: string) => {
+  const c = category.toLowerCase();
+  if (c.includes('milk')) return <Milk />;
+  if (c.includes('vendor') || c.includes('staff')) return <Briefcase />;
+  if (c.includes('hospitality') || c.includes('kheer') || c.includes('chai')) return <Coffee />;
+  if (c.includes('material') || c.includes('raw')) return <Package />;
+  return <Tag />;
+};
+
+const paymentModeTone = (mode: string) => {
+  const m = String(mode).toLowerCase();
+  return m === 'cash' ? 'success' : m === 'credit' ? 'warning' : 'info';
+};
+
+function Tile({ icon, label, children }: { icon?: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-control border border-line/70 bg-surface-2 px-3 py-2.5">
+      <p className="flex items-center gap-1 truncate text-[11px] font-semibold text-fg-subtle [&_svg]:size-3 [&_svg]:shrink-0">
+        {icon}
+        {label}
+      </p>
+      <div className="mt-0.5 truncate text-base font-bold tabular-nums text-fg">{children}</div>
+    </div>
+  );
+}
+
+function TimeMeta({ time }: { time?: string }) {
+  const text = time ? formatTransactionTime(time) : '';
+  if (!text) return null;
+  return (
+    <span className="flex items-center gap-0.5 tabular-nums text-fg-faint">
+      <Clock size={10} aria-hidden="true" />
+      {text}
+    </span>
+  );
+}
+
+function RowShell({ icon, title, titleExtra, meta, amount, action }: {
+  icon: React.ReactNode;
+  title: React.ReactNode;
+  titleExtra?: React.ReactNode;
+  meta: React.ReactNode;
+  amount: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <li className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <span className="mt-0.5 hidden size-9 shrink-0 items-center justify-center rounded-control bg-surface-2 text-fg-muted min-[400px]:flex [&_svg]:size-4" aria-hidden="true">
+          {icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-semibold text-fg">{title}</p>
+            {titleExtra}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-subtle">{meta}</div>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <div className="text-right">{amount}</div>
+        {action}
+      </div>
+    </li>
+  );
+}
+
+const ExpenseRow = memo(function ExpenseRow({ item, canDelete, deleting, onDelete }: {
+  item: OutflowItem;
+  canDelete: boolean;
+  deleting: boolean;
+  onDelete: (referenceId: string, kind: 'payment' | 'refund') => void;
+}) {
+  const deletable = canDelete && Boolean(item.referenceId) && (item.category === 'Vendor / Staff Payment' || item.group === 'Vendor & Staff');
+  return (
+    <RowShell
+      icon={categoryIcon(item.category)}
+      title={item.title}
+      meta={<>
+        <Badge>{item.category}</Badge>
+        {item.details && item.details !== item.category && <span className="min-w-0 truncate">· {item.details}</span>}
+        <TimeMeta time={item.time} />
+      </>}
+      amount={<>
+        <Money amount={-item.amount} className="block text-sm font-bold text-danger-fg sm:text-base" />
+        <span className="block text-[10px] font-medium text-fg-faint">Drawer Cash</span>
+      </>}
+      action={deletable && (
+        <IconButton
+          aria-label="Delete Vendor Payment"
+          icon={<Trash2 />}
+          loading={deleting}
+          className="text-fg-faint hover:bg-danger-soft hover:text-danger-fg"
+          onClick={() => onDelete(item.referenceId!, 'payment')}
+        />
+      )}
+    />
+  );
+});
+
+const CollectionRow = memo(function CollectionRow({ item, canDelete, deleting, onDelete }: {
+  item: CollectionItem;
+  canDelete: boolean;
+  deleting: boolean;
+  onDelete: (referenceId: string, kind: 'payment' | 'refund') => void;
+}) {
+  const deletable = canDelete && Boolean(item.referenceId) && (item.category === 'Vendor Refund' || item.source === 'Vendor / Staff Refund');
+  return (
+    <RowShell
+      icon={<ArrowDownLeft />}
+      title={item.title}
+      meta={<>
+        <Badge tone="info">{item.source}</Badge>
+        {item.details && item.details !== item.title && <span className="min-w-0 truncate">· {item.details}</span>}
+        <TimeMeta time={item.time} />
+      </>}
+      amount={<>
+        <span className="block text-sm font-bold tabular-nums text-success-fg sm:text-base">+<Money amount={item.amount} /></span>
+        <span className="block text-[10px] font-medium text-fg-faint">Cash In</span>
+      </>}
+      action={deletable && (
+        <IconButton
+          aria-label="Delete Vendor Refund"
+          icon={<Trash2 />}
+          loading={deleting}
+          className="text-fg-faint hover:bg-danger-soft hover:text-danger-fg"
+          onClick={() => onDelete(item.referenceId!, 'refund')}
+        />
+      )}
+    />
+  );
+});
+
+const CashSaleRow = memo(function CashSaleRow({ item }: { item: CashSaleItem }) {
+  return (
+    <RowShell
+      icon={<ShoppingCart />}
+      title={<span className="tabular-nums">#{item.invoice_no}</span>}
+      titleExtra={<Badge tone={item.status === 'Partially Returned' ? 'warning' : 'success'}>{item.status}</Badge>}
+      meta={<>
+        <span className="min-w-0 truncate">{item.customer_name || 'Walk-in Customer'}</span>
+        <TimeMeta time={item.time} />
+      </>}
+      amount={<>
+        <span className="block text-sm font-bold tabular-nums text-success-fg sm:text-base">+<Money amount={item.net_cash} /></span>
+        {item.refund_amount > 0 && (
+          <span className="block text-[10px] font-semibold text-warning-fg">Return: <Money amount={-item.refund_amount} /></span>
+        )}
+      </>}
+    />
+  );
+});
+
+const BillRow = memo(function BillRow({ item }: { item: BillItem }) {
+  return (
+    <RowShell
+      icon={<Receipt />}
+      title={<span className="tabular-nums">#{item.invoice_no}</span>}
+      titleExtra={<Badge tone={paymentModeTone(item.payment_mode)}>{item.payment_mode}</Badge>}
+      meta={<>
+        <span className="min-w-0 truncate">{item.customer_name || 'Walk-in Customer'}</span>
+        <TimeMeta time={item.time} />
+      </>}
+      amount={<>
+        <Money amount={item.total} className="block text-sm font-bold text-fg sm:text-base" />
+        <span className="block text-[10px] font-medium text-fg-faint">Total Bill</span>
+      </>}
+    />
+  );
+});
 
 export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
   isOpen,
@@ -98,11 +300,16 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(initialCategory || 'All');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deletingRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  React.useEffect(() => {
-    if (initialCategory) {
-      setSelectedCategory(initialCategory);
-    }
+  // Every open starts from a clean filter. A category picked on the payouts tab would otherwise
+  // carry over and hide every bill, sale and collection the next time the dialog opens.
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedCategory(initialCategory || 'All');
+    setSearchTerm('');
   }, [initialCategory, isOpen]);
 
   const handleTabChange = (tab: ShiftActivityTab) => {
@@ -111,10 +318,14 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
     onSelectTab(tab);
   };
 
+  const query = searchTerm.trim().toLowerCase();
   const totalPayouts = Number(shiftTotals.cash_expenses || 0) + Number(shiftTotals.cash_purchases || 0);
 
-  const outflows = shiftTotals.drawer_outflows || [];
-  
+  const outflows = useMemo(() => shiftTotals.drawer_outflows || [], [shiftTotals.drawer_outflows]);
+  const collections = useMemo(() => shiftTotals.collections_list || [], [shiftTotals.collections_list]);
+  const cashSalesList = useMemo(() => shiftTotals.cash_sales_list || [], [shiftTotals.cash_sales_list]);
+  const allBillsList = useMemo(() => shiftTotals.all_bills_list || [], [shiftTotals.all_bills_list]);
+
   const expenseCategories = useMemo(() => {
     const cats = new Set<string>();
     outflows.forEach(item => {
@@ -124,719 +335,314 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
     return ['All', ...Array.from(cats)];
   }, [outflows]);
 
-  const filteredOutflows = useMemo(() => {
-    return outflows.filter(item => {
-      const matchesSearch =
-        !searchTerm.trim() ||
-        item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.partyName && item.partyName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.details && item.details.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        item.category.toLowerCase().includes(searchTerm.toLowerCase());
-
-      const matchesCat =
-        selectedCategory === 'All' ||
-        item.group === selectedCategory ||
-        item.category === selectedCategory;
-
-      return matchesSearch && matchesCat;
-    });
-  }, [outflows, searchTerm, selectedCategory]);
+  const filteredOutflows = useMemo(() => outflows.filter(item => {
+    const matchesSearch =
+      !query ||
+      item.title.toLowerCase().includes(query) ||
+      (item.partyName && item.partyName.toLowerCase().includes(query)) ||
+      (item.details && item.details.toLowerCase().includes(query)) ||
+      item.category.toLowerCase().includes(query);
+    const matchesCat = selectedCategory === 'All' || item.group === selectedCategory || item.category === selectedCategory;
+    return matchesSearch && matchesCat;
+  }), [outflows, query, selectedCategory]);
 
   const expenseBreakdown = useMemo(() => {
     let milk = 0;
     let vendor = 0;
     let petty = 0;
     let material = 0;
-
     outflows.forEach(item => {
       if (item.category === 'Milk Purchase' || item.group === 'Milk Intake') milk += item.amount;
       else if (item.category === 'Vendor / Staff Payment' || item.group === 'Vendor & Staff') vendor += item.amount;
       else if (item.category === 'Purchase' || item.group === 'Material Purchases') material += item.amount;
       else petty += item.amount;
     });
-
     return { milk, vendor, petty, material };
   }, [outflows]);
 
-  const collections = shiftTotals.collections_list || [];
-  
-  const filteredCollections = useMemo(() => {
-    return collections.filter(item => {
-      const matchesSearch =
-        !searchTerm.trim() ||
-        item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.partyName && item.partyName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.details && item.details.toLowerCase().includes(searchTerm.toLowerCase()));
-
-      const matchesCat =
-        selectedCategory === 'All' ||
-        item.source === selectedCategory ||
-        item.category === selectedCategory;
-
-      return matchesSearch && matchesCat;
-    });
-  }, [collections, searchTerm, selectedCategory]);
+  const filteredCollections = useMemo(() => collections.filter(item => {
+    const matchesSearch =
+      !query ||
+      item.title.toLowerCase().includes(query) ||
+      (item.partyName && item.partyName.toLowerCase().includes(query)) ||
+      (item.details && item.details.toLowerCase().includes(query));
+    const matchesCat = selectedCategory === 'All' || item.source === selectedCategory || item.category === selectedCategory;
+    return matchesSearch && matchesCat;
+  }), [collections, query, selectedCategory]);
 
   const collectionBreakdown = useMemo(() => {
     let ledger = 0;
     let delivery = 0;
     let refunds = 0;
-
     collections.forEach(item => {
       if (item.source === 'Customer Ledger' || item.category === 'Customer Ledger') ledger += item.amount;
       else if (item.source === 'Daily Delivery' || item.category === 'Daily Delivery') delivery += item.amount;
       else refunds += item.amount;
     });
-
     return { ledger, delivery, refunds };
   }, [collections]);
 
-  const cashSalesList = shiftTotals.cash_sales_list || [];
+  const filteredCashSales = useMemo(() => cashSalesList.filter(item => {
+    const matchesSearch =
+      !query ||
+      item.invoice_no.toLowerCase().includes(query) ||
+      (item.customer_name && item.customer_name.toLowerCase().includes(query));
+    const matchesCat =
+      selectedCategory === 'All' ||
+      (selectedCategory === 'Returns' && (item.refund_amount > 0 || item.status === 'Partially Returned')) ||
+      (selectedCategory === 'Completed' && item.status === 'Completed' && item.refund_amount === 0);
+    return matchesSearch && matchesCat;
+  }), [cashSalesList, query, selectedCategory]);
 
-  const filteredCashSales = useMemo(() => {
-    return cashSalesList.filter(item => {
-      const matchesSearch =
-        !searchTerm.trim() ||
-        item.invoice_no.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.customer_name && item.customer_name.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredAllBills = useMemo(() => allBillsList.filter(item => {
+    const matchesSearch =
+      !query ||
+      item.invoice_no.toLowerCase().includes(query) ||
+      (item.customer_name && item.customer_name.toLowerCase().includes(query));
+    const matchesCat = selectedCategory === 'All' || String(item.payment_mode).toLowerCase() === selectedCategory.toLowerCase();
+    return matchesSearch && matchesCat;
+  }), [allBillsList, query, selectedCategory]);
 
-      const matchesCat =
-        selectedCategory === 'All' ||
-        (selectedCategory === 'Returns' && (item.refund_amount > 0 || item.status === 'Partially Returned')) ||
-        (selectedCategory === 'Completed' && item.status === 'Completed' && item.refund_amount === 0);
-
-      return matchesSearch && matchesCat;
+  const billModeCounts = useMemo(() => {
+    const counts = { cash: 0, credit: 0, online: 0 };
+    allBillsList.forEach(bill => {
+      const mode = String(bill.payment_mode).toLowerCase();
+      if (mode === 'cash' || mode === 'credit' || mode === 'online') counts[mode] += 1;
     });
-  }, [cashSalesList, searchTerm, selectedCategory]);
+    return counts;
+  }, [allBillsList]);
 
-  const allBillsList = shiftTotals.all_bills_list || [];
+  const activeRows: unknown[] =
+    activeTab === 'expenses' ? filteredOutflows
+      : activeTab === 'collections' ? filteredCollections
+        : activeTab === 'sales' ? filteredCashSales
+          : filteredAllBills;
+  // Busy shifts have hundreds of bills: render a page at a time.
+  const { visibleItems, hiddenCount, sentinelRef, showMore, showAll } = useProgressiveList(activeRows, 60, `${activeTab}|${query}|${selectedCategory}`);
 
-  const filteredAllBills = useMemo(() => {
-    return allBillsList.filter(item => {
-      const matchesSearch =
-        !searchTerm.trim() ||
-        item.invoice_no.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.customer_name && item.customer_name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-      const matchesCat =
-        selectedCategory === 'All' ||
-        String(item.payment_mode).toLowerCase() === selectedCategory.toLowerCase();
-
-      return matchesSearch && matchesCat;
-    });
-  }, [allBillsList, searchTerm, selectedCategory]);
+  const canDeleteRows = canDelete && Boolean(onDeleteVendorTx);
+  const handleDelete = useCallback(async (referenceId: string, kind: 'payment' | 'refund') => {
+    if (!onDeleteVendorTx || deletingRef.current) return;
+    const confirmed = await confirmAction(kind === 'payment'
+      ? {
+          title: 'Yeh vendor payment delete karein?',
+          consequences: ['Payment ki raqam wapas drawer / account mein aa jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+        }
+      : {
+          title: 'Yeh vendor refund delete karein?',
+          consequences: ['Refund ki raqam account se wapas nikal jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+        });
+    if (!confirmed || deletingRef.current) return;
+    // One delete at a time: a second click on the same row must not post the reversal twice.
+    deletingRef.current = true;
+    setDeletingId(referenceId);
+    try {
+      await onDeleteVendorTx(referenceId);
+    } finally {
+      deletingRef.current = false;
+      setDeletingId(null);
+    }
+  }, [onDeleteVendorTx]);
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       // A confirmation opened from this dialog handles its own Esc.
-      if (e.key === 'Escape' && !isConfirmOpen()) {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
+      if (e.key !== 'Escape' || isConfirmOpen()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Esc in a filled search box clears it first (handled here: this capture listener runs before the field).
+      const target = e.target as HTMLElement | null;
+      if (target instanceof HTMLInputElement && target.type === 'search' && target.value) {
+        setSearchTerm('');
+        return;
       }
+      onClose();
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, onClose]);
 
+  // Focus moves into the dialog and returns to the link that opened it.
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const timer = window.setTimeout(() => panelRef.current?.focus({ preventScroll: true }), 0);
+    return () => {
+      window.clearTimeout(timer);
+      if (previous && previous !== document.body && document.contains(previous)) previous.focus({ preventScroll: true });
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const getCategoryIcon = (category: string) => {
-    const c = category.toLowerCase();
-    if (c.includes('milk')) return <Milk size={13} className="text-amber-500" />;
-    if (c.includes('vendor') || c.includes('staff')) return <Briefcase size={13} className="text-indigo-500" />;
-    if (c.includes('hospitality') || c.includes('kheer') || c.includes('chai')) return <Coffee size={13} className="text-rose-500" />;
-    if (c.includes('material') || c.includes('raw')) return <Package size={13} className="text-emerald-500" />;
-    return <Tag size={13} className="text-slate-400" />;
+  const handlePanelKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const nodes = (Array.from(panelRef.current.querySelectorAll(FOCUSABLE)) as HTMLElement[]).filter(node => node.getClientRects().length > 0);
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === panelRef.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  const renderRows = () => {
+    switch (activeTab) {
+      case 'expenses':
+        return (visibleItems as OutflowItem[]).map((item, idx) => (
+          <ExpenseRow
+            key={item.id || idx}
+            item={item}
+            canDelete={canDeleteRows}
+            deleting={Boolean(item.referenceId) && deletingId === item.referenceId}
+            onDelete={handleDelete}
+          />
+        ));
+      case 'collections':
+        return (visibleItems as CollectionItem[]).map((item, idx) => (
+          <CollectionRow
+            key={item.id || idx}
+            item={item}
+            canDelete={canDeleteRows}
+            deleting={Boolean(item.referenceId) && deletingId === item.referenceId}
+            onDelete={handleDelete}
+          />
+        ));
+      case 'sales':
+        return (visibleItems as CashSaleItem[]).map(item => <CashSaleRow key={item.id} item={item} />);
+      default:
+        return (visibleItems as BillItem[]).map(item => <BillRow key={item.id} item={item} />);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-[140] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs" onClick={onClose} />
+    <div className="fixed inset-0 z-[140] flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-150">
+      <div className="absolute inset-0 bg-slate-950/50" aria-hidden="true" onClick={onClose} />
 
-      <div className="relative bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-3xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
-        
-        <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/60 dark:bg-slate-800/40">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="p-1.5 rounded-xl bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-400">
-                <Receipt size={18} />
-              </span>
-              <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                Shift Activity & Breakdown
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 ml-8">
-              Complete audit of transactions recorded in this active shift session
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="Close dialog"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="px-4 sm:px-5 pt-3 pb-2 bg-slate-50/40 dark:bg-slate-800/20 border-b border-slate-100 dark:border-slate-800">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-slate-200/70 dark:bg-slate-800 p-1 rounded-2xl">
-            <button
-              type="button"
-              onClick={() => handleTabChange('bills')}
-              className={`px-3 py-2 rounded-xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
-                activeTab === 'bills'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs border border-slate-200/80 dark:border-slate-700'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <span className="text-[10px] uppercase font-bold text-slate-400">Bills Count</span>
-              <span className="font-mono text-xs sm:text-sm font-black">{shiftTotals.bills_count} bills</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleTabChange('sales')}
-              className={`px-3 py-2 rounded-xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
-                activeTab === 'sales'
-                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs border border-emerald-200 dark:border-emerald-800/50'
-                  : 'text-emerald-600/80 dark:text-emerald-400/80 hover:text-emerald-700'
-              }`}
-            >
-              <span className="text-[10px] uppercase font-bold text-emerald-600/70 dark:text-emerald-400/70">Cash Sales</span>
-              <span className="font-mono text-xs sm:text-sm font-black">+{money(shiftTotals.cash_sales)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleTabChange('collections')}
-              className={`px-3 py-2 rounded-xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
-                activeTab === 'collections'
-                  ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs border border-blue-200 dark:border-blue-800/50'
-                  : 'text-blue-600/80 dark:text-blue-400/80 hover:text-blue-700'
-              }`}
-            >
-              <span className="text-[10px] uppercase font-bold text-blue-600/70 dark:text-blue-400/70">Collections</span>
-              <span className="font-mono text-xs sm:text-sm font-black">+{money(shiftTotals.cash_collections)}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleTabChange('expenses')}
-              className={`px-3 py-2 rounded-xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
-                activeTab === 'expenses'
-                  ? 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-400 shadow-xs border border-rose-200 dark:border-rose-800/50'
-                  : 'text-rose-600/80 dark:text-rose-400/80 hover:text-rose-700'
-              }`}
-            >
-              <span className="text-[10px] uppercase font-bold text-rose-600/70 dark:text-rose-400/70">Expenses/Purchases</span>
-              <span className="font-mono text-xs sm:text-sm font-black">-{money(totalPayouts)}</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-          
-          {activeTab === 'expenses' && (
-            <div className="space-y-4">
-              
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/40">
-                  <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
-                    <Milk size={12} /> Milk Purchases
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-amber-900 dark:text-amber-200 block mt-0.5">
-                    {formatCurrency(expenseBreakdown.milk)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-900/40">
-                  <span className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1">
-                    <Briefcase size={12} /> Vendor & Staff
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-indigo-900 dark:text-indigo-200 block mt-0.5">
-                    {formatCurrency(expenseBreakdown.vendor)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/40">
-                  <span className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-400 flex items-center gap-1">
-                    <Tag size={12} /> Petty Expenses
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-rose-900 dark:text-rose-200 block mt-0.5">
-                    {formatCurrency(expenseBreakdown.petty)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/40">
-                  <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                    <Package size={12} /> Materials
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-emerald-900 dark:text-emerald-200 block mt-0.5">
-                    {formatCurrency(expenseBreakdown.material)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div className="relative flex-1">
-                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={e => setSearchTerm(e.target.value)}
-                    placeholder="Search expenses, payee, or milk supplier..."
-                    className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-rose-500"
-                  />
-                  {searchTerm && (
-                    <button aria-label="Hatayen"
-                      type="button"
-                      onClick={() => setSearchTerm('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-                  {expenseCategories.map(cat => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setSelectedCategory(cat)}
-                      className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                        selectedCategory === cat
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {filteredOutflows.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
-                    <Receipt size={32} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs font-medium">No payouts matching your search/filter</p>
-                  </div>
-                ) : (
-                  filteredOutflows.map((item, idx) => (
-                    <div
-                      key={item.id || idx}
-                      className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-800/60 transition-all flex items-center justify-between gap-3 shadow-2xs"
-                    >
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <span className="p-2 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-900/40 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5">
-                          {getCategoryIcon(item.category)}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h5 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate">
-                              {item.title}
-                            </h5>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                            <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 font-bold text-slate-700 dark:text-slate-300">
-                              {item.category}
-                            </span>
-                            {item.details && item.details !== item.category && (
-                              <span className="text-slate-400">· {item.details}</span>
-                            )}
-                            {item.time && formatTransactionTime(item.time) ? (
-                              <span className="flex items-center gap-0.5 text-slate-400">
-                                <Clock size={10} />
-                                {formatTransactionTime(item.time)}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <div className="text-right">
-                          <span className="text-sm sm:text-base font-black font-mono text-rose-600 dark:text-rose-400">
-                            -{money(item.amount)}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-medium block">
-                            Drawer Cash
-                          </span>
-                        </div>
-                        {canDelete && onDeleteVendorTx && item.referenceId && (item.category === 'Vendor / Staff Payment' || item.group === 'Vendor & Staff') && (
-                          <button aria-label="Delete Vendor Payment"
-                            type="button"
-                            onClick={async () => {
-                              if (await confirmAction({
-                                title: 'Yeh vendor payment delete karein?',
-                                consequences: ['Payment ki raqam wapas drawer / account mein aa jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
-                              })) {
-                                onDeleteVendorTx(item.referenceId!);
-                              }
-                            }}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 dark:bg-slate-800 dark:hover:bg-rose-950/50 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
-                            title="Delete Vendor Payment"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'collections' && (
-            <div className="space-y-4">
-              
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <div className="p-3 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-900/40">
-                  <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1">
-                    <User size={12} /> Customer Ledger
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-blue-900 dark:text-blue-200 block mt-0.5">
-                    {formatCurrency(collectionBreakdown.ledger)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-cyan-50/70 dark:bg-cyan-950/30 border border-cyan-200/80 dark:border-cyan-900/40">
-                  <span className="text-[10px] uppercase font-bold text-cyan-700 dark:text-cyan-400 flex items-center gap-1">
-                    <Truck size={12} /> Delivery Collections
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-cyan-900 dark:text-cyan-200 block mt-0.5">
-                    {formatCurrency(collectionBreakdown.delivery)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200/80 dark:border-violet-900/40">
-                  <span className="text-[10px] uppercase font-bold text-violet-700 dark:text-violet-400 flex items-center gap-1">
-                    <ArrowDownLeft size={12} /> Vendor Refunds
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-violet-900 dark:text-violet-200 block mt-0.5">
-                    {formatCurrency(collectionBreakdown.refunds)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="relative">
-                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  placeholder="Search customer name or collection note..."
-                  className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-blue-500"
-                />
-              </div>
-
-              <div className="space-y-2">
-                {filteredCollections.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
-                    <Receipt size={32} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs font-medium">No collections recorded in this shift</p>
-                  </div>
-                ) : (
-                  filteredCollections.map((item, idx) => (
-                    <div
-                      key={item.id || idx}
-                      className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-800/60 transition-all flex items-center justify-between gap-3 shadow-2xs"
-                    >
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <span className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-100 dark:border-blue-900/40 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
-                          <ArrowDownLeft size={14} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <h5 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate">
-                            {item.title}
-                          </h5>
-                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                            <span className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-bold">
-                              {item.source}
-                            </span>
-                            {item.details && item.details !== item.title && (
-                              <span className="text-slate-400 truncate">· {item.details}</span>
-                            )}
-                            {item.time && formatTransactionTime(item.time) ? (
-                              <span className="flex items-center gap-0.5 text-slate-400">
-                                <Clock size={10} />
-                                {formatTransactionTime(item.time)}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <div className="text-right">
-                          <span className="text-sm sm:text-base font-black font-mono text-blue-600 dark:text-blue-400">
-                            +{money(item.amount)}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-medium block">
-                            Cash In
-                          </span>
-                        </div>
-                        {canDelete && onDeleteVendorTx && item.referenceId && (item.category === 'Vendor Refund' || item.source === 'Vendor / Staff Refund') && (
-                          <button aria-label="Delete Vendor Refund"
-                            type="button"
-                            onClick={async () => {
-                              if (await confirmAction({
-                                title: 'Yeh vendor refund delete karein?',
-                                consequences: ['Refund ki raqam account se wapas nikal jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
-                              })) {
-                                onDeleteVendorTx(item.referenceId!);
-                              }
-                            }}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 dark:bg-slate-800 dark:hover:bg-rose-950/50 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
-                            title="Delete Vendor Refund"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'sales' && (
-            <div className="space-y-4">
-              
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/40">
-                  <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                    <ShoppingCart size={12} /> Net Cash Sales
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-emerald-900 dark:text-emerald-200 block mt-0.5">
-                    +{money(shiftTotals.cash_sales)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/40">
-                  <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
-                    <ArrowUpRight size={12} /> Cash Returns Issued
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-amber-900 dark:text-amber-200 block mt-0.5">
-                    -{money(shiftTotals.cash_refunds || 0)}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                    <Receipt size={12} /> Cash Bills
-                  </span>
-                  <span className="text-sm sm:text-base font-black font-mono text-slate-800 dark:text-slate-200 block mt-0.5">
-                    {cashSalesList.length} bills
-                  </span>
-                </div>
-              </div>
-
-              <div className="relative">
-                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  placeholder="Search invoice number or customer name..."
-                  className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                {filteredCashSales.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
-                    <Receipt size={32} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs font-medium">No cash sales found</p>
-                  </div>
-                ) : (
-                  filteredCashSales.map(item => (
-                    <div
-                      key={item.id}
-                      className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-800/60 transition-all flex items-center justify-between gap-3 shadow-2xs"
-                    >
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-900/40 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
-                          <ShoppingCart size={14} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h5 className="text-xs sm:text-sm font-black font-mono text-slate-900 dark:text-white truncate">
-                              #{item.invoice_no}
-                            </h5>
-                            <span className={`px-2 py-0.2 rounded-full text-[9px] font-bold ${
-                              item.status === 'Partially Returned'
-                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
-                                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
-                            }`}>
-                              {item.status}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                            <span>{item.customer_name || 'Walk-in Customer'}</span>
-                            {item.time && formatTransactionTime(item.time) ? (
-                              <span className="flex items-center gap-0.5 text-slate-400">
-                                <Clock size={10} />
-                                {formatTransactionTime(item.time)}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-sm sm:text-base font-black font-mono text-emerald-600 dark:text-emerald-400">
-                          +{money(item.net_cash)}
-                        </span>
-                        {item.refund_amount > 0 && (
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium block">
-                            Return: -{money(item.refund_amount)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'bills' && (
-            <div className="space-y-4">
-              
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="p-3 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Total Bills</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-slate-900 dark:text-white block mt-0.5">
-                    {allBillsList.length} bills
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/40">
-                  <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Cash Bills</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-emerald-900 dark:text-emerald-200 block mt-0.5">
-                    {allBillsList.filter(b => String(b.payment_mode).toLowerCase() === 'cash').length}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/40">
-                  <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Credit Bills</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-amber-900 dark:text-amber-200 block mt-0.5">
-                    {allBillsList.filter(b => String(b.payment_mode).toLowerCase() === 'credit').length}
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-900/40">
-                  <span className="text-[10px] uppercase font-bold text-purple-700 dark:text-purple-400">Online Bills</span>
-                  <span className="text-sm sm:text-base font-black font-mono text-purple-900 dark:text-purple-200 block mt-0.5">
-                    {allBillsList.filter(b => String(b.payment_mode).toLowerCase() === 'online').length}
-                  </span>
-                </div>
-              </div>
-
-              <div className="relative">
-                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  placeholder="Search invoice number or customer name..."
-                  className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-slate-500"
-                />
-              </div>
-
-              <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                {filteredAllBills.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400">
-                    <Receipt size={32} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs font-medium">No bills found</p>
-                  </div>
-                ) : (
-                  filteredAllBills.map(item => (
-                    <div
-                      key={item.id}
-                      className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hover:border-slate-400 dark:hover:border-slate-600 transition-all flex items-center justify-between gap-3 shadow-2xs"
-                    >
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <span className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0 mt-0.5">
-                          <Receipt size={14} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h5 className="text-xs sm:text-sm font-black font-mono text-slate-900 dark:text-white truncate">
-                              #{item.invoice_no}
-                            </h5>
-                            <span className={`px-2 py-0.2 rounded-full text-[9px] font-bold ${
-                              String(item.payment_mode).toLowerCase() === 'cash'
-                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
-                                : String(item.payment_mode).toLowerCase() === 'credit'
-                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
-                                : 'bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300'
-                            }`}>
-                              {item.payment_mode}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                            <span>{item.customer_name || 'Walk-in Customer'}</span>
-                            {item.time && formatTransactionTime(item.time) ? (
-                              <span className="flex items-center gap-0.5 text-slate-400">
-                                <Clock size={10} />
-                                {formatTransactionTime(item.time)}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-sm sm:text-base font-black font-mono text-slate-900 dark:text-white">
-                          {money(item.total)}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-medium block">
-                          Total Bill
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-        </div>
-
-        <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">
-              {activeTab === 'expenses' && 'Total Shift Payouts'}
-              {activeTab === 'collections' && 'Total Shift Collections'}
-              {activeTab === 'sales' && 'Net POS Cash Sales'}
-              {activeTab === 'bills' && 'Total Shift Bills'}
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shift-activity-title"
+        tabIndex={-1}
+        onKeyDown={handlePanelKeyDown}
+        className="relative flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-card border border-line bg-surface shadow-e3 outline-none animate-in zoom-in-95 duration-200"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-control bg-brand-soft text-brand-fg" aria-hidden="true">
+              <Receipt size={18} />
             </span>
-            <span className="text-sm sm:text-base font-black font-mono text-slate-900 dark:text-white">
-              {activeTab === 'expenses' && `-${money(totalPayouts)}`}
-              {activeTab === 'collections' && `+${money(shiftTotals.cash_collections)}`}
-              {activeTab === 'sales' && `+${money(shiftTotals.cash_sales)}`}
+            <div className="min-w-0">
+              <h2 id="shift-activity-title" className="text-base font-bold tracking-tight text-fg sm:text-lg">
+                Shift Activity & Breakdown
+              </h2>
+              <p className="mt-0.5 text-xs text-fg-subtle">
+                Complete audit of transactions recorded in this active shift session
+              </p>
+            </div>
+          </div>
+          <IconButton aria-label="Close dialog" icon={<X />} onClick={onClose} className="-mr-1 shrink-0" />
+        </div>
+
+        <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
+          <SegmentedControl<ShiftActivityTab>
+            aria-label="Shift activity"
+            value={activeTab}
+            onChange={handleTabChange}
+            fullWidth
+            options={[
+              { value: 'bills', label: 'Bills', count: shiftTotals.bills_count },
+              { value: 'sales', label: 'Cash sales', count: cashSalesList.length },
+              { value: 'collections', label: 'Collections', count: collections.length },
+              { value: 'expenses', label: 'Expenses', count: outflows.length },
+            ]}
+          />
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
+          {activeTab === 'expenses' && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Tile icon={<Milk />} label="Milk Purchases"><Money amount={expenseBreakdown.milk} /></Tile>
+              <Tile icon={<Briefcase />} label="Vendor & Staff"><Money amount={expenseBreakdown.vendor} /></Tile>
+              <Tile icon={<Tag />} label="Petty Expenses"><Money amount={expenseBreakdown.petty} /></Tile>
+              <Tile icon={<Package />} label="Materials"><Money amount={expenseBreakdown.material} /></Tile>
+            </div>
+          )}
+          {activeTab === 'collections' && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Tile icon={<User />} label="Customer Ledger"><Money amount={collectionBreakdown.ledger} /></Tile>
+              <Tile icon={<Truck />} label="Delivery Collections"><Money amount={collectionBreakdown.delivery} /></Tile>
+              <Tile icon={<ArrowDownLeft />} label="Vendor Refunds"><Money amount={collectionBreakdown.refunds} /></Tile>
+            </div>
+          )}
+          {activeTab === 'sales' && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Tile icon={<ShoppingCart />} label="Net Cash Sales"><span className="text-success-fg">+<Money amount={shiftTotals.cash_sales} /></span></Tile>
+              <Tile icon={<ArrowUpRight />} label="Cash Returns Issued"><Money amount={-(shiftTotals.cash_refunds || 0)} className="text-warning-fg" /></Tile>
+              <Tile icon={<Receipt />} label="Cash Bills">{cashSalesList.length} bills</Tile>
+            </div>
+          )}
+          {activeTab === 'bills' && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Tile label="Total Bills">{allBillsList.length} bills</Tile>
+              <Tile label="Cash Bills">{billModeCounts.cash}</Tile>
+              <Tile label="Credit Bills">{billModeCounts.credit}</Tile>
+              <Tile label="Online Bills">{billModeCounts.online}</Tile>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <SearchInput
+              value={searchTerm}
+              onChange={setSearchTerm}
+              placeholder={SEARCH_PLACEHOLDER[activeTab]}
+              aria-label="Search shift activity"
+              className="w-full sm:flex-1"
+            />
+            {activeTab === 'expenses' && expenseCategories.length > 1 && (
+              <SegmentedControl<string>
+                aria-label="Expense category"
+                size="sm"
+                value={selectedCategory}
+                onChange={setSelectedCategory}
+                className="sm:max-w-[55%]"
+                options={expenseCategories.map(cat => ({ value: cat, label: cat }))}
+              />
+            )}
+          </div>
+
+          {activeRows.length === 0 ? (
+            <div className="rounded-card border border-dashed border-line">
+              <EmptyState size="compact" icon={<Receipt />} title={EMPTY_TEXT[activeTab]} />
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-card border border-line bg-surface">
+              <ul className="divide-y divide-line/70">{renderRows()}</ul>
+              <LoadMoreRow sentinelRef={sentinelRef} hiddenCount={hiddenCount} onShowMore={showMore} onShowAll={showAll} />
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-surface px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <span className="block text-[11px] font-semibold text-fg-subtle">{FOOTER_LABEL[activeTab]}</span>
+            <span className="block text-base font-bold tabular-nums text-fg sm:text-lg">
+              {activeTab === 'expenses' && <Money amount={-totalPayouts} />}
+              {activeTab === 'collections' && <>+<Money amount={shiftTotals.cash_collections} /></>}
+              {activeTab === 'sales' && <>+<Money amount={shiftTotals.cash_sales} /></>}
               {activeTab === 'bills' && `${shiftTotals.bills_count} bills`}
             </span>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-950 text-xs font-bold transition-all cursor-pointer shadow-xs"
-          >
+          <Button variant="secondary" onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
-
       </div>
     </div>
   );
