@@ -1,6 +1,6 @@
 import type { ReportDefinition, ReportRow } from '../types';
 import {
-  autoGroup, COLOR, dayOf, groupSum, inRange, isMilkPurchaseVoid, lower, n, r2, r3, sum, supplierName,
+  autoGroup, COLOR, dayOf, groupSum, inRange, isPurchaseVoid, isSupplierWaiver, lower, n, r2, r3, sum, supplierName,
   timeSeries, topSlices
 } from '../helpers';
 import { buildSupplierStatement } from '../../supplierStatement';
@@ -12,7 +12,7 @@ const balanceOf = (s: Supplier) => r2(n(s.pending_balance ?? s.balance));
 const isPayment = (tx: SupplierTransaction) => ['payment', 'advance'].includes(lower(tx.type));
 const txMode = (tx: SupplierTransaction) => String(tx.mode || (tx as any).details?.mode || 'Cash');
 const txNote = (tx: SupplierTransaction) => String(tx.note || (tx as any).details?.note || '');
-const isWaiver = (tx: SupplierTransaction) => Boolean((tx as any).details?.waiver) || /waiver|discount/i.test(txMode(tx));
+const isWaiver = isSupplierWaiver;
 const fmt = (value: number) => Math.round(value).toLocaleString('en-PK');
 const statusOf = (balance: number) => (balance > 0.5 ? 'Payable' : balance < -0.5 ? 'Advance' : 'Settled');
 
@@ -35,17 +35,18 @@ export const supplierReports: ReportDefinition[] = [
       };
       const add = (map: Map<string, number>, id: string, value: number) => { if (id) map.set(id, (map.get(id) || 0) + value); };
       data.purchases.forEach(p => {
-        if (!p || isMilkPurchaseVoid(p.status)) return;
+        if (!p || isPurchaseVoid(p.status)) return;
         later(lastPurchase, p.supplier_id, dayOf(p.date));
         if (inRange(p.date, f)) add(bought, p.supplier_id, n(p.total_amount));
       });
       data.materialPurchases.forEach(m => {
-        if (!m || isMilkPurchaseVoid(m.status)) return;
+        if (!m || isPurchaseVoid(m.status)) return;
         later(lastPurchase, m.supplier_id, dayOf(m.date));
         if (inRange(m.date, f)) add(bought, m.supplier_id, n(m.total_amount));
       });
+      // A waiver settles the khata but pays nothing, so it is neither "paid" nor the last payment.
       data.supplierTransactions.forEach(t => {
-        if (!t || !isPayment(t)) return;
+        if (!t || !isPayment(t) || isWaiver(t)) return;
         later(lastPayment, t.supplier_id, dayOf(t.date));
         if (inRange(t.date, f)) add(paid, t.supplier_id, n(t.amount));
       });
@@ -201,7 +202,7 @@ export const supplierReports: ReportDefinition[] = [
     comparable: true,
     build: (data, f) => {
       const list = data.materialPurchases.filter(m =>
-        m && !isMilkPurchaseVoid(m.status) && inRange(m.date, f) &&
+        m && !isPurchaseVoid(m.status) && inRange(m.date, f) &&
         (!f.supplierId || m.supplier_id === f.supplierId) &&
         (!f.itemId || m.item_id === f.itemId)
       );

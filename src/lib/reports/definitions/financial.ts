@@ -1,23 +1,26 @@
 import type { ReportData, ReportDefinition, ReportFilters, ReportRow, ReportSectionLine, Tone } from '../types';
 import {
-  accountName, autoGroup, bankTxEffect, chronological, COLOR, customerName, dayOf, groupSum, inRange, isMilkPurchaseVoid,
-  isVoidStatus, lower, n, pct, r2, r3, reportSales, saleFigures, saleLines, saleMode, sum, supplierName, timeSeries, topSlices
+  accountName, autoGroup, bankTxEffect, bucketKey, bucketKeys, bucketLabel, cashInTransit, chronological, COLOR, customerName, dayOf,
+  groupSum, inRange, isCustomerReceipt, isNonCashCustomerTx, isPurchaseVoid, isSupplierWaiver, isVoidExpense, itemStock, lower, n,
+  pct, r2, r3, reportSales, saleFigures, saleLines, saleMode, sum, supplierName, timeSeries, topSlices
 } from '../helpers';
+import { isOpenStart } from '../presets';
 import {
   bankTxCategory, expenseCashPaid, isInternalCashTransfer, isPurchaseReturnTx, isSalesRefundTx, isSpotSupplierPayment,
   materialCashPaid, purchaseCashPaid
 } from '../../moneyFlow';
-import { buildStockProfitReport, itemStockValue, type StockProfitSource } from '../../stockProfit';
+import { buildStockProfitReport, type StockProfitSource } from '../../stockProfit';
 import type { BankTransaction, ExpenseEntry, FinancialAccount } from '../../../types';
 
 const rs = (value: number) => `Rs ${Math.round(value).toLocaleString('en-PK')}`;
 
 const activeExpenses = (data: ReportData, f: Pick<ReportFilters, 'from' | 'to'>) =>
-  data.expenses.filter(e => inRange(e.date, f) && !['cancelled', 'returned'].includes(lower((e as any).status)));
+  data.expenses.filter(e => inRange(e.date, f) && !isVoidExpense(e));
 const milkPurchases = (data: ReportData, f: Pick<ReportFilters, 'from' | 'to'>) =>
-  data.purchases.filter(p => inRange(p.date, f) && !isMilkPurchaseVoid(p.status));
+  data.purchases.filter(p => inRange(p.date, f) && !isPurchaseVoid(p.status));
+// Fully returned material bills keep their amount, so they are left out like returned milk slips.
 const materialPurchases = (data: ReportData, f: Pick<ReportFilters, 'from' | 'to'>) =>
-  data.materialPurchases.filter(p => inRange(p.date, f) && !isVoidStatus(p.status));
+  data.materialPurchases.filter(p => inRange(p.date, f) && !isPurchaseVoid(p.status));
 
 const txEffect = (tx: BankTransaction) => bankTxEffect(tx.type, tx.amount);
 const supplierBalance = (s: { pending_balance?: number; balance?: number }) => n(s.pending_balance ?? s.balance);
@@ -38,14 +41,11 @@ function balanceWindow(data: ReportData, accounts: FinancialAccount[], f: Pick<R
   return { txs, current, opening, closing };
 }
 
-/** Stock at cost today: loose stock plus packed counts, from the live inventory row when there is one. */
+/** Stock at cost today, valued exactly like the Stock Valuation report (inactive items still holding stock included). */
 function stockAtCost(data: ReportData) {
   let missing = 0;
   const value = sum(data.items, item => {
-    const inv = data.inventory.find(i => i.item_id === item.id || lower(i.name) === lower(item.name));
-    const loose = inv ? n(inv.quantity) : n((item as any).stock);
-    const variants = inv?.variant_stocks || item.variant_stocks || {};
-    const v = itemStockValue(item as any, loose, variants);
+    const v = itemStock(data, item);
     if (v.costMissing) missing++;
     return v.costValue;
   });
@@ -88,17 +88,21 @@ export const financialReports: ReportDefinition[] = [
       const milkCost = sum(milk, p => n(p.total_amount));
       const materials = materialPurchases(data, f);
       const collected = sum(figs, x => x.cash + x.online);
-      const recoveries = sum(data.customerTransactions.filter(t => t.type === 'Payment' && inRange(t.date, f)), t => n(t.amount));
-      const supply = sum(data.dailySupplyEntries.filter(e => inRange(e.date, f) && !isVoidStatus((e as any).status)), e => n(e.total_amount));
+      // Opening balances and bad-debt write-offs are khata rows, not money received.
+      const recoveries = sum(data.customerTransactions.filter(t => isCustomerReceipt(t) && inRange(t.date, f)), t => n(t.amount));
+      // Delivery sales the dashboard counts: not pending, not cancelled.
+      const supply = sum(data.dailySupplyEntries.filter(e => inRange(e.date, f) && !['pending', 'cancelled'].includes(lower((e as any).status))), e => n(e.total_amount));
       const receivables = sum(data.customers, c => Math.max(0, n(c.balance)));
       const supplierDue = sum(data.suppliers, s => Math.max(0, supplierBalance(s)));
       const vendorDue = sum(data.expenseVendors, v => Math.max(0, n(v.pending_balance)));
-      const cashBank = sum(data.accounts, a => n(a.balance));
+      // Same "money we have" as the dashboard: account balances plus cash on its way to the head.
+      const transit = cashInTransit(data);
+      const cashBank = r2(sum(data.accounts, a => n(a.balance)) + transit);
 
       const groupBy = autoGroup(f);
       type Ev = { date: string; sales: number; expenses: number; purchases: number };
       const events: Ev[] = [
-        ...sales.map(s => ({ date: s.date, sales: saleFigures(s).net, expenses: 0, purchases: 0 })),
+        ...sales.map((s, i) => ({ date: s.date, sales: figs[i].net, expenses: 0, purchases: 0 })),
         ...expenses.map(e => ({ date: e.date, sales: 0, expenses: n(e.amount), purchases: 0 })),
         ...milk.map(p => ({ date: p.date, sales: 0, expenses: 0, purchases: n(p.total_amount) })),
         ...materials.map(p => ({ date: p.date, sales: 0, expenses: 0, purchases: n(p.total_amount) })),
@@ -122,7 +126,7 @@ export const financialReports: ReportDefinition[] = [
           { key: 'recoveries', label: 'Customer recoveries', value: recoveries, format: 'money' },
           { key: 'receivables', label: 'Receivables today', value: receivables, format: 'money', tone: 'warn', hint: 'Customers owe' },
           { key: 'payables', label: 'Payables today', value: r2(supplierDue + vendorDue), format: 'money', inverse: true, hint: 'Suppliers and vendors' },
-          { key: 'cashBank', label: 'Cash & bank today', value: cashBank, format: 'money', tone: 'info' },
+          { key: 'cashBank', label: 'Cash & bank today', value: cashBank, format: 'money', tone: 'info', hint: transit > 0 ? `Incl. ${rs(transit)} in transit` : undefined },
         ],
         charts: [
           {
@@ -353,7 +357,7 @@ export const financialReports: ReportDefinition[] = [
           },
         ],
         notes: Math.abs(transfersNet) > 0.009 && !f.accountId
-          ? [{ tone: 'info', text: 'Some transfers have only one side recorded, so they change the total balance.' }]
+          ? [{ tone: 'info', text: 'Some transfers have only one side recorded, so they change the total balance. Cash sent to the head leaves the drawer at shift close and reaches an account only when it is accepted.' }]
           : undefined,
       };
     },
@@ -373,12 +377,14 @@ export const financialReports: ReportDefinition[] = [
       if (!account) return { notes: [{ tone: 'warn', text: 'Choose an account to see its ledger.' }] };
       const { txs, opening, closing } = balanceWindow(data, [account], f);
       const entries = txs.filter(t => inRange(t.date, f)).sort(chronological);
+      const groupBy = autoGroup(f);
       let balance = opening;
+      // Balance at the end of each day / week / month: the last running balance inside that bucket.
       const daily = new Map<string, number>();
       const rows: ReportRow[] = entries.map((t, index) => {
         const e = txEffect(t);
         balance = r2(balance + e);
-        daily.set(dayOf(t.date), balance);
+        daily.set(bucketKey(dayOf(t.date), groupBy), balance);
         const transfer = isInternalCashTransfer(t);
         return {
           seq: index + 1, date: t.date, description: t.description, category: txCategory(t),
@@ -390,10 +396,13 @@ export const financialReports: ReportDefinition[] = [
       });
       const totalIn = sum(rows, r => n(r.in));
       const totalOut = sum(rows, r => n(r.out));
+      // "All time" starts at the first entry; it used to draw (and cut off at) daily points from the year 2000.
+      const seriesFrom = isOpenStart(f.from) ? (entries.length ? dayOf(entries[0].date) : f.to) : f.from;
+      const keys = bucketKeys(seriesFrom, f.to, groupBy);
       let last = opening;
-      const balanceSeries = timeSeries([] as never[], () => '', f, 'day', () => undefined, ['balance']).map(row => {
-        if (daily.has(row.key)) last = daily.get(row.key)!;
-        return { ...row, balance: last };
+      const balanceSeries = (keys.length ? keys : [...daily.keys()]).map(key => {
+        if (daily.has(key)) last = daily.get(key)!;
+        return { key, label: bucketLabel(key, groupBy), balance: last };
       });
       return {
         kpis: [
@@ -404,7 +413,7 @@ export const financialReports: ReportDefinition[] = [
           { key: 'entries', label: 'Entries', value: rows.length, format: 'number' },
         ],
         charts: [{
-          id: 'balance', title: 'Balance by day', type: 'line', data: balanceSeries, xKey: 'label', format: 'money', wide: true,
+          id: 'balance', title: `Balance by ${groupBy}`, type: 'line', data: balanceSeries, xKey: 'label', format: 'money', wide: true,
           series: [{ key: 'balance', label: 'Balance', color: COLOR.online }],
         }],
         tables: [{
@@ -443,12 +452,24 @@ export const financialReports: ReportDefinition[] = [
     financial: true,
     snapshot: true,
     build: (data, f) => {
+      // One pass over the bank ledger instead of one pass per account.
+      const activity = new Map<string, { inflow: number; outflow: number; last: string }>();
+      data.bankTransactions.forEach(t => {
+        if (!t?.account_id) return;
+        const row = activity.get(t.account_id) || { inflow: 0, outflow: 0, last: '' };
+        const day = dayOf(t.date);
+        if (day > row.last) row.last = day;
+        if (inRange(t.date, f)) {
+          const e = txEffect(t);
+          if (e > 0) row.inflow += e; else row.outflow -= e;
+        }
+        activity.set(t.account_id, row);
+      });
       const rows: ReportRow[] = data.accounts.map(a => {
-        const txs = data.bankTransactions.filter(t => t.account_id === a.id);
-        const period = txs.filter(t => inRange(t.date, f));
-        const inflow = sum(period.filter(t => txEffect(t) > 0), txEffect);
-        const outflow = sum(period.filter(t => txEffect(t) < 0), t => -txEffect(t));
-        const last = txs.reduce((max, t) => (dayOf(t.date) > max ? dayOf(t.date) : max), '');
+        const act = activity.get(a.id);
+        const inflow = r2(act?.inflow || 0);
+        const outflow = r2(act?.outflow || 0);
+        const last = act?.last || '';
         return {
           account: a.name, type: a.type, bank: [a.bank_name, a.account_number].filter(Boolean).join(' · '),
           status: a.isActive === false ? 'Inactive' : a.isDrawer ? 'Drawer' : 'Active',
@@ -511,18 +532,26 @@ export const financialReports: ReportDefinition[] = [
           _drill: { report: 'sale_register', filters: { from: dayOf(s.date), to: dayOf(s.date) }, label: 'Bills of the day' },
         });
       });
-      data.customerTransactions.filter(t => t.type === 'Payment' && inRange(t.date, f)).forEach(t => add(t.id, {
-        time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: 'Customer payment', ref: t.mode || '',
-        party: customerName(data, t.customer_id, 'Customer'), description: t.note || 'Payment received',
-        in: r2(n(t.amount)), out: 0, moved: 0,
-        _drill: { report: 'customer_statement', filters: { customerId: t.customer_id }, label: 'Customer statement' },
-      }));
-      data.supplierTransactions.filter(t => (t.type === 'Payment' || t.type === 'Advance') && inRange(t.date, f) && !isSpotSupplierPayment(t)).forEach(t => add(t.id, {
-        time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: 'Supplier payment', ref: t.mode || '',
-        party: supplierName(data, t.supplier_id), description: t.note || (t.type === 'Advance' ? 'Advance paid' : 'Payment made'),
-        in: 0, out: r2(n(t.amount)), moved: 0,
-        _drill: { report: 'supplier_statement', filters: { supplierId: t.supplier_id }, label: 'Supplier statement' },
-      }));
+      // Opening-balance and bad-debt write-off rows are khata entries: listed, but no money came in.
+      data.customerTransactions.filter(t => t.type === 'Payment' && inRange(t.date, f)).forEach(t => {
+        const money = !isNonCashCustomerTx(t);
+        add(t.id, {
+          time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: money ? 'Customer payment' : 'Khata adjustment', ref: t.mode || '',
+          party: customerName(data, t.customer_id, 'Customer'), description: t.note || (money ? 'Payment received' : 'No money received'),
+          in: money ? r2(n(t.amount)) : 0, out: 0, moved: 0,
+          _drill: { report: 'customer_statement', filters: { customerId: t.customer_id }, label: 'Customer statement' },
+        });
+      });
+      // A supplier waiver settles the khata without paying anything.
+      data.supplierTransactions.filter(t => (t.type === 'Payment' || t.type === 'Advance') && inRange(t.date, f) && !isSpotSupplierPayment(t)).forEach(t => {
+        const waiver = isSupplierWaiver(t);
+        add(t.id, {
+          time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: waiver ? 'Supplier waiver' : 'Supplier payment', ref: t.mode || '',
+          party: supplierName(data, t.supplier_id), description: t.note || (waiver ? 'Settled by waiver, nothing paid' : t.type === 'Advance' ? 'Advance paid' : 'Payment made'),
+          in: 0, out: waiver ? 0 : r2(n(t.amount)), moved: 0,
+          _drill: { report: 'supplier_statement', filters: { supplierId: t.supplier_id }, label: 'Supplier statement' },
+        });
+      });
       milkPurchases(data, f).forEach(p => add(p.id, {
         time: p.created_at && dayOf(p.created_at) === dayOf(p.date) ? p.created_at : p.date, type: 'Milk purchase', ref: String(p.shift || ''),
         party: supplierName(data, p.supplier_id, p.supplier_name),
@@ -584,7 +613,7 @@ export const financialReports: ReportDefinition[] = [
               key: 'type', label: 'Type', format: 'badge', tones: {
                 Sale: 'good', 'Customer payment': 'good', Deposit: 'good', 'Purchase return': 'good',
                 'Supplier payment': 'warn', Refund: 'warn', 'Milk purchase': 'info', 'Material purchase': 'info',
-                Expense: 'bad', Withdrawal: 'bad', Transfer: 'neutral',
+                Expense: 'bad', Withdrawal: 'bad', Transfer: 'neutral', 'Khata adjustment': 'neutral', 'Supplier waiver': 'neutral',
               },
             },
             { key: 'ref', label: 'Reference' },
@@ -614,11 +643,14 @@ export const financialReports: ReportDefinition[] = [
       const accountLines = [...data.accounts].sort((a, b) => n(b.balance) - n(a.balance))
         .map(a => ({ label: `${a.name} (${a.type})`, value: r2(n(a.balance)), format: 'money' as const, indent: 2, tone: n(a.balance) < 0 ? 'bad' as Tone : undefined }));
       const cashBank = sum(data.accounts, a => n(a.balance));
+      // Cash remitted to the head leaves the drawer account at shift close and reaches no account until
+      // it is accepted (docs/cash-control.md): it is still the business's money, in transit.
+      const transit = cashInTransit(data);
       const receivables = sum(data.customers, c => Math.max(0, n(c.balance)));
       const supplierAdvances = sum(data.suppliers, s => Math.max(0, -supplierBalance(s)));
       const stock = stockAtCost(data);
       const milk = unallocatedMilkValue(data);
-      const assets = r2(cashBank + receivables + supplierAdvances + stock.value + milk);
+      const assets = r2(cashBank + transit + receivables + supplierAdvances + stock.value + milk);
       const payables = sum(data.suppliers, s => Math.max(0, supplierBalance(s)));
       const advances = sum(data.customers, c => Math.max(0, -n(c.balance)));
       const vendorDue = sum(data.expenseVendors, v => Math.max(0, n(v.pending_balance)));
@@ -629,7 +661,7 @@ export const financialReports: ReportDefinition[] = [
           { key: 'assets', label: 'Total assets', value: assets, format: 'money', tone: 'good' },
           { key: 'liabilities', label: 'Total liabilities', value: liabilities, format: 'money', inverse: true, tone: 'warn' },
           { key: 'equity', label: "Owner's equity", value: equity, format: 'money', tone: equity >= 0 ? 'good' : 'bad' },
-          { key: 'cash', label: 'Cash & bank', value: cashBank, format: 'money' },
+          { key: 'cash', label: 'Cash & bank', value: r2(cashBank + transit), format: 'money', hint: transit > 0 ? `Incl. ${rs(transit)} in transit` : undefined },
           { key: 'stock', label: 'Stock at cost', value: r2(stock.value + milk), format: 'money' },
         ],
         statements: [
@@ -637,6 +669,7 @@ export const financialReports: ReportDefinition[] = [
             id: 'assets', title: 'Assets', lines: [
               { label: 'Cash & bank', value: cashBank, format: 'money', indent: 1 },
               ...accountLines,
+              ...(transit > 0 ? [{ label: 'Cash in transit (sent to head, not yet received)', value: transit, format: 'money' as const, indent: 1 }] : []),
               { label: 'Receivables (customers owe)', value: receivables, format: 'money', indent: 1 },
               { label: 'Advances to suppliers', value: supplierAdvances, format: 'money', indent: 1 },
               { label: 'Stock at cost', value: stock.value, format: 'money', indent: 1 },
@@ -663,7 +696,7 @@ export const financialReports: ReportDefinition[] = [
         charts: [{
           id: 'assets', title: 'Assets mix', type: 'pie', xKey: 'name', format: 'money',
           data: [
-            { name: 'Cash & bank', value: cashBank }, { name: 'Receivables', value: receivables },
+            { name: 'Cash & bank', value: cashBank }, { name: 'Cash in transit', value: transit }, { name: 'Receivables', value: receivables },
             { name: 'Stock', value: stock.value }, { name: 'Raw milk', value: milk }, { name: 'Supplier advances', value: supplierAdvances },
           ].filter(x => x.value > 0),
           series: [{ key: 'value', label: 'Value' }],

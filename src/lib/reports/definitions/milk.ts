@@ -1,11 +1,13 @@
 import type { ReportData, ReportDefinition, ReportFilters, ReportRow } from '../types';
 import {
-  autoGroup, CHART_COLORS, COLOR, dayOf, groupSum, inRange, isMilkPurchaseVoid, lower, n, pct, r2, r3,
+  autoGroup, CHART_COLORS, COLOR, dayOf, findSupplier, groupSum, inRange, isPurchaseVoid, lower, n, pct, r2, r3,
   sum, supplierName, timeSeries, topSlices
 } from '../helpers';
 import { purchaseCashPaid } from '../../moneyFlow';
-import type { AllocationEntry, PurchaseEntry } from '../../../types';
+import type { AllocationEntry, PurchaseEntry, Supplier } from '../../../types';
 
+/** Same balance the supplier screens show: pending_balance, else the legacy balance column. */
+const balanceOf = (s?: Supplier) => r2(n(s?.pending_balance ?? s?.balance));
 const litresOf = (p: PurchaseEntry) => Math.max(0, n(p.quantity));
 const fatOf = (p: PurchaseEntry) => n(p.fat ?? p.details?.fat);
 const snfOf = (p: PurchaseEntry) => n(p.snf ?? p.details?.snf);
@@ -21,7 +23,7 @@ const fmt = (value: number, digits = 0) => value.toLocaleString('en-PK', { maxim
 /** Milk received in the range, without voided or fully returned slips, after the toolbar filters. */
 const milkRows = (data: ReportData, f: ReportFilters, opts: { supplier?: boolean } = { supplier: true }) =>
   data.purchases.filter(p =>
-    p && !isMilkPurchaseVoid(p.status) && inRange(p.date, f) &&
+    p && !isPurchaseVoid(p.status) && inRange(p.date, f) &&
     (!f.milkType || lower(milkTypeOf(p)) === lower(f.milkType)) &&
     (!f.shift || lower(p.shift).includes(lower(f.shift))) &&
     (!opts.supplier || !f.supplierId || p.supplier_id === f.supplierId)
@@ -176,7 +178,7 @@ export const milkReports: ReportDefinition[] = [
         supplier: r.name, types: [...r.types].join(', '), entries: r.entries, litres: r3(r.litres), amount: r2(r.amount),
         rate: r.litres ? r2(r.amount / r.litres) : 0, fat: avgFat(r.q), snf: avgSnf(r.q),
         paid: r2(r.paid), due: r2(Math.max(0, r.amount - r.paid)), share: pct(r.litres, totalLitres),
-        balance: r.supplierId ? r2(n(data.suppliers.find(s => s.id === r.supplierId)?.pending_balance)) : 0,
+        balance: r.supplierId ? balanceOf(findSupplier(data, r.supplierId)) : 0,
         _drill: r.supplierId ? { report: 'supplier_statement', filters: { supplierId: r.supplierId }, label: 'Supplier statement' } : undefined,
       }));
       const amount = sum(table, r => n(r.amount));
