@@ -39,7 +39,7 @@ const AuditTrail: React.FC<AuditTrailProps> = ({ run, busyKey }) => {
     () => cashVariances.filter(variance => variance.status === 'Open').sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
     [cashVariances],
   );
-  const shiftById = useMemo(() => new Map(shiftSessions.map(shift => [shift.id, shift])), [shiftSessions]);
+  const shiftById = useMemo(() => new Map<string, ShiftSession>(shiftSessions.map(shift => [shift.id, shift])), [shiftSessions]);
   const userName = useCallback((userId?: string) => (userId ? users.find(user => user.id === userId)?.name || userId : '—'), [users]);
 
   const counts = useMemo(() => {
