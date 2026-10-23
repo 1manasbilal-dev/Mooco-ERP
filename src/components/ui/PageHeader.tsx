@@ -31,12 +31,15 @@ export function PageHeader({ title, description, eyebrow, actions, className, ch
   );
 }
 
-/** Search + filters + actions row above a list. Sticks under the app header when `sticky` is set. */
+/**
+ * Search + filters + actions row above a list. Sticks under the app header when `sticky` is set.
+ * Children may shrink and wrap, so a wide search box or tab row never pushes a phone screen sideways.
+ */
 export function Toolbar({ className, sticky, ...props }: React.ComponentProps<'div'> & { sticky?: boolean }) {
   return (
     <div
       className={cn(
-        'flex flex-wrap items-center gap-2 rounded-card border border-line bg-surface p-2 shadow-e1',
+        'flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-card border border-line bg-surface p-2 shadow-e1 [&>*]:min-w-0 [&>*]:max-w-full',
         sticky && 'sticky top-0 z-10',
         className,
       )}

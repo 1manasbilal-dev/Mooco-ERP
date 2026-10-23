@@ -12,6 +12,7 @@ export { EmptyState } from './EmptyState';
 export { Skeleton, SkeletonText } from './Skeleton';
 export { Field, Label, Input, Select, Textarea, SearchInput, Kbd, controlClass } from './Field';
 export { TableContainer, Table, THead, TBody, TR, TH, TD } from './Table';
+export type { TableProps } from './Table';
 export { Money } from './Money';
 export { Modal } from './Modal';
 export { confirmAction } from './ConfirmDialog';
