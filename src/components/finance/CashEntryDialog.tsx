@@ -3,7 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, Info } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useToast } from '../../context/ToastContext';
 import type { ManualAccount } from '../../types';
-import { cleanNumber, formatCurrency } from '../../lib/formatters';
+import { formatCurrency } from '../../lib/formatters';
 import { Button, Field, Input, Modal, Money, SegmentedControl, Select, confirmAction } from '../ui';
 import { canOverdraw, parseAmount, todayPk } from './ledger';
 import { DialogIcon, accountOptionLabel } from './dialogParts';
@@ -85,7 +85,7 @@ interface CashEntryDialogProps {
 
 /** Record money put into (deposit) or taken out of (withdrawal) an account, with its contra ledger. */
 export default function CashEntryDialog({ mode: initialMode, onClose, defaultAccountId }: CashEntryDialogProps) {
-  const { accounts, manualAccounts, recordBankTransaction, updateManualAccount, isPeriodLocked, settings } = useDairy();
+  const { accounts, manualAccounts, recordBankTransaction, isPeriodLocked, settings } = useDairy();
   const { showToast } = useToast();
   const activeAccounts = useMemo(() => accounts.filter(a => a.isActive !== false), [accounts]);
 
@@ -150,16 +150,9 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
         if (!confirmed) return;
       }
 
-      // Double entry: the contra account moves only after the bank side is recorded, so a
-      // refused or failed entry (locked date, network) never leaves the contra changed alone.
+      // Double entry: the server posts the bank side and the contra account together, each as a
+      // delta on its locked row (writing "screen balance + change" lost postings made elsewhere).
       const contra = relatedAccountId ? manualAccounts.find(a => a.id === relatedAccountId) : undefined;
-      let category: string = mode;
-      let contraImpact = 0;
-      if (contra) {
-        category = contra.name;
-        const isCreditNormal = ['Liability', 'Equity', 'Income'].includes(contra.type);
-        contraImpact = isDeposit === isCreditNormal ? value : -value;
-      }
 
       setSaving(true);
       const ok = await recordBankTransaction({
@@ -168,21 +161,11 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
         date,
         description: description.trim() || (isDeposit ? 'Received' : 'Paid'),
         type: mode,
-        category,
-        related_account_id: relatedAccountId,
+        category: contra ? contra.name : mode,
+        related_account_id: contra ? contra.id : null,
       });
-      if (!ok) {
-        showToast(`${mode} record nahi hua. Internet check karke dobara koshish karein.`, 'error');
-        return;
-      }
-      if (contra && contraImpact !== 0) {
-        const contraOk = await updateManualAccount(contra.id, { balance: cleanNumber((contra.balance || 0) + contraImpact) });
-        if (!contraOk) {
-          showToast(`${mode} record ho gaya, lekin "${contra.name}" ka balance update nahi hua. Chart of Accounts mein check karein.`, 'warning');
-          onClose();
-          return;
-        }
-      }
+      // recordBankTransaction already said why it failed; nothing was posted.
+      if (!ok) return;
       showToast(`${mode} record ho gaya`, 'success');
       onClose();
     } catch (err: any) {
