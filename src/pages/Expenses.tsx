@@ -6,7 +6,8 @@ import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../types';
 import {
   FolderTree, Wallet, CreditCard, Plus, Bookmark, UserPlus, ArrowUpRight
 } from 'lucide-react';
-import { ExpensesHeader, PrimaryButton, ToolbarButton, paidOf } from '../components/expenses/ExpenseUI';
+import { ExpensesHeader, paidOf } from '../components/expenses/ExpenseUI';
+import { Button } from '../components/ui';
 import { RichSelectOption } from '../components/RichSelect';
 import { 
   CategoryStructure, SubcategoryStructure, LedgerRow, 
@@ -501,7 +502,7 @@ const Expenses: React.FC = () => {
           variant: 'slate'
         },
         avatarLetter: v.name.charAt(0).toUpperCase(),
-        avatarBg: bal > 0 ? 'bg-rose-100 text-rose-800' : 'bg-lime-100 text-lime-800'
+        avatarBg: bal > 0 ? 'bg-danger-soft text-danger-fg' : 'bg-brand-soft text-brand-fg'
       };
     });
   }, [expenseVendors]);
@@ -1598,7 +1599,7 @@ const Expenses: React.FC = () => {
     : `${expenseVendors.length} vendors · ${formatCurrency(totalOutstandingVendorDues)} to pay`;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4 px-2 pb-24 sm:px-4 md:pb-8">
+    <div className="mx-auto flex max-w-7xl flex-col gap-4 pb-24 md:pb-8">
       <ExpensesHeader
         active={activeTab}
         onChange={switchTab}
@@ -1607,38 +1608,35 @@ const Expenses: React.FC = () => {
         actions={activeTab === 'transactions' ? (
           <>
             {canCreate && (
-              <ToolbarButton onClick={() => setIsSavedExpensesOpen(true)} title="Saved quick records" className="hidden sm:flex">
-                <Bookmark size={14} className="text-amber-500" />
-                <span className="hidden 2xl:inline">Saved</span>
-                {savedExpenses.length > 0 && <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">{savedExpenses.length}</span>}
-              </ToolbarButton>
+              <Button variant="secondary" leftIcon={<Bookmark />} onClick={() => setIsSavedExpensesOpen(true)} title="Saved quick records" aria-label="Saved quick records">
+                <span className="hidden sm:inline">Saved</span>
+                {savedExpenses.length > 0 && <span className="min-w-5 rounded-full bg-warning-soft px-1.5 text-[10px] font-bold tabular-nums leading-5 text-warning-fg">{savedExpenses.length}</span>}
+              </Button>
             )}
-            <ToolbarButton onClick={() => setIsCategoryModalOpen(true)} title="Manage categories" aria-label="Categories">
-              <FolderTree size={14} className="text-lime-600" />
-              <span className="hidden 2xl:inline">Categories</span>
-            </ToolbarButton>
+            <Button variant="secondary" leftIcon={<FolderTree />} onClick={() => setIsCategoryModalOpen(true)} title="Manage categories" aria-label="Categories">
+              <span className="hidden sm:inline">Categories</span>
+            </Button>
             {canCreate && (
-              <PrimaryButton onClick={handleOpenAddModal} title="Record expense (N)" className="hidden md:flex">
-                <Plus size={15} /> Record expense
-              </PrimaryButton>
+              <Button leftIcon={<Plus />} onClick={handleOpenAddModal} title="Record expense (N)" className="hidden md:inline-flex">
+                Record expense
+              </Button>
             )}
           </>
         ) : (
           <>
-            <ToolbarButton onClick={handleOpenAddVendorModal} title="Add vendor">
-              <UserPlus size={14} className="text-lime-600" />
-              <span className="hidden 2xl:inline">New vendor</span>
-            </ToolbarButton>
-            <PrimaryButton
-              tone="emerald"
+            <Button variant="secondary" leftIcon={<UserPlus />} onClick={handleOpenAddVendorModal} title="Add vendor" aria-label="New vendor">
+              <span className="hidden sm:inline">New vendor</span>
+            </Button>
+            <Button
+              leftIcon={<ArrowUpRight />}
               onClick={() => {
                 const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
                 if (target) handleOpenPaymentModal(target);
                 else handleOpenAddVendorModal();
               }}
             >
-              <ArrowUpRight size={15} /> <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
-            </PrimaryButton>
+              <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
+            </Button>
           </>
         )}
       />
@@ -1682,6 +1680,7 @@ const Expenses: React.FC = () => {
           onUseSaved={handleUseSavedExpense}
           onSaveRecorded={saveRecordedExpense}
           onOpenVendor={openVendorKhata}
+          onShowVendorDues={() => { setFilterVendorTabStatus('With Dues'); switchTab('vendors'); }}
           formatDateDisplay={formatDateDisplay}
         />
       )}
@@ -1836,15 +1835,15 @@ const Expenses: React.FC = () => {
       />
 
       {canCreate && activeTab === 'transactions' && (
-        <button
-          type="button"
+        <Button
+          size="lg"
+          leftIcon={<Plus />}
           onClick={handleOpenAddModal}
-          className="fixed bottom-6 right-4 z-40 flex items-center gap-2 rounded-2xl bg-gradient-to-br from-lime-500 to-lime-700 px-4 py-3 text-xs font-black text-white shadow-xl shadow-lime-600/40 transition-transform active:scale-95 animate-in zoom-in-95 duration-150 md:hidden print:hidden"
           title="Record expense"
+          className="fixed bottom-6 right-4 z-40 rounded-card shadow-e3 animate-in zoom-in-95 duration-150 md:hidden print:hidden"
         >
-          <Plus size={18} className="stroke-[3]" />
-          <span>Record expense</span>
-        </button>
+          Record expense
+        </Button>
       )}
     </div>
   );

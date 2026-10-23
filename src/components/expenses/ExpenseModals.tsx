@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FolderTree, Plus, Search, X, ChevronDown, ChevronRight, Edit, Check, Lock, Trash2, AlertCircle,
-  Loader2, Users, Building, ArrowDownLeft, ArrowUpRight, Wallet, CreditCard, Bookmark, Receipt,
-  CheckCircle2, CircleDashed, Clock3, History, StickyNote, Landmark, UserPlus,
+  FolderTree, Plus, ChevronDown, ChevronRight, Edit, Check, Lock, Trash2, AlertCircle,
+  Users, Building, ArrowDownLeft, ArrowUpRight, Wallet, CreditCard, Bookmark, Receipt,
+  CheckCircle2, CircleDashed, Clock3, History, StickyNote, Landmark, UserPlus, X,
 } from 'lucide-react';
 import { RichSelect, RichSelectOption } from '../RichSelect';
 import { CategoryStructure, SubcategoryStructure, SERVICE_TYPES } from './ExpenseTypes';
@@ -11,16 +11,18 @@ import { SmartNumberInput } from '../SmartNumberInput';
 import { useDairy } from '../../context/DairyContext';
 import { formatCurrency } from '../../lib/formatters';
 import { offsetDate } from '../../lib/dashboardAnalytics';
-import { PillGroup, SettlementBar } from '../procurement/ProcurementUI';
+import { cn } from '../../lib/cn';
+import { Button, EmptyState, IconButton, Input, Money, SearchInput, SegmentedControl, Textarea } from '../ui';
+import type { SegmentOption } from '../ui';
+import { CategoryBadge, Dot, SettlementBar, StatusPill, categoryTone, dayKey, pkToday } from './ExpenseUI';
 import {
-  CategoryBadge, ChoiceChip, FieldLabel, LinkButton, Sheet, SheetBody, SheetFooter, SheetIcon, StatusPill, Switch,
-  categoryTone, dayKey, fieldClass, pkToday,
-} from './ExpenseUI';
+  ChoiceChip, FieldLabel, LinkButton, OptionCard, QuickPick, Sheet, SheetBody, SheetFooter, SheetIcon, Switch, fieldClass,
+} from './ExpenseSheet';
 
-const MODE_OPTIONS = [
-  { value: 'Cash', label: 'Cash', icon: <Wallet size={13} /> },
-  { value: 'Online', label: 'Online', icon: <CreditCard size={13} /> },
-  { value: 'Bank Transfer', label: 'Bank', icon: <Building size={13} /> },
+const MODE_OPTIONS: SegmentOption<string>[] = [
+  { value: 'Cash', label: 'Cash', icon: <Wallet /> },
+  { value: 'Online', label: 'Online', icon: <CreditCard /> },
+  { value: 'Bank Transfer', label: 'Bank', icon: <Building /> },
 ];
 
 /** Default account for a payment mode: the configured cash or digital account, else the first match. */
@@ -40,9 +42,21 @@ const submitOnCtrlEnter = (event: React.KeyboardEvent<HTMLFormElement>) => {
   }
 };
 
+/** Big amount field: "Rs" prefix, large tabular figures, math like 1200+350 allowed. */
+const amountClass = cn(fieldClass, 'h-14 rounded-card pl-12 pr-4 text-2xl font-bold tracking-tight tabular-nums placeholder:text-fg-faint');
+
+const RsPrefix: React.FC<{ size?: 'sm' | 'lg' }> = ({ size = 'lg' }) => (
+  <span
+    className={cn('pointer-events-none absolute top-1/2 z-10 -translate-y-1/2 font-bold text-fg-faint', size === 'lg' ? 'left-4 text-lg' : 'left-3 text-sm')}
+    aria-hidden="true"
+  >
+    Rs
+  </span>
+);
+
 const LockedBanner: React.FC<{ date?: string; what: string }> = ({ date, what }) => (
-  <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900" role="alert">
-    <Lock size={15} className="mt-0.5 shrink-0 text-amber-600" />
+  <div className="mb-4 flex items-start gap-2.5 rounded-control border border-warning/30 bg-warning-soft p-3 text-xs font-semibold text-warning-fg" role="alert">
+    <Lock size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
     <span><strong>{date} band ho chuka hai.</strong> Lock din par {what} record nahi ho sakta — date badlein.</span>
   </div>
 );
@@ -53,11 +67,11 @@ const InlineCreate: React.FC<{
   onChange: (value: string) => void;
   onSave: () => void;
   onCancel: () => void;
-}> = ({ placeholder, value, onChange, onSave, onCancel }) => (
+  saving?: boolean;
+}> = ({ placeholder, value, onChange, onSave, onCancel, saving }) => (
   <div className="flex gap-1.5 animate-in fade-in">
-    <input
-      type="text"
-      className={`${fieldClass} h-9 border-lime-400 text-xs`}
+    <Input
+      inputSize="md"
       placeholder={placeholder}
       value={value}
       onChange={e => onChange(e.target.value)}
@@ -66,9 +80,10 @@ const InlineCreate: React.FC<{
         if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
       }}
       autoFocus
+      className="border-brand-accent"
     />
-    <button type="button" onClick={onSave} disabled={!value.trim()} className="h-9 shrink-0 rounded-xl bg-lime-600 px-3 text-xs font-bold text-white hover:bg-lime-700 disabled:opacity-40">Save</button>
-    <button type="button" aria-label="Cancel" onClick={onCancel} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={15} /></button>
+    <Button onClick={onSave} disabled={!value.trim()} loading={saving} className="shrink-0">Save</Button>
+    <IconButton aria-label="Cancel" icon={<X />} onClick={onCancel} className="shrink-0" />
   </div>
 );
 
@@ -84,7 +99,7 @@ interface ExpenseCategoryModalProps {
   setIsModalCreatingMainCat: (b: boolean) => void;
   modalNewCategoryName: string;
   setModalNewCategoryName: (s: string) => void;
-  handleModalAddCategory: (e: React.FormEvent) => Promise<void>;
+  handleModalAddCategory: (e: React.FormEvent) => Promise<boolean | void>;
   handleToggleCategoryActive: (cat: CategoryStructure) => Promise<void>;
   handleStartEditCategory: (cat: CategoryStructure) => void;
   handleSaveEditCategory: (cat: CategoryStructure) => Promise<void>;
@@ -140,80 +155,79 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
       title="Expense categories"
       subtitle="Rename, switch off unused heads, or add sub-categories. Categories with entries are locked from delete."
     >
-      <div className="shrink-0 space-y-2 border-b border-slate-100 px-5 py-3">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-line px-5 py-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-            <input
-              type="search"
-              placeholder="Search categories or sub-categories…"
-              className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-xs font-semibold text-slate-800 outline-none focus:border-lime-500 focus:bg-white"
-              value={categorySearch}
-              onChange={e => setCategorySearch(e.target.value)}
-            />
-          </div>
-          <PillGroup
-            label="Category status"
+          <SearchInput
+            value={categorySearch}
+            onChange={setCategorySearch}
+            placeholder="Search categories or sub-categories…"
+            aria-label="Category search karein"
+            className="flex-1"
+          />
+          <SegmentedControl
+            aria-label="Category status"
             size="sm"
             value={modalCatFilter}
             onChange={setModalCatFilter}
             options={[
-              { value: 'all', label: `All ${categoryTree.length}` },
-              { value: 'active', label: `Active ${activeCount}`, dot: 'bg-emerald-500' },
-              { value: 'inactive', label: `Off ${categoryTree.length - activeCount}`, dot: 'bg-slate-400' },
+              { value: 'all', label: 'All', count: categoryTree.length },
+              { value: 'active', label: 'Active', count: activeCount, icon: <Dot className="bg-success" /> },
+              { value: 'inactive', label: 'Off', count: categoryTree.length - activeCount, icon: <Dot className="bg-fg-faint" /> },
             ]}
           />
-          <button type="button" onClick={() => setIsModalCreatingMainCat(!isModalCreatingMainCat)} className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-lime-600 px-3 text-xs font-bold text-white hover:bg-lime-700">
-            <Plus size={14} /> New category
-          </button>
+          <Button leftIcon={<Plus />} onClick={() => setIsModalCreatingMainCat(!isModalCreatingMainCat)} aria-expanded={isModalCreatingMainCat} className="shrink-0">
+            New category
+          </Button>
         </div>
         {isModalCreatingMainCat && (
           <form
-            onSubmit={async e => { await handleModalAddCategory(e); setIsModalCreatingMainCat(false); }}
-            className="flex flex-col gap-2 rounded-xl border border-lime-200 bg-lime-50/70 p-2.5 sm:flex-row animate-in fade-in"
+            onSubmit={async e => {
+              const ok = await handleModalAddCategory(e);
+              if (ok !== false) setIsModalCreatingMainCat(false);
+            }}
+            className="flex flex-col gap-2 rounded-control border border-brand/25 bg-brand-soft/60 p-2.5 animate-in fade-in sm:flex-row"
           >
-            <input
-              type="text"
-              className={`${fieldClass} h-9 text-xs`}
+            <Input
               placeholder="Category name, e.g. Animal Feed, Veterinary"
+              aria-label="Nayi category ka naam"
               value={modalNewCategoryName}
               onChange={e => setModalNewCategoryName(e.target.value)}
               autoFocus
             />
             <div className="flex justify-end gap-1.5">
-              <button type="button" onClick={() => { setIsModalCreatingMainCat(false); setModalNewCategoryName(''); }} className="h-9 px-3 text-xs font-semibold text-slate-500 hover:text-slate-800">Cancel</button>
-              <button type="submit" disabled={!modalNewCategoryName.trim()} className="h-9 rounded-xl bg-lime-600 px-4 text-xs font-bold text-white hover:bg-lime-700 disabled:opacity-50">Save</button>
+              <Button variant="ghost" onClick={() => { setIsModalCreatingMainCat(false); setModalNewCategoryName(''); }}>Cancel</Button>
+              <Button type="submit" disabled={!modalNewCategoryName.trim()}>Save</Button>
             </div>
           </form>
         )}
       </div>
 
-      <SheetBody className="space-y-2 bg-slate-50/50">
+      <SheetBody className="flex flex-col gap-2 bg-surface-2/50">
         {filteredCategories.map(cat => {
           const isExpanded = expandedCatsInModal[cat.name] ?? Boolean(needle);
           const usageCount = getCategoryUsageCount(cat.name);
           const isLocked = usageCount > 0;
           const isEditing = editingCatName === cat.name;
+          const toggleExpanded = () => setExpandedCatsInModal(prev => ({ ...prev, [cat.name]: !isExpanded }));
 
           return (
-            <div key={cat.name} className={`overflow-hidden rounded-2xl border bg-white transition-all ${cat.isActive ? 'border-slate-200' : 'border-slate-200 opacity-70'}`}>
+            <div key={cat.name} className={cn('overflow-hidden rounded-card border border-line bg-surface shadow-e1 transition-opacity', !cat.isActive && 'opacity-70')}>
               <div className="flex items-center gap-2.5 px-3 py-2.5">
-                <button
-                  type="button"
+                <IconButton
+                  size="sm"
                   aria-label={isExpanded ? 'Band karein' : 'Kholein'}
                   aria-expanded={isExpanded}
-                  onClick={() => setExpandedCatsInModal(prev => ({ ...prev, [cat.name]: !isExpanded }))}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                >
-                  {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                </button>
+                  icon={isExpanded ? <ChevronDown /> : <ChevronRight />}
+                  onClick={toggleExpanded}
+                  className="shrink-0"
+                />
                 <CategoryBadge name={cat.name} size="sm" />
 
                 {isEditing ? (
                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                    <input
-                      type="text"
-                      className={`${fieldClass} h-8 text-xs`}
+                    <Input
+                      inputSize="sm"
+                      aria-label="Category ka naya naam"
                       value={editCatInput}
                       onChange={e => setEditCatInput(e.target.value)}
                       onKeyDown={e => {
@@ -222,49 +236,52 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                       }}
                       autoFocus
                     />
-                    <button type="button" aria-label="Naam save karein" onClick={() => handleSaveEditCategory(cat)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-lime-600 text-white hover:bg-lime-700"><Check size={14} /></button>
-                    <button type="button" aria-label="Cancel" onClick={() => setEditingCatName(null)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100"><X size={14} /></button>
+                    <IconButton size="sm" variant="primary" aria-label="Naam save karein" icon={<Check />} onClick={() => handleSaveEditCategory(cat)} className="shrink-0" />
+                    <IconButton size="sm" aria-label="Cancel" icon={<X />} onClick={() => setEditingCatName(null)} className="shrink-0" />
                   </div>
                 ) : (
-                  <button type="button" onClick={() => setExpandedCatsInModal(prev => ({ ...prev, [cat.name]: !isExpanded }))} className="min-w-0 flex-1 text-left">
-                    <span className={`block truncate text-sm font-bold ${cat.isActive ? 'text-slate-900' : 'text-slate-400 line-through'}`}>{cat.name}</span>
-                    <span className="block text-[11px] text-slate-400">{cat.subcategories.length} sub-categories{isLocked ? ` · ${usageCount} entries` : ''}</span>
+                  <button type="button" onClick={toggleExpanded} className="min-w-0 flex-1 cursor-pointer text-left">
+                    <span className={cn('block truncate text-sm font-bold', cat.isActive ? 'text-fg' : 'text-fg-subtle line-through')}>{cat.name}</span>
+                    <span className="block text-[11px] text-fg-subtle">{cat.subcategories.length} sub-categories{isLocked ? ` · ${usageCount} entries` : ''}</span>
                   </button>
                 )}
 
                 <div className="flex shrink-0 items-center gap-1">
-                  {isLocked && <span title={`${usageCount} entries — delete locked`} className="hidden items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 sm:flex"><Lock size={10} />{usageCount}</span>}
+                  {isLocked && (
+                    <span title={`${usageCount} entries — delete locked`} className="hidden items-center gap-1 rounded-md bg-warning-soft px-1.5 py-0.5 text-[10px] font-bold text-warning-fg sm:flex">
+                      <Lock size={10} aria-hidden="true" />{usageCount}
+                    </span>
+                  )}
                   {!isEditing && (
-                    <button type="button" aria-label="Naam badlein" title="Rename" onClick={() => handleStartEditCategory(cat)} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Edit size={13} /></button>
+                    <IconButton size="sm" aria-label="Naam badlein" title="Rename" icon={<Edit />} onClick={() => handleStartEditCategory(cat)} />
                   )}
                   <Switch checked={cat.isActive} onChange={() => handleToggleCategoryActive(cat)} label={cat.isActive ? 'Category band karein' : 'Category chalu karein'} />
-                  <button
-                    type="button"
+                  <IconButton
+                    size="sm"
                     aria-label={isLocked ? 'Entries wali category delete nahi ho sakti' : 'Category delete karein'}
                     title={isLocked ? 'Has entries — cannot delete' : 'Delete'}
+                    icon={<Trash2 />}
                     onClick={() => handleDeleteCategory(cat)}
                     disabled={isLocked}
-                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                    className="hover:bg-danger-soft hover:text-danger-fg"
+                  />
                 </div>
               </div>
 
               {isExpanded && (
-                <div className="space-y-1 border-t border-slate-100 bg-slate-50/60 px-3 py-2.5 pl-12">
+                <div className="flex flex-col gap-1 border-t border-line bg-surface-2/60 px-3 py-2.5 pl-12">
                   {cat.subcategories.map(sub => {
                     const subUsage = getSubcategoryUsageCount(cat.name, sub.name);
                     const isSubLocked = subUsage > 0;
                     const isSubEditing = editingSubcatKey === `${cat.name}::${sub.name}`;
                     return (
-                      <div key={sub.name} className={`flex items-center gap-2 rounded-xl border bg-white px-2.5 py-1.5 text-xs ${sub.isActive ? 'border-slate-200' : 'border-slate-200 opacity-60'}`}>
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${categoryTone(cat.name).bar}`} />
+                      <div key={sub.name} className={cn('flex items-center gap-2 rounded-control border border-line bg-surface px-2.5 py-1.5 text-xs', !sub.isActive && 'opacity-60')}>
+                        <span className={cn('size-1.5 shrink-0 rounded-full', categoryTone(cat.name).bar)} aria-hidden="true" />
                         {isSubEditing ? (
                           <div className="flex min-w-0 flex-1 items-center gap-1">
-                            <input
-                              type="text"
-                              className={`${fieldClass} h-7 text-xs`}
+                            <Input
+                              inputSize="sm"
+                              aria-label="Sub-category ka naya naam"
                               value={editSubcatInput}
                               onChange={e => setEditSubcatInput(e.target.value)}
                               onKeyDown={e => {
@@ -273,41 +290,42 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                               }}
                               autoFocus
                             />
-                            <button type="button" aria-label="Save" onClick={() => handleSaveEditSubcategory(cat.name, sub)} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-lime-600 text-white"><Check size={12} /></button>
-                            <button type="button" aria-label="Cancel" onClick={() => setEditingSubcatKey(null)} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100"><X size={12} /></button>
+                            <IconButton size="sm" variant="primary" aria-label="Save" icon={<Check />} onClick={() => handleSaveEditSubcategory(cat.name, sub)} className="shrink-0" />
+                            <IconButton size="sm" aria-label="Cancel" icon={<X />} onClick={() => setEditingSubcatKey(null)} className="shrink-0" />
                           </div>
                         ) : (
-                          <span className={`min-w-0 flex-1 truncate font-semibold ${sub.isActive ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{sub.name}</span>
+                          <span className={cn('min-w-0 flex-1 truncate font-semibold', sub.isActive ? 'text-fg' : 'text-fg-subtle line-through')}>{sub.name}</span>
                         )}
-                        {isSubLocked && <span className="flex items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700"><Lock size={8} />{subUsage}</span>}
+                        {isSubLocked && (
+                          <span className="flex items-center gap-0.5 rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-fg"><Lock size={8} aria-hidden="true" />{subUsage}</span>
+                        )}
                         {!isSubEditing && (
-                          <button type="button" aria-label="Naam badlein" title="Rename" onClick={() => handleStartEditSubcategory(cat.name, sub)} className="grid h-6 w-6 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Edit size={11} /></button>
+                          <IconButton size="sm" aria-label="Naam badlein" title="Rename" icon={<Edit />} onClick={() => handleStartEditSubcategory(cat.name, sub)} className="size-7" />
                         )}
                         <Switch size="sm" checked={sub.isActive} onChange={() => handleToggleSubcategoryActive(cat.name, sub)} label={sub.isActive ? 'Band karein' : 'Chalu karein'} />
-                        <button
-                          type="button"
+                        <IconButton
+                          size="sm"
                           aria-label={isSubLocked ? 'Entries wali sub-category delete nahi ho sakti' : 'Sub-category delete karein'}
+                          icon={<Trash2 />}
                           onClick={() => handleDeleteSubcategory(cat.name, sub)}
                           disabled={isSubLocked}
-                          className="grid h-6 w-6 place-items-center rounded-md text-slate-400 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-slate-200"
-                        >
-                          <Trash2 size={11} />
-                        </button>
+                          className="size-7 hover:bg-danger-soft hover:text-danger-fg"
+                        />
                       </div>
                     );
                   })}
                   <div className="flex items-center gap-1.5 pt-1">
-                    <input
-                      type="text"
-                      className={`${fieldClass} h-8 text-xs`}
+                    <Input
+                      inputSize="sm"
                       placeholder={`Add sub-category under ${cat.name}…`}
+                      aria-label={`${cat.name} mein sub-category add karein`}
                       value={newSubcatInputs[cat.name] || ''}
                       onChange={e => setNewSubcatInputs({ ...newSubcatInputs, [cat.name]: e.target.value })}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleModalAddSubcat(cat.name); } }}
                     />
-                    <button type="button" disabled={!newSubcatInputs[cat.name]?.trim()} onClick={() => handleModalAddSubcat(cat.name)} className="h-8 shrink-0 rounded-xl bg-lime-600 px-3 text-xs font-bold text-white hover:bg-lime-700 disabled:opacity-40">
+                    <Button size="sm" disabled={!newSubcatInputs[cat.name]?.trim()} onClick={() => handleModalAddSubcat(cat.name)} className="shrink-0">
                       Add
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -315,17 +333,15 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
           );
         })}
         {filteredCategories.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
-            <FolderTree size={28} className="mx-auto mb-2 text-slate-300" />
-            <p className="text-xs font-bold text-slate-600">No categories found</p>
-            <p className="mt-0.5 text-[11px] text-slate-400">Try another word or create a new category.</p>
+          <div className="rounded-card border border-dashed border-line-strong bg-surface">
+            <EmptyState size="compact" icon={<FolderTree />} title="No categories found" description="Try another word or create a new category." />
           </div>
         )}
       </SheetBody>
 
       <SheetFooter className="justify-between">
-        <span className="text-xs text-slate-500"><strong className="text-slate-800">{categoryTree.length}</strong> categories · <span className="font-bold text-emerald-700">{activeCount} active</span></span>
-        <button type="button" onClick={onClose} className="h-9 rounded-xl bg-slate-900 px-5 text-xs font-bold text-white hover:bg-slate-800">Done</button>
+        <span className="text-xs text-fg-subtle"><strong className="text-fg">{categoryTree.length}</strong> categories · <span className="font-bold text-success-fg">{activeCount} active</span></span>
+        <Button variant="secondary" onClick={onClose}>Done</Button>
       </SheetFooter>
     </Sheet>
   );
@@ -367,6 +383,7 @@ interface ExpenseFormModalProps {
   quickVendorPhone: string;
   setQuickVendorPhone: (s: string) => void;
   handleQuickCreateVendor: () => Promise<void>;
+  isCreatingQuickVendor?: boolean;
   accounts: any[];
   settings: any;
   rememberExpense: boolean;
@@ -375,10 +392,10 @@ interface ExpenseFormModalProps {
   setRememberName: (value: string) => void;
 }
 
-const STATUS_CARDS: { value: 'Paid' | 'Partial' | 'Unpaid'; label: string; hint: string; icon: React.ElementType; on: string }[] = [
-  { value: 'Paid', label: 'Paid now', hint: 'Full amount paid', icon: CheckCircle2, on: 'border-emerald-500 bg-emerald-50 text-emerald-800 ring-emerald-500/15' },
-  { value: 'Partial', label: 'Partial', hint: 'Some now, rest khata', icon: CircleDashed, on: 'border-amber-500 bg-amber-50 text-amber-800 ring-amber-500/15' },
-  { value: 'Unpaid', label: 'On credit', hint: 'Add to vendor khata', icon: Clock3, on: 'border-rose-500 bg-rose-50 text-rose-800 ring-rose-500/15' },
+const STATUS_CARDS: { value: 'Paid' | 'Partial' | 'Unpaid'; label: string; hint: string; icon: React.ElementType; tone: 'success' | 'warning' | 'danger' }[] = [
+  { value: 'Paid', label: 'Paid now', hint: 'Full amount paid', icon: CheckCircle2, tone: 'success' },
+  { value: 'Partial', label: 'Partial', hint: 'Some now, rest khata', icon: CircleDashed, tone: 'warning' },
+  { value: 'Unpaid', label: 'On credit', hint: 'Add to vendor khata', icon: Clock3, tone: 'danger' },
 ];
 
 export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
@@ -387,7 +404,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
   isModalCreatingCat, setIsModalCreatingCat, modalNewCatInput, setModalNewCatInput, handleCreateMainCategory,
   isModalCreatingSub, setIsModalCreatingSub, modalNewSubInput, setModalNewSubInput, handleCreateSubcategory,
   isModalCreatingVendor, setIsModalCreatingVendor, quickVendorName, setQuickVendorName, quickVendorPhone,
-  setQuickVendorPhone, handleQuickCreateVendor, accounts, settings, rememberExpense, setRememberExpense,
+  setQuickVendorPhone, handleQuickCreateVendor, isCreatingQuickVendor = false, accounts, settings, rememberExpense, setRememberExpense,
   rememberName, setRememberName,
 }) => {
   const { isDayLocked, expenses, expenseVendors } = useDairy();
@@ -488,24 +505,23 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
       open={isOpen}
       onClose={onClose}
       dismissible={!isSubmitting}
-      accent="from-rose-50/70"
-      icon={<SheetIcon icon={Receipt} tone="bg-gradient-to-br from-rose-400 to-rose-600 text-white shadow-rose-600/25" />}
+      icon={<SheetIcon icon={Receipt} tone="expense" />}
       title={isEditing ? 'Edit expense' : 'Record expense'}
       subtitle={isEditing ? 'Changes adjust the account and vendor khata automatically.' : 'Cash, bank or on-credit vendor bill · Ctrl+Enter to save'}
     >
       <form onSubmit={handleSubmitExpense} onKeyDown={submitOnCtrlEnter} className="flex min-h-0 flex-1 flex-col">
-        <SheetBody className="space-y-5">
+        <SheetBody className="flex flex-col gap-5">
           {isDateLocked && <LockedBanner date={formData.date} what="kharcha" />}
 
-          <section className="space-y-3">
+          <section className="flex flex-col gap-3">
             <div>
               <FieldLabel htmlFor="expense-amount">Amount</FieldLabel>
               <div className="relative">
-                <span className="pointer-events-none absolute left-4 top-1/2 z-10 -translate-y-1/2 text-lg font-black text-slate-300">Rs</span>
+                <RsPrefix />
                 <SmartNumberInput
                   id="expense-amount"
                   data-autofocus
-                  className="h-14 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 font-mono text-2xl font-black tracking-tight text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:border-lime-500 focus:ring-4 focus:ring-lime-500/10"
+                  className={amountClass}
                   placeholder="0"
                   required
                   value={formData.amount || ''}
@@ -519,36 +535,31 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   }}
                 />
               </div>
-              <p className="mt-1 text-[11px] text-slate-400">Math works too: 1200+350 or 45*20</p>
+              <p className="mt-1 text-[11px] text-fg-subtle">Math works too: 1200+350 or 45*20</p>
             </div>
 
             <div role="radiogroup" aria-label="Payment status" className="grid grid-cols-3 gap-2">
-              {STATUS_CARDS.map(card => {
-                const selected = status === card.value;
-                const Icon = card.icon;
-                return (
-                  <button
-                    key={card.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => setStatus(card.value)}
-                    className={`rounded-xl border px-2.5 py-2 text-left transition-all ${selected ? `${card.on} ring-4` : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
-                  >
-                    <span className="flex items-center gap-1.5 text-xs font-bold"><Icon size={14} />{card.label}</span>
-                    <span className="mt-0.5 hidden text-[10px] font-medium opacity-75 sm:block">{card.hint}</span>
-                  </button>
-                );
-              })}
+              {STATUS_CARDS.map(card => (
+                <OptionCard
+                  key={card.value}
+                  selected={status === card.value}
+                  onClick={() => setStatus(card.value)}
+                  tone={card.tone}
+                  icon={card.icon}
+                  label={card.label}
+                  hint={card.hint}
+                  hintClassName="hidden sm:block"
+                />
+              ))}
             </div>
 
             {status === 'Partial' && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 animate-in fade-in">
-                <FieldLabel htmlFor="expense-paid-now" aside={<span className="text-[11px] font-bold text-rose-600">Khata: {formatCurrency(due)}</span>}>Paid now</FieldLabel>
+              <div className="rounded-control border border-warning/30 bg-warning-soft/60 p-3 animate-in fade-in">
+                <FieldLabel htmlFor="expense-paid-now" aside={<span className="text-[11px] font-bold tabular-nums text-danger-fg">Khata: {formatCurrency(due)}</span>}>Paid now</FieldLabel>
                 <SmartNumberInput
                   id="expense-paid-now"
                   max={amount}
-                  className={`${fieldClass} font-mono text-emerald-700`}
+                  className={cn(fieldClass, 'tabular-nums text-success-fg')}
                   placeholder="Amount paid today"
                   value={formData.paidAmount || ''}
                   onChange={val => setFormData(prev => ({ ...prev, paidAmount: parseFloat(val) || 0 }))}
@@ -557,8 +568,8 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               </div>
             )}
             {status === 'Unpaid' && amount > 0 && (
-              <p className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-[11px] text-rose-800 animate-in fade-in">
-                <AlertCircle size={14} className="mt-px shrink-0" />
+              <p className="flex items-start gap-2 rounded-control border border-danger/20 bg-danger-soft px-3 py-2 text-[11px] text-danger-fg animate-in fade-in">
+                <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
                 No cash leaves today. {formatCurrency(amount)} goes on the vendor&apos;s khata.
               </p>
             )}
@@ -582,8 +593,8 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               {suggestions.map(exp => <option key={exp.id} value={exp.description} />)}
             </datalist>
             {lastTime && !isEditing && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 animate-in fade-in">
-                <History size={12} className="text-slate-400" />
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-subtle animate-in fade-in">
+                <History size={12} className="text-fg-faint" aria-hidden="true" />
                 <span>Last time {formatCurrency(lastTime.amount)} · {lastTime.category}{lastTime.vendor_name ? ` · ${lastTime.vendor_name}` : ''}</span>
                 {amount !== lastTime.amount && (
                   <LinkButton onClick={() => setFormData(prev => ({
@@ -599,7 +610,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             )}
           </section>
 
-          <section className="space-y-3">
+          <section className="flex flex-col gap-3">
             <div>
               <FieldLabel aside={!isModalCreatingCat && <LinkButton onClick={() => setIsModalCreatingCat(true)}><Plus size={12} /> New</LinkButton>}>Category</FieldLabel>
               {isModalCreatingCat ? (
@@ -610,7 +621,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                     <div className="mb-2 flex flex-wrap gap-1.5">
                       {quickCategories.map(name => (
                         <ChoiceChip key={name} selected={formData.category === name} onClick={() => setFormData(prev => ({ ...prev, category: name, subcategory: prev.category === name ? prev.subcategory : '' }))}>
-                          <span className={`h-2 w-2 rounded-full ${categoryTone(name).bar}`} />
+                          <span className={cn('size-2 rounded-full', categoryTone(name).bar)} aria-hidden="true" />
                           {name}
                         </ChoiceChip>
                       ))}
@@ -630,7 +641,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             {formData.category && (
               <div className="animate-in fade-in">
                 <FieldLabel aside={!isModalCreatingSub && <LinkButton onClick={() => setIsModalCreatingSub(true)}><Plus size={12} /> New</LinkButton>}>
-                  Sub-category <span className="font-medium text-slate-400">(optional)</span>
+                  Sub-category <span className="font-medium text-fg-subtle">(optional)</span>
                 </FieldLabel>
                 {isModalCreatingSub ? (
                   <InlineCreate placeholder={`Sub-category under ${formData.category}…`} value={modalNewSubInput} onChange={setModalNewSubInput} onSave={createSubcategory} onCancel={() => setIsModalCreatingSub(false)} />
@@ -655,40 +666,40 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             )}
           </section>
 
-          <section className={`grid gap-3 ${needsVendor ? 'sm:grid-cols-2' : ''}`}>
+          <section className={cn('grid gap-3', needsVendor && 'sm:grid-cols-2')}>
             <div>
               <FieldLabel htmlFor="expense-date" aside={
                 <span className="flex gap-1">
                   {[{ label: 'Today', value: today }, { label: 'Yesterday', value: yesterday }].map(opt => (
-                    <button key={opt.label} type="button" onClick={() => setFormData(prev => ({ ...prev, date: opt.value }))} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${formData.date === opt.value ? 'bg-lime-600 text-white' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}>
+                    <QuickPick key={opt.label} selected={formData.date === opt.value} onClick={() => setFormData(prev => ({ ...prev, date: opt.value }))}>
                       {opt.label}
-                    </button>
+                    </QuickPick>
                   ))}
                 </span>
               }>Date</FieldLabel>
-              <input id="expense-date" type="date" className={fieldClass} value={formData.date || ''} onChange={e => setFormData(prev => ({ ...prev, date: e.target.value }))} />
+              <Input id="expense-date" type="date" required value={formData.date || ''} onChange={e => setFormData(prev => ({ ...prev, date: e.target.value }))} />
             </div>
             {needsVendor && (
               <div>
-                <FieldLabel htmlFor="expense-due-date">Pay by <span className="font-medium text-slate-400">(optional)</span></FieldLabel>
-                <input id="expense-due-date" type="date" className={fieldClass} value={formData.dueDate || ''} min={formData.date} onChange={e => setFormData(prev => ({ ...prev, dueDate: e.target.value }))} />
+                <FieldLabel htmlFor="expense-due-date">Pay by <span className="font-medium text-fg-subtle">(optional)</span></FieldLabel>
+                <Input id="expense-due-date" type="date" value={formData.dueDate || ''} min={formData.date} onChange={e => setFormData(prev => ({ ...prev, dueDate: e.target.value }))} />
               </div>
             )}
           </section>
 
           <section>
             <FieldLabel aside={!isModalCreatingVendor && <LinkButton onClick={() => setIsModalCreatingVendor(true)}><UserPlus size={12} /> New vendor</LinkButton>}>
-              Vendor {needsVendor ? <span className="text-rose-500">*</span> : <span className="font-medium text-slate-400">(optional)</span>}
+              Vendor {needsVendor ? <span className="text-danger">*</span> : <span className="font-medium text-fg-subtle">(optional)</span>}
             </FieldLabel>
             {isModalCreatingVendor ? (
-              <div className="space-y-2 rounded-xl border border-lime-200 bg-lime-50/50 p-2.5 animate-in fade-in">
+              <div className="flex flex-col gap-2 rounded-control border border-brand/25 bg-brand-soft/50 p-2.5 animate-in fade-in">
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <input type="text" placeholder="Vendor name" className={`${fieldClass} h-9 text-xs`} value={quickVendorName} onChange={e => setQuickVendorName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} autoFocus />
-                  <input type="tel" placeholder="Phone (optional)" className={`${fieldClass} h-9 text-xs`} value={quickVendorPhone} onChange={e => setQuickVendorPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} />
+                  <Input placeholder="Vendor name" aria-label="Vendor ka naam" value={quickVendorName} onChange={e => setQuickVendorName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} autoFocus />
+                  <Input type="tel" placeholder="Phone (optional)" aria-label="Vendor ka phone" value={quickVendorPhone} onChange={e => setQuickVendorPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} />
                 </div>
                 <div className="flex justify-end gap-1.5">
-                  <button type="button" onClick={() => setIsModalCreatingVendor(false)} className="h-8 px-3 text-xs font-semibold text-slate-500 hover:text-slate-800">Cancel</button>
-                  <button type="button" onClick={handleQuickCreateVendor} disabled={!quickVendorName.trim()} className="h-8 rounded-xl bg-lime-600 px-3 text-xs font-bold text-white hover:bg-lime-700 disabled:opacity-40">Add vendor</button>
+                  <Button variant="ghost" size="sm" onClick={() => setIsModalCreatingVendor(false)} disabled={isCreatingQuickVendor}>Cancel</Button>
+                  <Button size="sm" onClick={handleQuickCreateVendor} disabled={!quickVendorName.trim()} loading={isCreatingQuickVendor}>Add vendor</Button>
                 </div>
               </div>
             ) : (
@@ -701,27 +712,27 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               />
             )}
             {vendor && !isEditing && (
-              <p className="mt-1.5 text-[11px] text-slate-500 animate-in fade-in">
-                Khata now <span className={`font-bold ${vendorBalance > 0 ? 'text-rose-600' : 'text-slate-700'}`}>{formatCurrency(Math.abs(vendorBalance))} {vendorBalance > 0 ? 'to pay' : vendorBalance < 0 ? 'advance' : ''}</span>
-                {due > 0 && <> → after this <span className="font-bold text-rose-600">{formatCurrency(Math.abs(vendorBalance + due))} {vendorBalance + due > 0 ? 'to pay' : 'advance'}</span></>}
+              <p className="mt-1.5 text-[11px] text-fg-subtle animate-in fade-in">
+                Khata now <span className={cn('font-bold tabular-nums', vendorBalance > 0 ? 'text-danger-fg' : 'text-fg-muted')}>{formatCurrency(Math.abs(vendorBalance))} {vendorBalance > 0 ? 'to pay' : vendorBalance < 0 ? 'advance' : ''}</span>
+                {due > 0 && <> → after this <span className="font-bold tabular-nums text-danger-fg">{formatCurrency(Math.abs(vendorBalance + due))} {vendorBalance + due > 0 ? 'to pay' : 'advance'}</span></>}
               </p>
             )}
             {needsVendor && !formData.vendor_id && !isModalCreatingVendor && (
-              <p className="mt-1.5 text-[11px] font-semibold text-rose-600">Baqi raqam ke liye vendor zaroori hai.</p>
+              <p className="mt-1.5 text-[11px] font-semibold text-danger-fg">Baqi raqam ke liye vendor zaroori hai.</p>
             )}
           </section>
 
           {status !== 'Unpaid' && (
-            <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+            <section className="flex flex-col gap-3 rounded-card border border-line bg-surface-2/60 p-3">
               <div className="grid gap-3">
                 <div>
                   <FieldLabel>Paid by</FieldLabel>
-                  <PillGroup
-                    label="Payment mode"
+                  <SegmentedControl
+                    aria-label="Payment mode"
                     options={MODE_OPTIONS}
                     value={formData.paymentMode || 'Cash'}
                     onChange={mode => setFormData(prev => ({ ...prev, paymentMode: mode, account_id: defaultAccountFor(mode, accounts, settings) }))}
-                    className="bg-white"
+                    fullWidth
                   />
                 </div>
                 <div>
@@ -737,44 +748,45 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               </div>
               {selectedPaymentAccount && (
                 <div className="flex items-center justify-between gap-2 text-[11px]">
-                  <span className="text-slate-500">{selectedPaymentAccount.name} balance</span>
-                  <span className="font-mono font-semibold text-slate-700">
+                  <span className="text-fg-subtle">{selectedPaymentAccount.name} balance</span>
+                  <span className="font-semibold tabular-nums text-fg-muted">
                     {formatCurrency(selectedPaymentAccount.balance)}
                     {!isEditing && paidNow > 0 && (
-                      <span className={`ml-1.5 font-bold ${accountAfter < 0 ? 'text-rose-600' : 'text-slate-500'}`}>→ {formatCurrency(accountAfter)}</span>
+                      <span className={cn('ml-1.5 font-bold', accountAfter < 0 ? 'text-danger-fg' : 'text-fg-subtle')}>→ {formatCurrency(accountAfter)}</span>
                     )}
                   </span>
                 </div>
               )}
               {!isEditing && paidNow > 0 && accountAfter < 0 && (
-                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-600"><AlertCircle size={12} /> Account minus mein chala jayega.</p>
+                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-danger-fg"><AlertCircle size={12} aria-hidden="true" /> Account minus mein chala jayega.</p>
               )}
             </section>
           )}
 
-          <section className="space-y-2">
+          <section className="flex flex-col gap-2">
             {showNotes ? (
               <div className="animate-in fade-in">
                 <FieldLabel htmlFor="expense-notes">Note</FieldLabel>
-                <textarea id="expense-notes" rows={2} className={`${fieldClass} h-auto resize-none py-2`} placeholder="Meter #, bill #, who received…" value={formData.notes || ''} onChange={e => setFormData(prev => ({ ...prev, notes: e.target.value }))} />
+                <Textarea id="expense-notes" rows={2} className="min-h-0 resize-none" placeholder="Meter #, bill #, who received…" value={formData.notes || ''} onChange={e => setFormData(prev => ({ ...prev, notes: e.target.value }))} />
               </div>
             ) : (
-              <LinkButton onClick={() => setShowNotes(true)} className="text-slate-500 hover:text-slate-800"><StickyNote size={12} /> Add a note</LinkButton>
+              <LinkButton onClick={() => setShowNotes(true)} className="self-start text-fg-subtle hover:text-fg"><StickyNote size={12} /> Add a note</LinkButton>
             )}
 
             {!isEditing && (
-              <div className={`rounded-xl border px-3 py-2.5 transition-colors ${rememberExpense ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`}>
-                <label className="flex cursor-pointer items-center gap-2.5">
+              <div className={cn('rounded-control border px-3 py-2.5 transition-colors', rememberExpense ? 'border-warning/40 bg-warning-soft/60' : 'border-line')}>
+                <div className="flex items-center gap-2.5">
                   <Switch checked={rememberExpense} onChange={setRememberExpense} label="Save for next time" size="sm" />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1 text-xs font-bold text-slate-800"><Bookmark size={12} className="text-amber-500" /> Save for quick record</span>
-                    <span className="block text-[10px] text-slate-500">Re-record this in one tap next time. Date will be the day you use it.</span>
-                  </span>
-                </label>
+                  <button type="button" onClick={() => setRememberExpense(!rememberExpense)} className="min-w-0 flex-1 cursor-pointer text-left">
+                    <span className="flex items-center gap-1 text-xs font-bold text-fg"><Bookmark size={12} className="text-warning" aria-hidden="true" /> Save for quick record</span>
+                    <span className="block text-[10px] text-fg-subtle">Re-record this in one tap next time. Date will be the day you use it.</span>
+                  </button>
+                </div>
                 {rememberExpense && (
-                  <input
-                    type="text"
-                    className={`${fieldClass} mt-2 h-9 text-xs`}
+                  <Input
+                    inputSize="sm"
+                    className="mt-2"
+                    aria-label="Shortcut ka naam"
                     placeholder={formData.description || 'Shortcut name, e.g. Generator diesel'}
                     value={rememberName}
                     onChange={e => setRememberName(e.target.value)}
@@ -788,21 +800,23 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
         <SheetFooter>
           <div className="hidden min-w-0 flex-1 text-[11px] sm:block">
             {amount > 0 ? (
-              <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-semibold">
-                <span className="flex items-center gap-1 text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Paid {formatCurrency(paidNow)}</span>
-                {due > 0 && <span className="flex items-center gap-1 text-rose-600"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" />Khata {formatCurrency(due)}</span>}
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-semibold tabular-nums">
+                <span className="flex items-center gap-1 text-success-fg"><span className="size-1.5 rounded-full bg-success" />Paid {formatCurrency(paidNow)}</span>
+                {due > 0 && <span className="flex items-center gap-1 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" />Khata {formatCurrency(due)}</span>}
               </span>
-            ) : <span className="text-slate-400">Enter an amount to continue</span>}
+            ) : <span className="text-fg-subtle">Enter an amount to continue</span>}
           </div>
-          <button type="button" onClick={onClose} disabled={isSubmitting} className="h-10 rounded-xl px-4 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
-          <button
+          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>Cancel</Button>
+          <Button
             type="submit"
-            disabled={isSubmitting || isDateLocked}
+            disabled={isDateLocked}
+            loading={isSubmitting}
+            leftIcon={<Check />}
             title={isDateLocked ? `${formData.date} lock hai` : 'Ctrl+Enter'}
-            className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-lime-600 px-5 text-xs font-bold text-white shadow-md shadow-lime-600/25 transition-all hover:bg-lime-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none sm:flex-initial"
+            className="flex-1 sm:flex-initial"
           >
-            {isSubmitting ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <><Check size={15} /> {submitLabel}</>}
-          </button>
+            {isSubmitting ? 'Saving…' : submitLabel}
+          </Button>
         </SheetFooter>
       </form>
     </Sheet>
@@ -839,55 +853,63 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({ isOpen, 
       open={isOpen}
       onClose={onClose}
       size="md"
-      accent="from-amber-50/70"
-      icon={<SheetIcon icon={Bookmark} tone="bg-amber-500 text-white shadow-amber-500/25" />}
+      icon={<SheetIcon icon={Bookmark} tone="warning" />}
       title="Quick record"
       subtitle="Tap one to open it filled in. Date stays today."
     >
-      <div className="shrink-0 border-b border-slate-100 px-5 py-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-          <input
-            type="search"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Search name, category or vendor"
-            data-autofocus
-            className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-xs font-semibold text-slate-800 outline-none focus:border-lime-500 focus:bg-white"
-          />
-        </div>
+      <div className="shrink-0 border-b border-line px-5 py-3">
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Search name, category or vendor"
+          aria-label="Saved kharche search karein"
+          data-autofocus
+        />
       </div>
-      <SheetBody className="space-y-1.5 bg-slate-50/50">
+      <SheetBody className="flex flex-col gap-1.5 bg-surface-2/50">
         {savedExpenses.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center">
-            <Bookmark size={26} className="mx-auto mb-2 text-slate-300" />
-            <p className="text-xs font-bold text-slate-700">No saved expenses yet</p>
-            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Turn on “Save for quick record” while recording, or bookmark an entry from the list.</p>
+          <div className="rounded-card border border-dashed border-line-strong bg-surface">
+            <EmptyState
+              size="compact"
+              icon={<Bookmark />}
+              title="No saved expenses yet"
+              description="Turn on “Save for quick record” while recording, or bookmark an entry from the list."
+            />
           </div>
         ) : matches.length === 0 ? (
-          <p className="px-2 py-6 text-center text-xs text-slate-400">No saved expense matches that search.</p>
+          <p className="px-2 py-6 text-center text-xs text-fg-subtle">No saved expense matches that search.</p>
         ) : (
           matches.map(preset => {
             const accountName = accounts.find(account => account.id === preset.account_id)?.name;
             return (
-              <div key={preset.id} className="group flex items-stretch overflow-hidden rounded-xl border border-slate-200 bg-white transition-shadow hover:shadow-sm">
-                <button type="button" onClick={() => onUse(preset)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-lime-50/50">
+              <div key={preset.id} className="group flex items-stretch overflow-hidden rounded-control border border-line bg-surface shadow-e1 transition-shadow hover:shadow-e2">
+                <button
+                  type="button"
+                  onClick={() => onUse(preset)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-brand-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                >
                   <CategoryBadge name={preset.category} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="truncate text-[13px] font-bold text-slate-900">{preset.name}</p>
+                      <p className="truncate text-[13px] font-bold text-fg">{preset.name}</p>
                       <StatusPill status={preset.paymentStatus || 'Paid'} className="shrink-0" />
                     </div>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                    <p className="mt-0.5 truncate text-[11px] text-fg-subtle">
                       {preset.category}{preset.subcategory ? ` › ${preset.subcategory}` : ''}
                       {preset.vendor_name ? ` · ${preset.vendor_name}` : ''}
                       {` · ${accountName || preset.paymentMode || 'Cash'}`}
                     </p>
                   </div>
-                  <span className="shrink-0 font-mono text-[13px] font-black text-slate-900">{formatCurrency(Number(preset.amount || 0))}</span>
-                  <ChevronRight size={14} className="shrink-0 text-slate-300 group-hover:text-lime-600" />
+                  <Money amount={Number(preset.amount || 0)} className="shrink-0 text-[13px] font-bold text-fg" />
+                  <ChevronRight size={14} className="shrink-0 text-fg-faint group-hover:text-brand-fg" aria-hidden="true" />
                 </button>
-                <button type="button" aria-label="Saved shortcut hatayen" title="Remove" onClick={() => onDelete(preset.id)} className="shrink-0 border-l border-slate-100 px-3 text-slate-300 hover:bg-rose-50 hover:text-rose-600">
+                <button
+                  type="button"
+                  aria-label="Saved shortcut hatayen"
+                  title="Remove"
+                  onClick={() => onDelete(preset.id)}
+                  className="shrink-0 cursor-pointer border-l border-line px-3 text-fg-faint transition-colors hover:bg-danger-soft hover:text-danger-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                >
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -896,8 +918,8 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({ isOpen, 
         )}
       </SheetBody>
       <SheetFooter className="justify-between">
-        <span className="text-[11px] font-semibold text-slate-500">{savedExpenses.length} saved</span>
-        <button type="button" onClick={onClose} className="h-9 rounded-xl bg-slate-900 px-4 text-xs font-bold text-white hover:bg-slate-800">Close</button>
+        <span className="text-[11px] font-semibold text-fg-subtle">{savedExpenses.length} saved</span>
+        <Button variant="secondary" onClick={onClose}>Close</Button>
       </SheetFooter>
     </Sheet>
   );
@@ -927,17 +949,16 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
       open={isOpen}
       onClose={onClose}
       dismissible={!isSubmittingVendor}
-      accent="from-lime-50/70"
       icon={<SheetIcon icon={editingVendor ? Users : UserPlus} />}
       title={editingVendor ? `Edit ${editingVendor.name}` : 'New vendor'}
       subtitle="Landlord, utility, diesel pump, packaging supplier or staff member"
     >
       <form onSubmit={handleVendorSubmit} onKeyDown={submitOnCtrlEnter} className="flex min-h-0 flex-1 flex-col">
-        <SheetBody className="space-y-5">
-          <section className="space-y-3">
+        <SheetBody className="flex flex-col gap-5">
+          <section className="flex flex-col gap-3">
             <div>
-              <FieldLabel htmlFor="vendor-name">Name <span className="text-rose-500">*</span></FieldLabel>
-              <input id="vendor-name" data-autofocus type="text" className={`${fieldClass} h-11 text-base`} required placeholder="e.g. Shell Petrol Pump, Malik Sb" value={vendorFormData.name || ''} onChange={e => set({ name: e.target.value })} />
+              <FieldLabel htmlFor="vendor-name">Name <span className="text-danger">*</span></FieldLabel>
+              <Input id="vendor-name" data-autofocus inputSize="lg" required placeholder="e.g. Shell Petrol Pump, Malik Sb" value={vendorFormData.name || ''} onChange={e => set({ name: e.target.value })} />
             </div>
             <div>
               <FieldLabel>Type</FieldLabel>
@@ -954,33 +975,36 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
           <section className="grid gap-3 sm:grid-cols-2">
             <div>
               <FieldLabel htmlFor="vendor-phone">Phone</FieldLabel>
-              <input id="vendor-phone" type="tel" className={fieldClass} placeholder="0300-1234567" value={vendorFormData.phone || ''} onChange={e => set({ phone: e.target.value })} />
+              <Input id="vendor-phone" type="tel" placeholder="0300-1234567" value={vendorFormData.phone || ''} onChange={e => set({ phone: e.target.value })} />
             </div>
             <div>
               <FieldLabel htmlFor="vendor-contact">Contact person</FieldLabel>
-              <input id="vendor-contact" type="text" className={fieldClass} placeholder="Manager / owner" value={vendorFormData.contact_person || ''} onChange={e => set({ contact_person: e.target.value })} />
+              <Input id="vendor-contact" placeholder="Manager / owner" value={vendorFormData.contact_person || ''} onChange={e => set({ contact_person: e.target.value })} />
             </div>
             <div className="sm:col-span-2">
               <FieldLabel htmlFor="vendor-address">Address</FieldLabel>
-              <input id="vendor-address" type="text" className={fieldClass} placeholder="Shop, unit or area" value={vendorFormData.address || ''} onChange={e => set({ address: e.target.value })} />
+              <Input id="vendor-address" placeholder="Shop, unit or area" value={vendorFormData.address || ''} onChange={e => set({ address: e.target.value })} />
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-            <FieldLabel aside={
-              <PillGroup
-                label="Opening balance type"
+          <section className="rounded-card border border-line bg-surface-2/60 p-3">
+            <FieldLabel htmlFor="vendor-opening" aside={
+              <SegmentedControl
+                aria-label="Opening balance type"
                 size="sm"
                 value={isAdvance ? 'advance' : 'payable'}
                 onChange={value => set({ opening_balance: value === 'advance' ? -Math.abs(opening) : Math.abs(opening) })}
-                options={[{ value: 'payable', label: 'We owe', dot: 'bg-rose-500' }, { value: 'advance', label: 'Advance', dot: 'bg-sky-500' }]}
-                className="bg-white"
+                options={[
+                  { value: 'payable', label: 'We owe', icon: <Dot className="bg-danger" /> },
+                  { value: 'advance', label: 'Advance', icon: <Dot className="bg-success" /> },
+                ]}
               />
             }>Opening balance</FieldLabel>
             <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-sm font-black text-slate-300">Rs</span>
+              <RsPrefix size="sm" />
               <SmartNumberInput
-                className={`${fieldClass} pl-10 font-mono ${isAdvance ? 'text-sky-700' : opening > 0 ? 'text-rose-600' : ''}`}
+                id="vendor-opening"
+                className={cn(fieldClass, 'pl-10 tabular-nums', isAdvance ? 'text-success-fg' : opening > 0 ? 'text-danger-fg' : '')}
                 placeholder="0"
                 value={Math.abs(opening) || ''}
                 onChange={val => {
@@ -989,40 +1013,40 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
                 }}
               />
             </div>
-            <p className="mt-1.5 text-[11px] text-slate-500">
+            <p className="mt-1.5 text-[11px] text-fg-subtle">
               {isAdvance ? 'Vendor ke paas aap ka advance hai (aap ne lena hai).' : 'Purana baqi jo aap ne vendor ko dena hai.'}
             </p>
           </section>
 
           <section className="grid gap-3 sm:grid-cols-2">
             <div>
-              <FieldLabel htmlFor="vendor-bank"><span className="flex items-center gap-1"><Landmark size={12} className="text-slate-400" /> Bank</span></FieldLabel>
-              <input id="vendor-bank" type="text" className={fieldClass} placeholder="Meezan, HBL, JazzCash…" value={vendorFormData.bank_name || ''} onChange={e => set({ bank_name: e.target.value })} />
+              <FieldLabel htmlFor="vendor-bank"><span className="flex items-center gap-1"><Landmark size={12} className="text-fg-faint" aria-hidden="true" /> Bank</span></FieldLabel>
+              <Input id="vendor-bank" placeholder="Meezan, HBL, JazzCash…" value={vendorFormData.bank_name || ''} onChange={e => set({ bank_name: e.target.value })} />
             </div>
             <div>
               <FieldLabel htmlFor="vendor-account">Account # / IBAN</FieldLabel>
-              <input id="vendor-account" type="text" className={`${fieldClass} font-mono`} placeholder="PK00MEZN…" value={vendorFormData.account_number || ''} onChange={e => set({ account_number: e.target.value })} />
+              <Input id="vendor-account" className="font-mono" placeholder="PK00MEZN…" value={vendorFormData.account_number || ''} onChange={e => set({ account_number: e.target.value })} />
             </div>
             <div className="sm:col-span-2">
               <FieldLabel htmlFor="vendor-notes">Notes</FieldLabel>
-              <textarea id="vendor-notes" rows={2} className={`${fieldClass} h-auto resize-none py-2`} placeholder="Payment terms, meter #, contract date…" value={vendorFormData.notes || ''} onChange={e => set({ notes: e.target.value })} />
+              <Textarea id="vendor-notes" rows={2} className="min-h-0 resize-none" placeholder="Payment terms, meter #, contract date…" value={vendorFormData.notes || ''} onChange={e => set({ notes: e.target.value })} />
             </div>
           </section>
 
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
-            <span>
-              <span className="block text-xs font-bold text-slate-800">Active</span>
-              <span className="block text-[11px] text-slate-500">Inactive vendors are hidden from new expenses but keep their khata.</span>
-            </span>
+          <div className="flex items-center justify-between gap-3 rounded-control border border-line px-3 py-2.5">
+            <button type="button" onClick={() => set({ isActive: vendorFormData.isActive === false })} className="min-w-0 flex-1 cursor-pointer text-left">
+              <span className="block text-xs font-bold text-fg">Active</span>
+              <span className="block text-[11px] text-fg-subtle">Inactive vendors are hidden from new expenses but keep their khata.</span>
+            </button>
             <Switch checked={vendorFormData.isActive !== false} onChange={value => set({ isActive: value })} label="Active vendor" />
-          </label>
+          </div>
         </SheetBody>
 
         <SheetFooter className="justify-end">
-          <button type="button" onClick={onClose} disabled={isSubmittingVendor} className="h-10 rounded-xl px-4 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
-          <button type="submit" disabled={isSubmittingVendor} className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-lime-600 px-5 text-xs font-bold text-white shadow-md shadow-lime-600/25 hover:bg-lime-700 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none sm:flex-initial">
-            {isSubmittingVendor ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <><Check size={15} /> {editingVendor ? 'Save changes' : 'Add vendor'}</>}
-          </button>
+          <Button variant="ghost" onClick={onClose} disabled={isSubmittingVendor}>Cancel</Button>
+          <Button type="submit" loading={isSubmittingVendor} leftIcon={<Check />} className="flex-1 sm:flex-initial">
+            {isSubmittingVendor ? 'Saving…' : editingVendor ? 'Save changes' : 'Add vendor'}
+          </Button>
         </SheetFooter>
       </form>
     </Sheet>
@@ -1078,6 +1102,7 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
   if (isRefund && bal < 0) quickAmounts.push({ label: `Full ${formatCurrency(Math.abs(bal))}`, value: Math.abs(bal) });
 
   const describe = (value: number) => (value > 0 ? `${formatCurrency(value)} to pay` : value < 0 ? `${formatCurrency(Math.abs(value))} advance` : 'Settled');
+  const balanceTone = (value: number, settledTone = 'text-fg-subtle') => (value > 0 ? 'text-danger-fg' : value < 0 ? 'text-success-fg' : settledTone);
 
   return (
     <Sheet
@@ -1085,33 +1110,21 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
       onClose={onClose}
       size="md"
       dismissible={!isSubmittingPayment}
-      accent={isRefund ? 'from-sky-50' : 'from-emerald-50'}
-      icon={<SheetIcon icon={isRefund ? ArrowDownLeft : ArrowUpRight} tone={isRefund ? 'bg-sky-600 text-white shadow-sky-600/25' : 'bg-emerald-600 text-white shadow-emerald-600/25'} />}
+      icon={<SheetIcon icon={isRefund ? ArrowDownLeft : ArrowUpRight} tone={isRefund ? 'info' : 'success'} />}
       title={isRefund ? 'Receive from vendor' : 'Pay vendor'}
       subtitle={isRefund ? 'Advance returned, refund or overpayment back' : 'Clear dues, pay salary or give an advance'}
     >
       <form onSubmit={handlePaymentSubmit} onKeyDown={submitOnCtrlEnter} className="flex min-h-0 flex-1 flex-col">
-        <SheetBody className="space-y-4">
+        <SheetBody className="flex flex-col gap-4">
           {isLocked && <LockedBanner date={paymentFormData.date} what="payment" />}
 
           <div role="radiogroup" aria-label="Direction" className="grid grid-cols-2 gap-2">
-            {([
-              { value: 'payment', label: 'Pay', hint: 'Money goes out', icon: ArrowUpRight, on: 'border-emerald-500 bg-emerald-50 text-emerald-800 ring-emerald-500/15' },
-              { value: 'refund', label: 'Receive', hint: 'Money comes back', icon: ArrowDownLeft, on: 'border-sky-500 bg-sky-50 text-sky-800 ring-sky-500/15' },
-            ] as const).map(opt => {
-              const selected = paymentFormData.type === opt.value;
-              const Icon = opt.icon;
-              return (
-                <button key={opt.value} type="button" role="radio" aria-checked={selected} onClick={() => set({ type: opt.value })} className={`rounded-xl border px-3 py-2 text-left transition-all ${selected ? `${opt.on} ring-4` : 'border-slate-200 text-slate-600 hover:border-slate-300'}`}>
-                  <span className="flex items-center gap-1.5 text-xs font-bold"><Icon size={14} />{opt.label}</span>
-                  <span className="text-[10px] font-medium opacity-75">{opt.hint}</span>
-                </button>
-              );
-            })}
+            <OptionCard selected={!isRefund} onClick={() => set({ type: 'payment' })} tone="success" icon={ArrowUpRight} label="Pay" hint="Money goes out" />
+            <OptionCard selected={isRefund} onClick={() => set({ type: 'refund' })} tone="info" icon={ArrowDownLeft} label="Receive" hint="Money comes back" />
           </div>
 
           <div>
-            <FieldLabel>Vendor <span className="text-rose-500">*</span></FieldLabel>
+            <FieldLabel>Vendor <span className="text-danger">*</span></FieldLabel>
             <RichSelect
               options={vendorRichOptions}
               value={paymentFormData.vendor_id}
@@ -1130,14 +1143,14 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
               searchPlaceholder="Search vendor…"
             />
             {vendor && (
-              <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 text-[11px] animate-in fade-in">
-                <div className="bg-white px-3 py-2">
-                  <p className="font-bold uppercase tracking-wider text-slate-400">Khata now</p>
-                  <p className={`font-mono text-xs font-black ${bal > 0 ? 'text-rose-600' : bal < 0 ? 'text-sky-700' : 'text-slate-500'}`}>{describe(bal)}</p>
+              <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-control border border-line bg-line text-[11px] animate-in fade-in">
+                <div className="bg-surface px-3 py-2">
+                  <p className="font-semibold text-fg-subtle">Khata now</p>
+                  <p className={cn('text-xs font-bold tabular-nums', balanceTone(bal))}>{describe(bal)}</p>
                 </div>
-                <div className="bg-white px-3 py-2">
-                  <p className="font-bold uppercase tracking-wider text-slate-400">After this</p>
-                  <p className={`font-mono text-xs font-black ${balAfter > 0 ? 'text-rose-600' : balAfter < 0 ? 'text-sky-700' : 'text-emerald-700'}`}>{amount > 0 ? describe(balAfter) : '—'}</p>
+                <div className="bg-surface px-3 py-2">
+                  <p className="font-semibold text-fg-subtle">After this</p>
+                  <p className={cn('text-xs font-bold tabular-nums', balanceTone(balAfter, 'text-success-fg'))}>{amount > 0 ? describe(balAfter) : '—'}</p>
                 </div>
               </div>
             )}
@@ -1147,18 +1160,16 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
             <FieldLabel htmlFor="payment-amount" aside={quickAmounts.length > 0 && (
               <span className="flex gap-1">
                 {quickAmounts.map(q => (
-                  <button key={q.label} type="button" onClick={() => set({ amount: q.value })} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${amount === q.value ? 'bg-lime-600 text-white' : 'bg-slate-100 text-slate-600 hover:text-slate-900'}`}>
-                    {q.label}
-                  </button>
+                  <QuickPick key={q.label} selected={amount === q.value} onClick={() => set({ amount: q.value })}>{q.label}</QuickPick>
                 ))}
               </span>
             )}>{isRefund ? 'Amount received' : 'Amount'}</FieldLabel>
             <div className="relative">
-              <span className="pointer-events-none absolute left-4 top-1/2 z-10 -translate-y-1/2 text-lg font-black text-slate-300">Rs</span>
+              <RsPrefix />
               <SmartNumberInput
                 id="payment-amount"
                 data-autofocus
-                className={`h-14 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 font-mono text-2xl font-black tracking-tight outline-none placeholder:text-slate-300 focus:border-lime-500 focus:ring-4 focus:ring-lime-500/10 ${isRefund ? 'text-sky-700' : 'text-emerald-700'}`}
+                className={cn(amountClass, isRefund ? 'text-info-fg' : 'text-success-fg')}
                 placeholder="0"
                 required
                 value={paymentFormData.amount}
@@ -1167,29 +1178,35 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
             </div>
           </div>
 
-          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+          <div className="flex flex-col gap-3 rounded-card border border-line bg-surface-2/60 p-3">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
               <div>
                 <FieldLabel htmlFor="payment-date" aside={
-                  <button type="button" onClick={() => set({ date: today })} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${paymentFormData.date === today ? 'bg-lime-600 text-white' : 'bg-slate-100 text-slate-500'}`}>Today</button>
+                  <QuickPick selected={paymentFormData.date === today} onClick={() => set({ date: today })}>Today</QuickPick>
                 }>Date</FieldLabel>
-                <input id="payment-date" type="date" className={fieldClass} value={paymentFormData.date} onChange={e => set({ date: e.target.value })} required />
+                <Input id="payment-date" type="date" value={paymentFormData.date} onChange={e => set({ date: e.target.value })} required />
               </div>
               <div>
                 <FieldLabel>Mode</FieldLabel>
-                <PillGroup label="Payment mode" options={MODE_OPTIONS} value={paymentFormData.mode} onChange={mode => set({ mode, account_id: defaultAccountFor(mode, accounts, settings) })} className="bg-white" />
+                <SegmentedControl
+                  aria-label="Payment mode"
+                  options={MODE_OPTIONS}
+                  value={paymentFormData.mode}
+                  onChange={mode => set({ mode, account_id: defaultAccountFor(mode, accounts, settings) })}
+                  className="w-full sm:w-fit"
+                />
               </div>
             </div>
             <div>
-              <FieldLabel>{isRefund ? 'Into account' : 'From account'} <span className="text-rose-500">*</span></FieldLabel>
+              <FieldLabel>{isRefund ? 'Into account' : 'From account'} <span className="text-danger">*</span></FieldLabel>
               <RichSelect options={accountRichOptions} value={paymentFormData.account_id} onChange={accId => set({ account_id: accId })} placeholder="Select account…" searchPlaceholder="Search account…" />
             </div>
             {selectedDirectPaymentAccount && (
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-500">{selectedDirectPaymentAccount.name} balance</span>
-                <span className="font-mono font-semibold text-slate-700">
+                <span className="text-fg-subtle">{selectedDirectPaymentAccount.name} balance</span>
+                <span className="font-semibold tabular-nums text-fg-muted">
                   {formatCurrency(selectedDirectPaymentAccount.balance)}
-                  {amount > 0 && <span className={`ml-1.5 font-bold ${accountAfter < 0 ? 'text-rose-600' : 'text-slate-500'}`}>→ {formatCurrency(accountAfter)}</span>}
+                  {amount > 0 && <span className={cn('ml-1.5 font-bold', accountAfter < 0 ? 'text-danger-fg' : 'text-fg-subtle')}>→ {formatCurrency(accountAfter)}</span>}
                 </span>
               </div>
             )}
@@ -1197,28 +1214,28 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <FieldLabel htmlFor="payment-ref">Ref / cheque # <span className="font-medium text-slate-400">(optional)</span></FieldLabel>
-              <input id="payment-ref" type="text" className={fieldClass} placeholder="Tx ID / receipt #" value={paymentFormData.reference_no} onChange={e => set({ reference_no: e.target.value })} />
+              <FieldLabel htmlFor="payment-ref">Ref / cheque # <span className="font-medium text-fg-subtle">(optional)</span></FieldLabel>
+              <Input id="payment-ref" placeholder="Tx ID / receipt #" value={paymentFormData.reference_no} onChange={e => set({ reference_no: e.target.value })} />
             </div>
             <div>
               <FieldLabel htmlFor="payment-note">Note</FieldLabel>
-              <input id="payment-note" type="text" className={fieldClass} placeholder={isRefund ? 'Advance returned…' : 'Salary, rent, advance…'} value={paymentFormData.note} onChange={e => set({ note: e.target.value })} />
+              <Input id="payment-note" placeholder={isRefund ? 'Advance returned…' : 'Salary, rent, advance…'} value={paymentFormData.note} onChange={e => set({ note: e.target.value })} />
             </div>
           </div>
         </SheetBody>
 
         <SheetFooter className="justify-end">
-          <button type="button" onClick={onClose} disabled={isSubmittingPayment} className="h-10 rounded-xl px-4 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Cancel</button>
-          <button
+          <Button variant="ghost" onClick={onClose} disabled={isSubmittingPayment}>Cancel</Button>
+          <Button
             type="submit"
-            disabled={isSubmittingPayment || isLocked}
+            disabled={isLocked}
+            loading={isSubmittingPayment}
+            leftIcon={isRefund ? <ArrowDownLeft /> : <ArrowUpRight />}
             title={isLocked ? `${paymentFormData.date} lock hai` : 'Ctrl+Enter'}
-            className={`flex h-10 flex-1 items-center justify-center gap-2 rounded-xl px-5 text-xs font-bold text-white shadow-md transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none ${isRefund ? 'bg-sky-600 shadow-sky-600/25 hover:bg-sky-700' : 'bg-emerald-600 shadow-emerald-600/25 hover:bg-emerald-700'}`}
+            className="flex-1 sm:flex-initial"
           >
-            {isSubmittingPayment
-              ? <><Loader2 size={15} className="animate-spin" /> Saving…</>
-              : <>{isRefund ? <ArrowDownLeft size={15} /> : <ArrowUpRight size={15} />} {isRefund ? 'Receive' : 'Pay'} {amount > 0 ? formatCurrency(amount) : ''}</>}
-          </button>
+            {isSubmittingPayment ? 'Saving…' : `${isRefund ? 'Receive' : 'Pay'} ${amount > 0 ? formatCurrency(amount) : ''}`.trim()}
+          </Button>
         </SheetFooter>
       </form>
     </Sheet>
