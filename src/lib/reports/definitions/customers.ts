@@ -1,6 +1,6 @@
 import type { ReportData, ReportDefinition, ReportRow } from '../types';
 import {
-  autoGroup, chronological, COLOR, customerName, customerTxEffect, dayOf, findCustomer, groupSum, inRange, isCustomerCharge,
+  autoGroup, chronological, COLOR, customerName, customerTxEffect, dayOf, findCustomer, fmtRupees, groupSum, inRange, isCustomerCharge,
   isCustomerReceipt, isNonCashCustomerTx, isOpeningCustomerTx, isVoidStatus, isWriteOffCustomerTx, lower, n, pct, r2, r3,
   saleFigures, saleMode, sum, timeSeries, topSlices
 } from '../helpers';
@@ -16,7 +16,7 @@ const ageDays = (date: string, today: string) => {
 const txMode = (tx: CustomerTransaction) => String(tx.mode || (tx as any).details?.mode || 'Cash');
 const txNote = (tx: CustomerTransaction) => String(tx.note || (tx as any).details?.note || '');
 const isActiveCustomer = (c: Customer) => c.isActive !== false;
-const fmt = (value: number) => Math.round(value).toLocaleString('en-PK');
+const fmt = fmtRupees;
 
 const AGE_BUCKETS = [
   { key: 'b7', label: '0–7 days', max: 7 },
@@ -64,7 +64,7 @@ function supplyChargesByCustomer(data: ReportData) {
     const list = map.get(e.customer_id) || [];
     list.push({
       id: `supply_${e.id}`, customer_id: e.customer_id, date: e.date, type: 'Charge', amount: due, mode: 'Home delivery',
-      note: `Home delivery ${litres} L × ${r2(n(e.rate))}${e.route ? ` (${e.route})` : ''}${paid ? ` · Rs ${Math.round(paid).toLocaleString('en-PK')} paid on delivery` : ''}`,
+      note: `Home delivery ${litres} L × ${r2(n(e.rate))}${e.route ? ` (${e.route})` : ''}${paid ? ` · Rs ${fmt(paid)} paid on delivery` : ''}`,
     });
     map.set(e.customer_id, list);
   });

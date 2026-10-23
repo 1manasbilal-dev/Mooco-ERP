@@ -20,6 +20,10 @@ export const r3 = (value: number) => Math.round((value + Number.EPSILON) * 1000)
 export const pct = (part: number, whole: number) => (whole ? r2((part / whole) * 100) : 0);
 export const lower = (value: unknown) => String(value ?? '').trim().toLowerCase();
 
+const wholeRupees = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 0 });
+/** "1,234" for text lines built per row; same as Math.round(x).toLocaleString('en-PK') with one shared formatter. */
+export const fmtRupees = (value: number) => wholeRupees.format(Math.round(n(value)));
+
 export const CHART_COLORS = ['#65a30d', '#0891b2', '#f59e0b', '#7c3aed', '#e11d48', '#2563eb', '#14b8a6', '#f97316', '#64748b', '#db2777'];
 export const COLOR = {
   sales: '#65a30d', cash: '#16a34a', online: '#2563eb', credit: '#f59e0b', expense: '#e11d48',
@@ -32,15 +36,11 @@ const PKT_OFFSET_MS = 5 * 3600000;
 /** Pakistan has kept UTC+5 with no daylight saving since 2010; older timestamps go through Intl. */
 const FIXED_OFFSET_SINCE = Date.UTC(2010, 0, 1);
 const dayTexts = new Map<number, string>();
+/** Answers per stored timestamp. Rows keep the same strings between runs, so most calls are one lookup. */
+const dayCache = new Map<string, string>();
+const DAY_CACHE_LIMIT = 250000;
 
-/**
- * Business day of any stored date or timestamp, in Pakistan time. Same answer as businessDate(),
- * but plain arithmetic instead of Intl, because reports call it for every row on every run.
- */
-export const dayOf = (value?: string | null): string => {
-  if (!value) return '';
-  if (typeof value !== 'string') return businessDate(value as unknown as Date);
-  if (value.length === 10 && DATE_ONLY.test(value)) return value;
+function parseDay(value: string): string {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return '';
   if (time < FIXED_OFFSET_SINCE) return businessDate(value);
@@ -51,6 +51,23 @@ export const dayOf = (value?: string | null): string => {
     dayTexts.set(index, text);
   }
   return text;
+}
+
+/**
+ * Business day of any stored date or timestamp, in Pakistan time. Same answer as businessDate(),
+ * but plain arithmetic instead of Intl (and remembered), because reports call it for every row on every run.
+ */
+export const dayOf = (value?: string | null): string => {
+  if (!value) return '';
+  if (typeof value !== 'string') return businessDate(value as unknown as Date);
+  if (value.length === 10 && DATE_ONLY.test(value)) return value;
+  let day = dayCache.get(value);
+  if (day === undefined) {
+    day = parseDay(value);
+    if (dayCache.size >= DAY_CACHE_LIMIT) dayCache.clear();
+    dayCache.set(value, day);
+  }
+  return day;
 };
 
 export const inRange = (value: string | undefined | null, f: Pick<ReportFilters, 'from' | 'to'>): boolean => {
@@ -68,10 +85,16 @@ export function previousRange(from: string, to: string) {
   return { from: offsetDate(from, -days), to: offsetDate(from, -1) };
 }
 
+const weekStarts = new Map<string, string>();
 const weekStart = (date: string) => {
-  const d = new Date(`${date}T12:00:00Z`);
-  const dow = (d.getUTCDay() + 6) % 7; // Monday = 0
-  return offsetDate(date, -dow);
+  let start = weekStarts.get(date);
+  if (start === undefined) {
+    const d = new Date(`${date}T12:00:00Z`);
+    const dow = (d.getUTCDay() + 6) % 7; // Monday = 0
+    start = offsetDate(date, -dow);
+    weekStarts.set(date, start);
+  }
+  return start;
 };
 
 /** Bucket of a business day: the day itself, the Monday of its week, or YYYY-MM. */
@@ -465,11 +488,18 @@ export const bankTxEffect = (type: string, amount: number) =>
     : ['withdrawal', 'transfer_out', 'expense'].includes(lower(type)) ? -n(amount)
       : 0;
 
-/** Sorting by date, then created time, then id, so same-day entries stay in a stable order. */
+const plainCompare = (a: unknown, b: unknown) => {
+  const x = String(a || '');
+  const y = String(b || '');
+  return x < y ? -1 : x > y ? 1 : 0;
+};
+
+/**
+ * Sorting by date, then created time, then id, so same-day entries stay in a stable order.
+ * Plain code-point comparison: ISO dates sort correctly and it is far faster than localeCompare.
+ */
 export const chronological = <T extends { date?: string; created_at?: string; id?: string }>(a: T, b: T) =>
-  String(a.date || '').localeCompare(String(b.date || '')) ||
-  String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
-  String(a.id || '').localeCompare(String(b.id || ''));
+  plainCompare(a.date, b.date) || plainCompare(a.created_at, b.created_at) || plainCompare(a.id, b.id);
 
 /** Cash remitted to the head that has left the drawer but is not received in any account yet. */
 export const cashInTransit = (data: ReportData) =>

@@ -1,9 +1,24 @@
-import { formatCurrency, formatPercent, formatQty } from '../formatters';
+import { cleanNumber, formatPercent } from '../formatters';
 import { prettyDate } from './presets';
 import type { ColumnFormat, ReportColumn, ReportRow, ReportTable } from './types';
 
 const timeFormatter = new Intl.DateTimeFormat('en-PK', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hour12: true });
 const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+/*
+ * Same output as formatCurrency / formatQty / toLocaleString in lib/formatters, but with formatters
+ * built once. toLocaleString with options builds a new one per call, and a table or an export
+ * formats every cell (30k bills × 6 money columns took seconds).
+ */
+const moneyFormat = new Intl.NumberFormat('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const qtyFormat = new Intl.NumberFormat('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+const numberFormat = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 });
+const formatCurrency = (value: number) => {
+  const cleaned = cleanNumber(value, 2);
+  const text = moneyFormat.format(Math.abs(cleaned));
+  return cleaned < 0 ? `-Rs ${text}` : `Rs ${text}`;
+};
+const formatQty = (value: number) => qtyFormat.format(cleanNumber(value, 3));
 
 function formatDateTime(value: unknown): string {
   const text = String(value ?? '');
@@ -18,8 +33,8 @@ export function formatValue(value: unknown, format: ColumnFormat | 'money' | 'qt
   if (value === null || value === undefined || value === '') return format === 'money' || format === 'qty' || format === 'number' ? '—' : '';
   switch (format) {
     case 'money': return formatCurrency(Number(value));
-    case 'qty': return `${formatQty(Number(value), 3)}${unit ? ` ${unit}` : ''}`;
-    case 'number': return Number(value).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+    case 'qty': return `${formatQty(Number(value))}${unit ? ` ${unit}` : ''}`;
+    case 'number': return numberFormat.format(Number(value));
     case 'percent': return formatPercent(Number(value));
     case 'date': {
       const text = String(value);
@@ -46,10 +61,13 @@ export function tableTotals(table: Pick<ReportTable, 'columns'>, rows: ReportRow
   return totals;
 }
 
+/** One collator for every sort: localeCompare with options builds a new one on each call. */
+const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
 /** Stable, type-aware comparison for column sorting. */
 export function compareCells(a: unknown, b: unknown): number {
   const na = typeof a === 'number' ? a : Number.NaN;
   const nb = typeof b === 'number' ? b : Number.NaN;
   if (!Number.isNaN(na) || !Number.isNaN(nb)) return (Number.isNaN(na) ? -Infinity : na) - (Number.isNaN(nb) ? -Infinity : nb);
-  return String(a ?? '').localeCompare(String(b ?? ''), 'en', { numeric: true, sensitivity: 'base' });
+  return collator.compare(String(a ?? ''), String(b ?? ''));
 }

@@ -1,6 +1,6 @@
 import type { ReportData, ReportDefinition, ReportFilters, ReportRow, ReportSectionLine, Tone } from '../types';
 import {
-  accountName, autoGroup, bankTxEffect, bucketKey, bucketKeys, bucketLabel, cashInTransit, chronological, COLOR, customerName, dayOf,
+  accountName, autoGroup, bankTxEffect, bucketKey, bucketKeys, bucketLabel, cashInTransit, chronological, COLOR, customerName, dayOf, fmtRupees,
   groupSum, inRange, isCustomerReceipt, isNonCashCustomerTx, isPurchaseVoid, isSupplierWaiver, isVoidExpense, itemStock, lower, n,
   pct, r2, r3, reportSales, saleFigures, saleLines, saleMode, sum, supplierName, timeSeries, topSlices
 } from '../helpers';
@@ -12,7 +12,7 @@ import {
 import { buildStockProfitReport, type StockProfitSource } from '../../stockProfit';
 import type { BankTransaction, ExpenseEntry, FinancialAccount } from '../../../types';
 
-const rs = (value: number) => `Rs ${Math.round(value).toLocaleString('en-PK')}`;
+const rs = (value: number) => `Rs ${fmtRupees(value)}`;
 
 const activeExpenses = (data: ReportData, f: Pick<ReportFilters, 'from' | 'to'>) =>
   data.expenses.filter(e => inRange(e.date, f) && !isVoidExpense(e));
