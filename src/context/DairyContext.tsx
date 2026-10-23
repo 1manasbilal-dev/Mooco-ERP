@@ -507,6 +507,19 @@ const bindLatest = <T extends Record<string, (...args: any[]) => any>>(ref: { cu
   return bound;
 };
 
+// The catalog item a bill / cart line belongs to. Matched by id only: "id or name" took the first
+// item matching either, so a line could get another item's cost or stock move. The name is used
+// only for an old line saved without an id, and that is logged.
+const lineItemId = (line: any): string | undefined => line?.itemId || line?.id || undefined;
+const findLineItem = <T extends { id: string; name: string }>(list: T[], line: any): T | undefined => {
+  const id = lineItemId(line);
+  if (id) return list.find(entry => entry.id === id);
+  const name = String(line?.name || '').trim().toLowerCase();
+  const byName = name ? list.find(entry => String(entry.name || '').trim().toLowerCase() === name) : undefined;
+  if (byName) console.warn('[Stock] Line without an item id matched by name:', line?.name);
+  return byName;
+};
+
 // A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
 const businessDayOf = (dateStr: string): string =>
   /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
@@ -2354,7 +2367,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const snapshotCart = cart.map((line: any) => {
-        const catalogItem = items.find(i => i.id === (line.itemId || line.id) || i.name === line.name);
+        const catalogItem = findLineItem<ItemDefinition>(items, line);
         const baseCost = Number(line.cost_price || catalogItem?.cost_price || 0);
         const vId = line.variantId;
         const variant = vId && catalogItem ? (catalogItem.variants || []).find(v => v.id === vId) : undefined;
@@ -2432,7 +2445,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       const updatesMap: Record<string, { looseDeduction: number, variantDeductions: Record<string, number>, logDetails: string[], name: string }> = {};
       for (const item of cart) {
-         const inventoryItem = inventory.find(i => i.item_id === item.id || i.name === item.name);
+         const lineId = lineItemId(item);
+         const inventoryItem = lineId ? inventory.find(i => i.item_id === lineId) : inventory.find(i => i.name === item.name);
          if (inventoryItem) {
              const parentId = inventoryItem.item_id!;
              if (!updatesMap[parentId]) {
@@ -4419,11 +4433,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       // Each line goes back to the pile it left, sized as it was sold: the bill's own snapshot wins over today's catalog.
       for (const item of itemsToReturn) {
-        const itemId = item.itemId;
         const qty = Number(item.qty) || 0;
         if (qty <= 0) continue;
         const variantId = item.variantId;
-        const itemDef = items.find(i => i.id === itemId || i.name.toLowerCase() === item.name.toLowerCase());
+        const itemDef = findLineItem<ItemDefinition>(items, item);
 
         if (itemDef) {
           const soldLine: any = (sale.items || []).find((l: any) => (l.itemId || l.id) === itemDef.id && (l.variantId || undefined) === (variantId || undefined)) || {};
@@ -5142,8 +5155,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         let quantity = roundQuantity(inv.quantity || 0);
         const variant_stocks = { ...(inv.variant_stocks || {}) };
         for (const line of cart) {
-          const lineId = line.itemId || line.id;
-          if (inv.item_id !== lineId && inv.name !== line.name) continue;
+          const lineId = lineItemId(line);
+          if (lineId ? inv.item_id !== lineId : inv.name !== line.name) continue;
           if (line.variantId && !line.deductFromBase) {
             variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
           } else {
@@ -5155,8 +5168,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setItems(prev => prev.map(item => {
         let next = item;
         for (const line of cart) {
-          const lineId = line.itemId || line.id;
-          if (item.id !== lineId && item.name !== line.name) continue;
+          const lineId = lineItemId(line);
+          if (lineId ? item.id !== lineId : item.name !== line.name) continue;
           const variant_stocks = { ...(next.variant_stocks || {}) };
           let stock = roundQuantity(next.stock || 0);
           if (line.variantId && !line.deductFromBase) {

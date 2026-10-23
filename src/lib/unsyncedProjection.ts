@@ -465,7 +465,8 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
           if (order.status === 'Returned' || effectsOnServer(order)) continue;
           for (const line of order.items || []) {
             const lineId = line.itemId || line.id;
-            const matches = inv.item_id === lineId || inv.id === lineId || inv.name === line.name;
+            // By id only; "id or name" could also move a second row that shares the name.
+            const matches = lineId ? (inv.item_id === lineId || inv.id === lineId) : inv.name === line.name;
             if (!matches) continue;
             const qty = roundQuantity(Number(line.qty) || 0);
             if (line.variantId && line.deductFromBase !== true) {
