@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Building2, Database, Eye, Package, Receipt, ShieldCheck, Users, Wallet } from 'lucide-react';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
-import { confirmAction } from '../components/ui/ConfirmDialog';
-import { SaveBar } from '../components/settings/SettingsUI';
+import { IconButton, confirmAction } from '../components/ui';
+import { cn } from '../lib/cn';
+import { Notice, SaveBar } from '../components/settings/SettingsUI';
 import {
-  BusinessTab, OperationsTab, PaymentsTab, SalesTab, SecurityTab, SettingsDraft,
-  draftFromSettings, draftToSettings, validateDraft,
+  BusinessTab, FIELD_TAB, FieldKey, OperationsTab, PaymentsTab, SalesTab, SecurityTab, SettingsDraft,
+  draftFromSettings, draftToSettings, validateFields,
 } from '../components/settings/SettingsForms';
 import { UsersTab } from '../components/settings/UsersTab';
 import { DataTab } from '../components/settings/DataTab';
@@ -66,6 +67,9 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
   const saved = useMemo(() => draftFromSettings(settings), [settings]);
   const [draft, setDraft] = useState<SettingsDraft>(saved);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  // Problems show as they are typed; an empty required field only after a save attempt.
+  const [triedSave, setTriedSave] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
 
   // Settings refreshed from the server while nothing is being edited: show the new values.
@@ -85,61 +89,98 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
     setDraft(prev => ({ ...prev, [section]: { ...prev[section], ...value } }));
 
   const today = getBusinessDate();
+  // Security fields are Owner-only; nobody else is blocked by (or shown) problems there.
+  const errors = useMemo(() => {
+    const all = validateFields(draft, today);
+    if (!isOwner) (Object.keys(all) as FieldKey[]).forEach(k => { if (FIELD_TAB[k] === 'security') delete all[k]; });
+    return all;
+  }, [draft, today, isOwner]);
+  const shownErrors = useMemo(() => {
+    if (triedSave) return errors;
+    const rest = { ...errors };
+    delete rest.companyName;
+    return rest;
+  }, [errors, triedSave]);
+  const problemCount = Object.keys(errors).length;
 
   const save = async () => {
-    const problem = validateDraft(draft, today);
-    if (problem) return showToast(problem, 'warning');
-    const newLock = draft.security.lockDate;
-    if (newLock && newLock !== saved.security.lockDate && !(await confirmAction({
-      tone: 'warning',
-      title: `Books ${newLock} tak band karein?`,
-      consequences: [
-        `${newLock} aur us se pehle ki koi entry add, edit ya delete nahi ho sakegi.`,
-        'Bills, purchases, kharche, payments aur journal sab par lagu hoga.',
-        'Baad mein Owner lock date peeche kar sakta hai.',
-      ],
-      confirmLabel: 'Haan, band karein',
-    }))) return;
-    setSaving(true);
-    const changes = draftToSettings(draft);
-    // Security controls are Owner-only (read-only for everyone else): never send a stale copy
-    // that could undo the Owner's newer lock date / discount limit.
-    if (!isOwner) delete changes.security;
-    const ok = await updateSettings(changes);
-    setSaving(false);
-    if (ok) showToast('Settings save ho gayin.', 'success');
+    if (savingRef.current) return;
+    const first = (Object.keys(errors) as FieldKey[])[0];
+    if (first) {
+      setTriedSave(true);
+      showToast(errors[first]!, 'warning');
+      // The problem may sit on another tab: open it so the highlighted field is in view.
+      if (FIELD_TAB[first] !== activeTab && visibleTabs.some(t => t.id === FIELD_TAB[first])) selectTab(FIELD_TAB[first]);
+      return;
+    }
+    savingRef.current = true;
+    try {
+      const newLock = draft.security.lockDate;
+      if (isOwner && newLock && newLock !== saved.security.lockDate && !(await confirmAction({
+        tone: 'warning',
+        title: `Books ${newLock} tak band karein?`,
+        consequences: [
+          `${newLock} aur us se pehle ki koi entry add, edit ya delete nahi ho sakegi.`,
+          'Bills, purchases, kharche, payments aur journal sab par lagu hoga.',
+          'Baad mein Owner lock date peeche kar sakta hai.',
+        ],
+        confirmLabel: 'Haan, band karein',
+      }))) return;
+      setSaving(true);
+      const changes = draftToSettings(draft);
+      // Security controls are Owner-only (read-only for everyone else): never send a stale copy
+      // that could undo the Owner's newer lock date / discount limit.
+      if (!isOwner) delete changes.security;
+      const ok = await updateSettings(changes);
+      if (ok) { setTriedSave(false); showToast('Settings save ho gayin.', 'success'); }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
+
+  const discard = () => { setDraft(saved); setTriedSave(false); };
+
+  // Phones: the tab strip scrolls sideways, so bring the open tab into view.
+  const stripRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    const current = strip?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!strip || !current || strip.offsetParent === null) return;
+    const box = strip.getBoundingClientRect();
+    const pill = current.getBoundingClientRect();
+    if (pill.left < box.left || pill.right > box.right) strip.scrollLeft += pill.left - box.left - 16;
+  }, [activeTab]);
 
   const readOnlyFor = (tab: TabId) => tab === 'security' ? !isOwner : !canEdit;
   const active = visibleTabs.find(t => t.id === activeTab) || visibleTabs[0];
   const groups = [...new Set(visibleTabs.map(t => t.group))];
+  const tabHasProblem = (id: TabId) => (Object.keys(shownErrors) as FieldKey[]).some(k => FIELD_TAB[k] === id);
 
   return (
-    <div className="min-h-full bg-slate-50 dark:bg-slate-950">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+    <div className="min-h-full bg-canvas">
+      <header className="sticky top-0 z-30 border-b border-line bg-surface">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
-          <button type="button" onClick={onBack} aria-label="Wapas" className="rounded-xl border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-            <ArrowLeft size={18} />
-          </button>
+          <IconButton variant="secondary" icon={<ArrowLeft />} aria-label="Wapas" onClick={onBack} />
           <div className="min-w-0">
-            <h1 className="text-lg font-black tracking-tight text-slate-900 dark:text-white">Settings</h1>
-            <p className="hidden text-xs text-slate-500 sm:block dark:text-slate-400">Business, staff ki ijazat aur data ki hifazat</p>
+            <h1 className="text-lg font-bold tracking-tight text-fg">Settings</h1>
+            <p className="hidden text-xs text-fg-subtle sm:block">Business, staff ki ijazat aur data ki hifazat</p>
           </div>
         </div>
       </header>
 
       <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-5 md:px-8 lg:flex-row lg:gap-8 lg:py-8">
         {/* Phones & tablets: scrollable tab strip */}
-        <nav aria-label="Settings sections" className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-hide lg:hidden">
+        <nav ref={stripRef} aria-label="Settings sections" className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-hide lg:hidden">
           {visibleTabs.map(t => {
             const Icon = t.icon;
             const on = t.id === active.id;
             return (
               <button key={t.id} type="button" onClick={() => selectTab(t.id)} aria-current={on ? 'page' : undefined}
-                className={`flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition ${on
-                  ? 'border-lime-600 bg-lime-600 text-white'
-                  : 'border-slate-200 bg-white text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'}`}>
-                <Icon size={15} /> {t.label}
+                className={cn('relative flex h-10 shrink-0 items-center gap-2 rounded-control px-3 text-[13px] font-semibold ring-1 ring-inset transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  on ? 'bg-brand-soft text-brand-fg ring-brand/30' : 'bg-surface text-fg-muted ring-line hover:text-fg')}>
+                <Icon size={15} aria-hidden="true" /> {t.label}
+                {tabHasProblem(t.id) && <span className="size-2 rounded-full bg-danger" aria-label="Problem" />}
               </button>
             );
           })}
@@ -150,21 +191,21 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
           <div className="sticky top-24 space-y-5">
             {groups.map(group => (
               <div key={group}>
-                <div className="mb-1.5 px-3 text-[11px] font-black uppercase tracking-wider text-slate-400">{group}</div>
+                <div className="mb-1.5 px-3 text-[11px] font-bold uppercase tracking-wider text-fg-subtle">{group}</div>
                 <div className="space-y-0.5">
                   {visibleTabs.filter(t => t.group === group).map(t => {
                     const Icon = t.icon;
                     const on = t.id === active.id;
                     return (
                       <button key={t.id} type="button" onClick={() => selectTab(t.id)} aria-current={on ? 'page' : undefined}
-                        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${on
-                          ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:text-white dark:ring-slate-800'
-                          : 'text-slate-600 hover:bg-white/70 dark:text-slate-400 dark:hover:bg-slate-900/60'}`}>
-                        <Icon size={17} className={on ? 'text-lime-600' : 'text-slate-400'} />
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-bold">{t.label}</span>
-                          <span className="block truncate text-[11px] text-slate-400">{t.hint}</span>
+                        className={cn('flex w-full items-center gap-3 rounded-control px-3 py-2.5 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          on ? 'bg-surface text-fg shadow-e1 ring-1 ring-inset ring-line' : 'text-fg-muted hover:bg-surface/70 hover:text-fg')}>
+                        <Icon size={17} className={on ? 'text-brand-accent' : 'text-fg-faint'} aria-hidden="true" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold">{t.label}</span>
+                          <span className="block truncate text-[11px] text-fg-subtle">{t.hint}</span>
                         </span>
+                        {tabHasProblem(t.id) && <span className="size-2 shrink-0 rounded-full bg-danger" aria-label="Problem" />}
                       </button>
                     );
                   })}
@@ -175,21 +216,17 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
         </nav>
 
         <main className="min-w-0 flex-1">
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-xs sm:px-6 md:px-8 md:py-7 dark:border-slate-800 dark:bg-slate-900">
-            {FORM_TABS.includes(active.id) && readOnlyFor(active.id) && active.id !== 'security' && (
-              <div className="mb-4 flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <Eye size={14} /> Aap ye settings dekh sakte hain, badal nahi sakte.
-              </div>
-            )}
-            {active.id === 'business' && <BusinessTab draft={draft} patch={patch} readOnly={readOnlyFor('business')} />}
-            {active.id === 'sales' && <SalesTab draft={draft} patch={patch} readOnly={readOnlyFor('sales')} />}
-            {active.id === 'payments' && <PaymentsTab draft={draft} patch={patch} readOnly={readOnlyFor('payments')} accounts={accounts} />}
-            {active.id === 'operations' && <OperationsTab draft={draft} patch={patch} readOnly={readOnlyFor('operations')} onOpenItems={() => navigate('/items')} />}
-            {active.id === 'security' && <SecurityTab draft={draft} patch={patch} readOnly={readOnlyFor('security')} today={today} savedLockDate={saved.security.lockDate} />}
-            {active.id === 'users' && <UsersTab />}
-            {active.id === 'data' && <DataTab />}
-          </div>
-          <SaveBar visible={dirty} saving={saving} onSave={save} onDiscard={() => setDraft(saved)} />
+          {FORM_TABS.includes(active.id) && readOnlyFor(active.id) && active.id !== 'security' && (
+            <div className="mb-4"><Notice icon={<Eye />}>Aap ye settings dekh sakte hain, badal nahi sakte.</Notice></div>
+          )}
+          {active.id === 'business' && <BusinessTab draft={draft} patch={patch} readOnly={readOnlyFor('business')} errors={shownErrors} />}
+          {active.id === 'sales' && <SalesTab draft={draft} patch={patch} readOnly={readOnlyFor('sales')} errors={shownErrors} />}
+          {active.id === 'payments' && <PaymentsTab draft={draft} patch={patch} readOnly={readOnlyFor('payments')} accounts={accounts} />}
+          {active.id === 'operations' && <OperationsTab draft={draft} patch={patch} readOnly={readOnlyFor('operations')} onOpenItems={() => navigate('/items')} />}
+          {active.id === 'security' && <SecurityTab draft={draft} patch={patch} readOnly={readOnlyFor('security')} today={today} savedLockDate={saved.security.lockDate} errors={shownErrors} />}
+          {active.id === 'users' && <UsersTab />}
+          {active.id === 'data' && <DataTab />}
+          <SaveBar visible={dirty} saving={saving} problems={problemCount} onSave={save} onDiscard={discard} />
         </main>
       </div>
     </div>
