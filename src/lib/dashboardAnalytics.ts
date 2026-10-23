@@ -1,3 +1,5 @@
+import { isDateOnlyOrMidnight } from './formatters';
+
 export type DashboardRange = 'today' | 'yesterday' | '7days' | 'month';
 
 const dayFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -40,8 +42,14 @@ export function percentageChange(current: number, previous: number): number | nu
   return previous > 0 ? ((current - previous) / previous) * 100 : null;
 }
 
+/**
+ * Date-only values and legacy UTC-midnight stamps ('2026-09-22T00:00:00+00:00', saved from a date
+ * picker) carry no real time; read as a time they all pile up at a phantom 05:00 PKT.
+ */
+const hasNoRecordedTime = (value: string) => !value?.includes('T') || isDateOnlyOrMidnight(value);
+
 export function reportingHour(value: string): number {
-  if (!value?.includes('T')) return 12;
+  if (hasNoRecordedTime(value)) return 12;
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 12;
   return Number(hourFormatter.format(date));
@@ -49,7 +57,7 @@ export function reportingHour(value: string): number {
 
 /** Date-only records retain the existing noon placement because no time was recorded. */
 export function reportingHalfHour(value: string): number {
-  if (!value?.includes('T')) return 24;
+  if (hasNoRecordedTime(value)) return 24;
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 24;
   const parts = clockFormatter.formatToParts(date);

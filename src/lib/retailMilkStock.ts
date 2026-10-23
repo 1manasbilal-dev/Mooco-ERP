@@ -1,4 +1,5 @@
 import { StockType, type InventoryItem, type ItemDefinition } from '../types';
+import { cleanQty } from './formatters';
 
 export const RETAIL_CHILLER_CAPACITY = 500;
 
@@ -49,7 +50,8 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
     const quantity = Number(stock.quantity);
     if (!factor || !Number.isFinite(quantity)) return [];
 
-    const liters = Math.round(quantity * factor * 100) / 100;
+    // Stock keeps three decimals; two would show 0.125 L as 0.13 L and drift the totals.
+    const liters = cleanQty(quantity * factor);
     // Catalog rates are per stock unit; express them per litre so ml stock is valued correctly.
     const rate = (Number(master?.selling_price || stock.price) || 0) / factor;
     const costRate = (Number(master?.cost_price) || 0) / factor;
