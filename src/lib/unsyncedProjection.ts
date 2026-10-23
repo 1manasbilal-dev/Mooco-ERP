@@ -334,7 +334,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       .map(c => ({
         id: `ctx_op_${c.id}`,
         customer_id: c.id,
-        date: (c.created_at || new Date().toISOString()).split('T')[0],
+        date: new Date(c.created_at || Date.now()).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
         type: c.balance > 0 ? 'Charge' : 'Payment',
         amount: roundCurrency(Math.abs(c.balance)),
         mode: 'Opening Balance',

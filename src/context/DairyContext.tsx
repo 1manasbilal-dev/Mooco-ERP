@@ -609,6 +609,10 @@ const OUTBOX_TABLES: Record<OutboxActionType, LoadKey[]> = {
   retail_closing: ['retailClosings']
 };
 
+// Balances below half a paisa are float dust (0.1 + 0.2 - 0.3), not money owed.
+const BALANCE_EPSILON = 0.005;
+const isZeroBalance = (value: unknown) => Math.abs(Number(value) || 0) < BALANCE_EPSILON;
+
 // 100 pages of 1,000 rows. The old cap of 20 would have cut bill and stock-log history silently
 // within a year at the current rate; a capped read now logs a warning.
 const MAX_HISTORY_PAGES = 100;
@@ -6565,15 +6569,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast(`Day is not ready to close: ${activeCount} shift, ${pendingRemits} remittance, ${disputedHandovers} disputed handover, ${openVariances} difference pending.`, 'warning');
       return false;
     }
-    // Auto-accept whatever is still pending in the drawer — the cash simply
-    // stays there overnight. No custody bookkeeping left dangling.
-    await supabase.from('drawer_handovers').update({
-      status: 'Accepted',
-      accepted_by_user_id: currentUser.id,
-      accepted_by_user_name: currentUser.name,
-      accepted_at: new Date().toISOString(),
-      resolution_notes: 'Auto-accepted: cash left in drawer at day close'
-    }).eq('business_day_id', businessDayId).eq('status', 'Pending');
     const dayShifts = shiftSessions.filter(s => s.business_day_id === businessDayId);
     const liveTotals = dayShifts.map(s => getShiftTotals(s.id));
     const summary = {
@@ -6603,6 +6598,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (error) {
       showToast(`Day close nahi hua: ${error.message}`, 'error');
       return false;
+    }
+    // Auto-accept whatever is still pending in the drawer — the cash simply stays there overnight.
+    // Only after the day really closed: accepted first, they stayed accepted on a day that failed to close.
+    const { error: handoverError } = await supabase.from('drawer_handovers').update({
+      status: 'Accepted',
+      accepted_by_user_id: currentUser.id,
+      accepted_by_user_name: currentUser.name,
+      accepted_at: new Date().toISOString(),
+      resolution_notes: 'Auto-accepted: cash left in drawer at day close'
+    }).eq('business_day_id', businessDayId).eq('status', 'Pending');
+    if (handoverError) {
+      console.error('[closeBusinessDay] Pending handovers not accepted:', handoverError);
+      showToast('Din band ho gaya, lekin drawer handovers accept nahi hue. Cash Control mein accept karein.', 'warning');
     }
     // Cash-closing snapshot (Candela-style EOD Z-report) into day_closings.
     // Deterministic id → reopen + close again overwrites, never duplicates.
@@ -6921,20 +6929,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           note: initialBalance > 0 ? 'Opening Balance (Initial Receivable)' : 'Opening Balance (Initial Advance/Credit)'
         };
         setCustomerTransactions(prev => [opTxRecord as any, ...prev]);
-
-        supabase.from('customer_transactions').insert([{
-          id: opTxRecord.id,
-          customer_id: id,
-          date: opTxRecord.date,
-          type: opTxRecord.type,
-          amount: opTxRecord.amount,
-          details: {
-            mode: opTxRecord.mode,
-            note: opTxRecord.note
-          }
-        }]).then(({ error }) => {
-          if (error) console.warn('[Customer Opening Balance Insert Error]', error);
-        });
+        // The ledger row itself is written by the sync right after the customer row (same fixed id,
+        // errors retried). Inserting it here as well raced the customer insert, usually failed on the
+        // missing customer, and that failure was only a console warning.
       }
 
       syncService.notifyPendingChange().catch(err => console.warn('[Customer Sync] Background sync notice:', err));
@@ -7372,7 +7369,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // One edit per expense at a time (also across tabs): two saves moved the money twice.
   const updateExpense = async (id: string, updates: Partial<ExpenseEntry>): Promise<boolean> => {
+    const result = await actionLock.runExclusiveAcrossTabs(`update_expense_${id}`, () => updateExpenseUnlocked(id, updates));
+    if (result === null) {
+      showToast('Is kharche ki pichli tabdeeli abhi save ho rahi hai.', 'warning');
+      return false;
+    }
+    return result;
+  };
+
+  const updateExpenseUnlocked = async (id: string, updates: Partial<ExpenseEntry>): Promise<boolean> => {
+    // Every money step is undone, newest first, if a later one fails: there is no server
+    // transaction for an edit, and a half-applied edit moved the money twice.
+    const undo: Array<() => PromiseLike<unknown>> = [];
     try {
       const exp = expenses.find(e => e.id === id);
       if (!exp) return false;
@@ -7395,17 +7405,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // out of step with the account.
       if (oldAccountId && oldPaid > 0) {
         // bank_transactions has no related_expense_id column; filtering on it failed the delete.
-        const { error: oldBtxError } = await supabase.from('bank_transactions').delete().or(`reference_id.eq.${id},id.eq.btx_${id}`);
+        const { data: removedRows, error: oldBtxError } = await supabase.from('bank_transactions').delete().or(`reference_id.eq.${id},id.eq.btx_${id}`).select();
         if (oldBtxError) throw oldBtxError;
-        setBankTransactions(prev => prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`));
+        if (removedRows?.length) undo.push(() => supabase.from('bank_transactions').insert(removedRows));
         const { error: oldAccError } = await adjustAccountBalance(oldAccountId, oldPaid);
         if (oldAccError) throw oldAccError;
-        setAccounts(prev => prev.map(a => a.id === oldAccountId ? { ...a, balance: roundCurrency((a.balance || 0) + oldPaid) } : a));
+        undo.push(() => adjustAccountBalance(oldAccountId, -oldPaid));
       }
       if (exp.vendor_id) {
         const unpaidOld = Math.max(0, (exp.amount || 0) - oldPaid);
         const { error: oldVendorError } = await adjustExpenseVendorStats(exp.vendor_id, -unpaidOld, -(exp.amount || 0), -oldPaid);
         if (oldVendorError) throw oldVendorError;
+        undo.push(() => adjustExpenseVendorStats(exp.vendor_id!, unpaidOld, exp.amount || 0, oldPaid));
       }
 
       const merged = { ...exp, ...updates };
@@ -7417,6 +7428,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const newAccountId = merged.account_id || null;
       const newDate = normalizeTransactionTimestamp(merged.date || new Date().toISOString());
 
+      let newBankRow: any = null;
       if (newAccountId && newPaid > 0) {
         const btxRecord = {
           id: `btx_${id}`,
@@ -7435,16 +7447,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         };
         const { error: newBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
         if (newBtxError) throw newBtxError;
-        setBankTransactions(prev => [btxRecord as any, ...prev]);
+        undo.push(() => supabase.from('bank_transactions').delete().eq('id', btxRecord.id));
         const { error: newAccError } = await adjustAccountBalance(newAccountId, -newPaid);
         if (newAccError) throw newAccError;
-        setAccounts(prev => prev.map(a => a.id === newAccountId ? { ...a, balance: roundCurrency((a.balance || 0) - newPaid) } : a));
+        undo.push(() => adjustAccountBalance(newAccountId, newPaid));
+        newBankRow = btxRecord;
       }
 
       if (merged.vendor_id) {
         const unpaidNew = Math.max(0, newTotal - newPaid);
         const { error: newVendorError } = await adjustExpenseVendorStats(merged.vendor_id, unpaidNew, newTotal, newPaid);
         if (newVendorError) throw newVendorError;
+        undo.push(() => adjustExpenseVendorStats(merged.vendor_id!, -unpaidNew, -newTotal, -newPaid));
       }
 
       const updatedExpense: ExpenseEntry = {
@@ -7455,7 +7469,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         date: newDate
       };
 
-      setExpenses(prev => prev.map(e => e.id === id ? updatedExpense : e));
       // expenses only has date/category/amount/description/details columns (paid_amount, payment_status,
       // account_* and vendor_* made every update fail). The loader reads details.paid_amount and
       // details.payment_status first, so the old snake_case copies must be overwritten as well.
@@ -7474,17 +7487,32 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }).eq('id', id);
       if (error) throw error;
 
+      // The screen follows only once every step is saved.
+      setBankTransactions(prev => [
+        ...(newBankRow ? [newBankRow] : []),
+        ...prev.filter(b => b.related_expense_id !== id && b.reference_id !== id && b.id !== `btx_${id}`)
+      ]);
+      setAccounts(prev => prev.map(a => {
+        let balance = a.balance || 0;
+        if (oldAccountId && oldPaid > 0 && a.id === oldAccountId) balance += oldPaid;
+        if (newBankRow && a.id === newAccountId) balance -= newPaid;
+        return balance === (a.balance || 0) ? a : { ...a, balance: roundCurrency(balance) };
+      }));
+      setExpenses(prev => prev.map(e => e.id === id ? updatedExpense : e));
       showToast("Expense updated successfully", "success");
       fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return true;
     } catch (err) {
       console.error("updateExpense error:", err);
+      for (const step of undo.reverse()) {
+        try { await step(); } catch (undoErr) { console.error('[updateExpense] Step could not be undone:', undoErr); }
+      }
       showToast("Failed to update expense: " + getErrorMessage(err), "error");
+      if (undo.length) fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return false;
     }
   };
-  
-  const addRecurringExpense = async (e: Omit<RecurringExpense, 'id'>) => {
+    const addRecurringExpense = async (e: Omit<RecurringExpense, 'id'>) => {
     try {
       const id = `re_${generateUUID()}`;
       const { name, amount, ...extraDetails } = e;
@@ -7911,7 +7939,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Post an Opening Balance ledger entry so the account balance matches its transactions.
       if (balance && Number(balance) !== 0) {
         const opTxId = `btx_op_${id}`;
-        await supabase.from('bank_transactions').insert([{
+        const { error: openingError } = await supabase.from('bank_transactions').insert([{
           id: opTxId,
           account_id: id,
           date: new Date().toISOString(),
@@ -7921,6 +7949,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           description: `Opening Balance for ${name}`,
           reference_id: id
         }]);
+        if (openingError) {
+          // A balance with no ledger row behind it never reconciles: take the new account back out.
+          const { error: undoError } = await supabase.from('financial_accounts').delete().eq('id', id);
+          if (undoError) console.error('[addAccount] Account without opening entry could not be removed:', undoError);
+          setAccounts(prev => prev.filter(acc => acc.id !== id));
+          if (type === 'Cash') setCashDrawers(prev => prev.filter(d => d.id !== id));
+          showToast('Account nahi bana: opening balance ki entry save nahi hui. ' + openingError.message, 'error');
+          fetchData(['cashDrawers', ...MONEY_ADDED]);
+          return false;
+        }
       }
       fetchData(['cashDrawers', ...MONEY_ADDED]);
       return true;
@@ -8179,7 +8217,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const txCount = customerTransactions.filter(t => t.customer_id === id).length;
       const hasHistory = salesCount > 0 || supplyCount > 0 || txCount > 0;
 
-      if (bal !== 0) {
+      if (!isZeroBalance(bal)) {
         blockingReasons.push(`Customer has an open balance of Rs ${Math.abs(bal).toLocaleString()} (${bal > 0 ? 'Receivable Khata' : 'Advance Credit'}).`);
       }
       if (hasHistory) {
@@ -8187,7 +8225,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       return {
-        canHardDelete: !hasHistory && bal === 0,
+        canHardDelete: !hasHistory && isZeroBalance(bal),
         canDeactivate: true,
         hasHistory,
         balance: bal,
@@ -8208,7 +8246,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const txCount = supplierTransactions.filter(t => t.supplier_id === id).length;
       const hasHistory = purCount > 0 || matCount > 0 || txCount > 0;
 
-      if (bal !== 0) {
+      if (!isZeroBalance(bal)) {
         blockingReasons.push(`Supplier has a pending payable balance of Rs ${bal.toLocaleString()}.`);
       }
       if (hasHistory) {
@@ -8216,7 +8254,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       return {
-        canHardDelete: !hasHistory && bal === 0,
+        canHardDelete: !hasHistory && isZeroBalance(bal),
         canDeactivate: true,
         hasHistory,
         balance: bal,
@@ -8278,7 +8316,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (isSystem) {
         blockingReasons.push('Default system financial account cannot be deleted or archived.');
       }
-      if (bal !== 0) {
+      if (!isZeroBalance(bal)) {
         blockingReasons.push(`Account currently has a balance of Rs ${bal.toLocaleString()}. You must transfer this balance to another account first.`);
       }
       if (hasHistory) {
@@ -8286,8 +8324,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       return {
-        canHardDelete: !isSystem && !hasHistory && bal === 0,
-        canDeactivate: !isSystem && bal === 0,
+        canHardDelete: !isSystem && !hasHistory && isZeroBalance(bal),
+        canDeactivate: !isSystem && isZeroBalance(bal),
         hasHistory,
         balance: bal,
         stock: 0,
@@ -8331,7 +8369,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const txCount = expenseVendorTransactions.filter(t => t.vendor_id === id).length;
       const hasHistory = expCount > 0 || txCount > 0;
 
-      if (bal !== 0) {
+      if (!isZeroBalance(bal)) {
         blockingReasons.push(`Vendor has an unpaid balance of Rs ${bal.toLocaleString()}.`);
       }
       if (hasHistory) {
@@ -8339,7 +8377,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       return {
-        canHardDelete: !hasHistory && bal === 0,
+        canHardDelete: !hasHistory && isZeroBalance(bal),
         canDeactivate: true,
         hasHistory,
         balance: bal,
@@ -8372,65 +8410,85 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!cust) return false;
 
       if (action === 'write_off_bad_debt') {
-        // One write-off per customer at a time: a double click used to post it twice.
-        const writeOffResult = await actionLock.runExclusive(`write_off_customer_${id}`, async () => {
-        const bal = Number(cust.balance || 0);
-        if (bal > 0) {
-          // Customer owes money: Write off as Bad Debt Expense
-          const txId = `ctx_wo_${generateUUID()}`;
-          const { error: woTxError } = await supabase.from('customer_transactions').insert([{
-            id: txId,
-            customer_id: id,
-            date: new Date().toISOString(),
-            type: 'Payment',
-            amount: bal,
-            details: {
-              mode: 'Bad Debt Write-Off',
-              note: 'Khata balance written off as bad debt expense (Customer Archived)',
-              is_write_off: true
-            }
-          }]);
-          if (woTxError) throw woTxError;
+        // One write-off per customer at a time (also across tabs): a double click used to post it twice.
+        const writeOffResult = await actionLock.runExclusiveAcrossTabs(`write_off_customer_${id}`, async () => {
+        // The server's balance, not the screen's: a payment may have been posted since it loaded.
+        const { data: balanceRow, error: balanceReadError } = await supabase.from('customers').select('balance').eq('id', id).single();
+        if (balanceReadError) throw balanceReadError;
+        const bal = roundCurrency(Number(balanceRow?.balance) || 0);
+        // Three writes with no server transaction: each one is undone if a later one fails, so the
+        // khata never keeps a write-off row without its balance move (or the reverse).
+        const undo: Array<() => PromiseLike<unknown>> = [];
+        const rollback = async () => {
+          for (const step of undo.reverse()) {
+            try { await step(); } catch (undoErr) { console.error('[safeDeleteCustomer] Write-off step could not be undone:', undoErr); }
+          }
+        };
+        try {
+          if (bal > BALANCE_EPSILON) {
+            // Customer owes money: Write off as Bad Debt Expense
+            const txId = `ctx_wo_${generateUUID()}`;
+            const { error: woTxError } = await supabase.from('customer_transactions').insert([{
+              id: txId,
+              customer_id: id,
+              date: new Date().toISOString(),
+              type: 'Payment',
+              amount: bal,
+              details: {
+                mode: 'Bad Debt Write-Off',
+                note: 'Khata balance written off as bad debt expense (Customer Archived)',
+                is_write_off: true
+              }
+            }]);
+            if (woTxError) throw woTxError;
+            undo.push(() => supabase.from('customer_transactions').delete().eq('id', txId));
 
-          // Record the write-off as an expense so the balance sheet stays balanced.
-          // expenses has no paid_amount / payment_mode / payment_status columns (the insert was
-          // rejected every time), so they ride in details where the loader reads them.
-          // A non-cash adjustment with no account: settled in full (paid_amount = amount), or it
-          // would sit in "unpaid expenses / payables" forever. No account_id, so no cash moves.
-          const { error: woExpError } = await supabase.from('expenses').insert([{
-            id: `exp_wo_${generateUUID()}`,
-            date: normalizeTransactionTimestamp(getTodayLocalDate()),
-            category: 'Bad Debt & Write-off',
-            description: `Bad debt write-off for customer: ${cust.name}`,
-            amount: bal,
-            details: { customer_id: id, write_off: true, paid_amount: bal, payment_mode: 'Adjustment', payment_status: 'Paid' }
-          }]);
-          if (woExpError) throw woExpError;
+            // Record the write-off as an expense so the balance sheet stays balanced.
+            // expenses has no paid_amount / payment_mode / payment_status columns (the insert was
+            // rejected every time), so they ride in details where the loader reads them.
+            // A non-cash adjustment with no account: settled in full (paid_amount = amount), or it
+            // would sit in "unpaid expenses / payables" forever. No account_id, so no cash moves.
+            const expenseId = `exp_wo_${generateUUID()}`;
+            const { error: woExpError } = await supabase.from('expenses').insert([{
+              id: expenseId,
+              date: normalizeTransactionTimestamp(getTodayLocalDate()),
+              category: 'Bad Debt & Write-off',
+              description: `Bad debt write-off for customer: ${cust.name}`,
+              amount: bal,
+              details: { customer_id: id, write_off: true, paid_amount: bal, payment_mode: 'Adjustment', payment_status: 'Paid' }
+            }]);
+            if (woExpError) throw woExpError;
+            undo.push(() => supabase.from('expenses').delete().eq('id', expenseId));
 
-          const { error: woBalError } = await adjustCustomerBalance(id, -bal);
-          if (woBalError) throw woBalError;
-        } else if (bal < 0) {
-          // Unclaimed customer advance: Forfeit advance
-          const absBal = Math.abs(bal);
-          const { error: forfeitTxError } = await supabase.from('customer_transactions').insert([{
-            id: `ctx_wo_${generateUUID()}`,
-            customer_id: id,
-            date: new Date().toISOString(),
-            type: 'Charge',
-            amount: absBal,
-            details: {
-              mode: 'Advance Forfeited',
-              note: 'Unclaimed customer advance forfeited upon archival',
-              is_write_off: true
-            }
-          }]);
-          if (forfeitTxError) throw forfeitTxError;
-          const { error: forfeitBalError } = await adjustCustomerBalance(id, absBal);
-          if (forfeitBalError) throw forfeitBalError;
+            const { error: woBalError } = await adjustCustomerBalance(id, -bal);
+            if (woBalError) throw woBalError;
+          } else if (bal < -BALANCE_EPSILON) {
+            // Unclaimed customer advance: Forfeit advance
+            const absBal = Math.abs(bal);
+            const forfeitId = `ctx_wo_${generateUUID()}`;
+            const { error: forfeitTxError } = await supabase.from('customer_transactions').insert([{
+              id: forfeitId,
+              customer_id: id,
+              date: new Date().toISOString(),
+              type: 'Charge',
+              amount: absBal,
+              details: {
+                mode: 'Advance Forfeited',
+                note: 'Unclaimed customer advance forfeited upon archival',
+                is_write_off: true
+              }
+            }]);
+            if (forfeitTxError) throw forfeitTxError;
+            undo.push(() => supabase.from('customer_transactions').delete().eq('id', forfeitId));
+            const { error: forfeitBalError } = await adjustCustomerBalance(id, absBal);
+            if (forfeitBalError) throw forfeitBalError;
+          }
+        } catch (writeOffErr) {
+          await rollback();
+          throw writeOffErr;
         }
         return true;
-        });
-        if (writeOffResult === null) return false;
+        });        if (writeOffResult === null) return false;
 
         await updateCustomer(id, { isActive: false });
         showToast(`Customer "${cust.name}" balance written off and marked Inactive!`, 'success');
@@ -8646,7 +8704,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!acc) return false;
 
       if (action === 'deactivate') {
-        if (Number(acc.balance || 0) !== 0) {
+        if (!isZeroBalance(acc.balance)) {
           showToast(`Cannot archive account with non-zero balance (Rs ${acc.balance}). Transfer funds out first.`, 'error');
           return false;
         }

@@ -311,7 +311,8 @@ class SyncService {
               const { error: opTxError } = await loadRead(supabase.from('customer_transactions').insert([{
                 id: opTxId,
                 customer_id: cust.id,
-                date: (cust.created_at || new Date().toISOString()).split('T')[0],
+                // Pakistan date: the UTC date is yesterday for customers added 00:00-05:00 PKT.
+                date: new Date(cust.created_at || Date.now()).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }),
                 type: cust.balance > 0 ? 'Charge' : 'Payment',
                 amount: roundCurrency(Math.abs(cust.balance)),
                 details: {
