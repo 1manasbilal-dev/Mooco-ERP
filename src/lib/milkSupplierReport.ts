@@ -523,8 +523,10 @@ export function milkSlipFilename(supplierName: string, from = '', to = '') {
   return `Milk-slip-${safe}-${span}.png`;
 }
 
-function formatPkWhatsapp(phone?: string) {
-  const clean = String(phone || '').replace(/[^0-9]/g, '');
+/** Pakistani number in the digits-only form wa.me expects ("0300 1234567" -> "923001234567"). */
+export function formatPkWhatsapp(phone?: string) {
+  // "0092 300..." is the international dialling form of "+92 300...".
+  const clean = String(phone || '').replace(/[^0-9]/g, '').replace(/^00/, '');
   if (!clean) return '';
   if (clean.startsWith('0')) return `92${clean.slice(1)}`;
   if (clean.startsWith('92')) return clean;

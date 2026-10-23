@@ -1,3 +1,5 @@
+import { cleanNumber } from './formatters';
+
 export type DatePreset = 'all' | 'today' | 'week' | 'tendays' | 'fifteendays' | 'month' | 'lastmonth' | 'custom';
 export type LedgerKind = 'Opening' | 'Milk' | 'Material' | 'Payment' | 'Refund' | 'Charge';
 export type LedgerTypeFilter = 'All' | 'Milk' | 'Material' | 'Payment';
@@ -147,63 +149,58 @@ const KIND_ORDER: Record<LedgerKind, number> = {
   Refund: 5
 };
 
+/** Rupees to the paisa; halves round away from zero (see cleanNumber). */
 export function money(value: number) {
-  return Math.round((Number(value) || 0) * 100) / 100;
+  return cleanNumber(value, 2);
 }
 
+/**
+ * The Pakistan calendar date of an instant (default: now). Statements bucket every row by its
+ * Pakistan day (ledgerDay), so presets must use the same calendar whatever the device zone is.
+ */
 export function localIsoDate(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = pktDayFormatter.formatToParts(date);
+  const part = (name: string) => parts.find(p => p.type === name)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+/** 'YYYY-MM-DD' for a calendar day; month is 0-based and may overflow like Date.UTC (day 0 = last of previous month). */
+function calendarDay(year: number, month: number, day: number) {
+  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
 }
 
 export function rangeForPreset(preset: DatePreset, from = '', to = '') {
   const today = localIsoDate();
+  const [year, monthNumber, day] = today.split('-').map(Number);
+  const month = monthNumber - 1;
   if (preset === 'today') return { from: today, to: today };
   if (preset === 'week') {
-    const now = new Date();
-    const weekday = now.getDay();
+    const weekday = new Date(Date.UTC(year, month, day)).getUTCDay();
     const mondayOffset = weekday === 0 ? 6 : weekday - 1;
-    const start = new Date(now);
-    start.setDate(now.getDate() - mondayOffset);
-    return { from: localIsoDate(start), to: today };
+    return { from: calendarDay(year, month, day - mondayOffset), to: today };
   }
   if (preset === 'tendays') {
-    const now = new Date();
-    const day = now.getDate();
-    const year = now.getFullYear();
-    const month = now.getMonth();
     if (day <= 10) {
-      return { from: localIsoDate(new Date(year, month, 1)), to: localIsoDate(new Date(year, month, 10)) };
+      return { from: calendarDay(year, month, 1), to: calendarDay(year, month, 10) };
     } else if (day <= 20) {
-      return { from: localIsoDate(new Date(year, month, 11)), to: localIsoDate(new Date(year, month, 20)) };
+      return { from: calendarDay(year, month, 11), to: calendarDay(year, month, 20) };
     } else {
-      const lastDay = new Date(year, month + 1, 0).getDate();
-      return { from: localIsoDate(new Date(year, month, 21)), to: localIsoDate(new Date(year, month, lastDay)) };
+      return { from: calendarDay(year, month, 21), to: calendarDay(year, month + 1, 0) };
     }
   }
   if (preset === 'fifteendays') {
-    const now = new Date();
-    const day = now.getDate();
-    const year = now.getFullYear();
-    const month = now.getMonth();
     if (day <= 15) {
-      return { from: localIsoDate(new Date(year, month, 1)), to: localIsoDate(new Date(year, month, 15)) };
+      return { from: calendarDay(year, month, 1), to: calendarDay(year, month, 15) };
     } else {
-      const lastDay = new Date(year, month + 1, 0).getDate();
-      return { from: localIsoDate(new Date(year, month, 16)), to: localIsoDate(new Date(year, month, lastDay)) };
+      return { from: calendarDay(year, month, 16), to: calendarDay(year, month + 1, 0) };
     }
   }
   if (preset === 'month') {
-    const now = new Date();
-    return { from: localIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)), to: today };
+    return { from: calendarDay(year, month, 1), to: today };
   }
   if (preset === 'lastmonth') {
-    const now = new Date();
-    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-    return { from: localIsoDate(prevMonthStart), to: localIsoDate(prevMonthEnd) };
+    return { from: calendarDay(year, month - 1, 1), to: calendarDay(year, month, 0) };
   }
   if (preset === 'custom') {
     let start = (from || '').slice(0, 10);
@@ -712,9 +709,11 @@ export function buildSupplierStatement(input: {
   });
 
   const periodRows = withBalance.filter(row => row.kind === 'Opening' ? !from && !to : inRange(row.date, from, to));
+  // Undated rows sort first and never fall inside a range, so they belong to the opening balance;
+  // leaving them out made opening + period movement differ from the closing balance.
   const beforeRows = from
-    ? withBalance.filter(row => row.kind === 'Opening' || (row.date && dayKey(row.date) < from))
-    : withBalance.filter(row => row.kind === 'Opening');
+    ? withBalance.filter(row => row.kind === 'Opening' || !row.date || dayKey(row.date) < from)
+    : withBalance.filter(row => row.kind === 'Opening' || (Boolean(to) && !row.date));
   const openingBalance = beforeRows.length ? beforeRows[beforeRows.length - 1].runningBalance : (periodRows.find(row => row.kind === 'Opening')?.runningBalance || 0);
   const closingBalance = periodRows.length ? periodRows[periodRows.length - 1].runningBalance : openingBalance;
   const movementRows = periodRows.filter(row => row.kind !== 'Opening');
