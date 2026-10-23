@@ -9,14 +9,24 @@
       // Apply the saved theme and zoom before first paint to avoid a flash.
       try {
         const preference = localStorage.getItem('app_theme');
-        document.documentElement.classList.toggle('dark', preference === 'dark' || (!preference && matchMedia('(prefers-color-scheme: dark)').matches));
+        const dark = preference === 'dark' || (!preference && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+        // Browser chrome matches the saved theme from the first paint (the shell keeps it in step later).
+        const themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.setAttribute('content', dark ? '#020617' : '#f5f7fc');
+        // Same range as the header's screen-size control (80-150%); 250% was accepted here only.
         const scale = Number(localStorage.getItem('app_zoom_scale'));
-        if (scale >= 80 && scale <= 250) document.documentElement.style.fontSize = `${scale / 100 * 16}px`;
+        if (scale >= 80 && scale <= 150) document.documentElement.style.fontSize = `${scale / 100 * 16}px`;
       } catch (_) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- Not render-blocking: the first paint no longer waits for a round trip to Google on a slow
+         line; text shows in the fallback font and swaps (display=swap). One variable-weight face
+         (400..800) also renders the in-between weights (550, 650, 750) the design uses. -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap" /></noscript>
     <link rel="stylesheet" href="/src/index.css" />
   </head>
   <body>

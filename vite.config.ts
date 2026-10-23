@@ -27,7 +27,8 @@ export default defineConfig({
           if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(moduleId)) return 'vendor-react';
           if (/\/node_modules\/(framer-motion|motion-dom|motion-utils)\//.test(moduleId)) return 'vendor-motion';
           if (/\/node_modules\/(recharts|recharts-scale|d3-[^/]+)\//.test(moduleId)) return 'vendor-charts';
-          if (moduleId.includes('/node_modules/lucide-react/')) return 'vendor-icons';
+          // lucide-react has no manual chunk on purpose: one icons chunk put all ~180 icons in the
+          // first load, though the shell uses about 50. Each icon now ships with the code using it.
           if (moduleId.includes('/node_modules/@supabase/')) return 'vendor-supabase';
         },
       },
