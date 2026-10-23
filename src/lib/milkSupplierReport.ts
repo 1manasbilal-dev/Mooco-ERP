@@ -6,6 +6,7 @@ import {
   ledgerDay,
   localIsoDate,
   money,
+  printWhenReady,
   rangeLabel
 } from './supplierStatement';
 
@@ -337,6 +338,7 @@ const SHEET_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
   .sheet { width: 760px; box-sizing: border-box; padding: 20px 24px 28px; background: #fff; color: #0f172a; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
   .sheet * { box-sizing: border-box; }
+  .sheet h1, .sheet h2, .party td, .lines td:not(.num), .section td:first-child, .split { overflow-wrap: anywhere; word-break: break-word; }
   .sheet table { width: 100%; border-collapse: collapse; }
   .sheet h1 { margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.02em; text-transform: uppercase; color: #0f172a; line-height: 1.15; }
   .sheet h2 { margin: 0; font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #0f172a; }
@@ -487,7 +489,7 @@ export function printMilkSupplierReport(input: {
   popup.document.write(sheetDocument(title, milkReportSheetHtml(input)));
   popup.document.close();
   popup.focus();
-  setTimeout(() => popup.print(), 250);
+  printWhenReady(popup, 250);
   return true;
 }
 
@@ -557,6 +559,8 @@ async function captureSheetImage(innerHtml: string) {
   try {
     if (!sheet) throw new Error('Milk slip sheet was not created');
     await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    // Capture with the sheet's own fonts, not the fallback, but never wait on a dead font server.
+    await Promise.race([document.fonts?.ready, new Promise(resolve => setTimeout(resolve, 3000))]);
     const canvas = await html2canvas(sheet, {
       scale: 2,
       backgroundColor: '#ffffff',

@@ -211,21 +211,21 @@ export function rangeForPreset(preset: DatePreset, from = '', to = '') {
   return { from: '', to: '' };
 }
 
+// Built once: statements format a date and an amount for every row they print.
+const ledgerDateFormat = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+const ledgerWeekdayFormat = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' });
+const rupeeFormat = new Intl.NumberFormat('en-PK');
+
 export function formatLedgerDate(iso: string, withWeekday = false) {
   const day = (iso || '').slice(0, 10);
   if (!day) return 'Opening';
   const [year, month, date] = day.split('-').map(Number);
   if (!year || !month || !date) return day;
-  return new Date(year, month - 1, date).toLocaleDateString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    weekday: withWeekday ? 'short' : undefined
-  });
+  return (withWeekday ? ledgerWeekdayFormat : ledgerDateFormat).format(new Date(year, month - 1, date));
 }
 
 export function formatMoney(amount: number) {
-  return `Rs ${Math.abs(money(amount)).toLocaleString('en-PK')}`;
+  return `Rs ${rupeeFormat.format(Math.abs(money(amount)))}`;
 }
 
 export function balancePhrase(amount: number) {
@@ -829,12 +829,26 @@ export function buildPaymentRegister(input: {
   accountNames?: Record<string, string>;
 }) {
   const lines: CashLine[] = [];
+  // Split the books by supplier once; each statement then filters only its own rows instead of
+  // every purchase and payment of every supplier.
+  const bySupplier = <T extends { supplier_id?: string }>(rows: T[] = []) => {
+    const map = new Map<string | undefined, T[]>();
+    rows.forEach(row => {
+      const list = map.get(row.supplier_id);
+      if (list) list.push(row);
+      else map.set(row.supplier_id, [row]);
+    });
+    return map;
+  };
+  const purchasesBySupplier = bySupplier(input.purchases);
+  const materialsBySupplier = bySupplier(input.materialPurchases);
+  const transactionsBySupplier = bySupplier(input.transactions);
   input.suppliers.forEach(supplier => {
     const statement = buildSupplierStatement({
       supplier,
-      purchases: input.purchases,
-      materialPurchases: input.materialPurchases,
-      transactions: input.transactions,
+      purchases: purchasesBySupplier.get(supplier.id) || [],
+      materialPurchases: materialsBySupplier.get(supplier.id) || [],
+      transactions: transactionsBySupplier.get(supplier.id) || [],
       from: input.from,
       to: input.to,
       accountNames: input.accountNames
@@ -958,6 +972,14 @@ const PRINT_CSS = `
     line-height: 1.35;
     -webkit-font-smoothing: antialiased;
   }
+
+  /* Long names, notes and account titles wrap inside their box instead of running off the page. */
+  .brand-text h1, .brand-contact, .doc-info-table, .profile-name, .profile-meta,
+  .desc-head, .desc-sub, .voucher-table td.col-val, .toolbar-title {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .brand-group, .brand-text, .profile-col { min-width: 0; }
 
   /* Screen Floating Toolbar (Hidden when printing) */
   .screen-toolbar {
@@ -1521,6 +1543,28 @@ function documentHtml(title: string, body: string) {
 </html>`;
 }
 
+/**
+ * Prints a freshly written popup once its page and web fonts (Inter and JetBrains Mono from Google
+ * Fonts) have loaded: printing on a fixed timer often used fallback fonts with different widths, so
+ * columns and totals wrapped. Never prints before `minDelayMs`, and a slow or offline font server
+ * never holds printing back longer than `maxWaitMs`.
+ */
+export function printWhenReady(popup: Window, minDelayMs = 350, maxWaitMs = 4000) {
+  let printed = false;
+  const print = () => {
+    if (printed || popup.closed) return;
+    printed = true;
+    popup.focus();
+    popup.print();
+  };
+  const loaded = popup.document.readyState === 'complete'
+    ? Promise.resolve()
+    : new Promise<void>(resolve => popup.addEventListener('load', () => resolve(), { once: true }));
+  const minDelay = new Promise<void>(resolve => setTimeout(resolve, minDelayMs));
+  Promise.all([loaded.then(() => popup.document.fonts?.ready), minDelay]).then(print, print);
+  setTimeout(print, maxWaitMs);
+}
+
 function openPrintWindow(title: string, body: string) {
   const popup = window.open('', '_blank', 'width=1020,height=800');
   if (!popup) return false;
@@ -1528,7 +1572,7 @@ function openPrintWindow(title: string, body: string) {
   popup.document.write(documentHtml(title, body));
   popup.document.close();
   popup.focus();
-  setTimeout(() => popup.print(), 350);
+  printWhenReady(popup);
   return true;
 }
 

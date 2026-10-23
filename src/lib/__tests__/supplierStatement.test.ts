@@ -3,10 +3,12 @@ import {
   balancePhrase,
   buildPaymentRegister,
   buildSupplierStatement,
+  formatLedgerDate,
   formatMoney,
   ledgerDay,
   localIsoDate,
   money,
+  printWhenReady,
   rangeForPreset,
   rangeLabel,
   type StatementSupplier
@@ -38,6 +40,14 @@ describe('money and labels', () => {
     expect(balancePhrase(12500)).toBe('Rs 12,500 Payable');
     expect(balancePhrase(-800)).toBe('Rs 800 Advance');
     expect(balancePhrase(0.4)).toBe('Rs 0 Settled');
+  });
+
+  it('formats ledger dates with and without the weekday', () => {
+    expect(formatLedgerDate('2026-10-23')).toBe('23 Oct 2026');
+    expect(formatLedgerDate('2026-10-23T10:00:00Z', true)).toBe('Fri, 23 Oct 2026');
+    expect(formatLedgerDate('')).toBe('Opening');
+    expect(formatLedgerDate('garbage')).toBe('garbage');
+    expect(formatMoney(1234567.891)).toBe('Rs 1,234,567.89');
   });
 
   it('labels ranges', () => {
@@ -207,6 +217,61 @@ describe('buildSupplierStatement', () => {
     const statement = buildSupplierStatement({ ...input, supplier: supplier(12500), kind: 'Payment', query: 'meezan' });
     expect(statement.printRows.map(r => r.id)).toEqual(['t1']);
     expect(statement.closingBalance).toBe(12500);
+  });
+});
+
+describe('printWhenReady', () => {
+  const fakePopup = (readyState: string, fontsReady: Promise<unknown>) => {
+    const listeners: Record<string, () => void> = {};
+    const popup = {
+      closed: false,
+      print: vi.fn(),
+      focus: vi.fn(),
+      addEventListener: vi.fn((type: string, fn: () => void) => { listeners[type] = fn; }),
+      document: { readyState, fonts: { ready: fontsReady } }
+    };
+    return { popup, win: popup as unknown as Window, fireLoad: () => listeners.load?.() };
+  };
+
+  it('waits for the page and its web fonts, then prints once', async () => {
+    vi.useFakeTimers();
+    let fontsLoaded!: () => void;
+    const { popup, win, fireLoad } = fakePopup('loading', new Promise<void>(resolve => { fontsLoaded = resolve; }));
+    printWhenReady(win, 350, 4000);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(popup.print).not.toHaveBeenCalled();
+    fireLoad();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(popup.print).not.toHaveBeenCalled();
+    fontsLoaded();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(popup.print).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(popup.print).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the minimum delay when everything is already loaded', async () => {
+    vi.useFakeTimers();
+    const { popup, win } = fakePopup('complete', Promise.resolve());
+    printWhenReady(win, 350, 4000);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(popup.print).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60);
+    expect(popup.print).toHaveBeenCalledTimes(1);
+  });
+
+  it('prints anyway when fonts never arrive, and not at all once the window is closed', async () => {
+    vi.useFakeTimers();
+    const stuck = fakePopup('complete', new Promise(() => {}));
+    printWhenReady(stuck.win, 350, 4000);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(stuck.popup.print).toHaveBeenCalledTimes(1);
+
+    const closed = fakePopup('complete', Promise.resolve());
+    closed.popup.closed = true;
+    printWhenReady(closed.win, 350, 4000);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(closed.popup.print).not.toHaveBeenCalled();
   });
 });
 
