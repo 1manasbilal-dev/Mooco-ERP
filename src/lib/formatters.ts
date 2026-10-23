@@ -5,12 +5,19 @@
 const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 export const formatCompactValue = (value: number) => compactNumber.format(value);
 
-/** Returns a rounded numeric value without floating point display drift. */
+/**
+ * Returns a rounded numeric value without floating point display drift.
+ * Halves round away from zero on the decimal value people see: 10.075 -> 10.08 and -10.075 -> -10.08
+ * (binary floats store 10.075 as 10.07499..., so plain Math.round gave 10.07). Never returns -0.
+ */
 export const cleanNumber = (val: number | string | null | undefined, decimals: number = 2): number => {
   const num = typeof val === 'string' ? parseFloat(val) : Number(val);
   if (isNaN(num) || !isFinite(num)) return 0;
   const factor = Math.pow(10, decimals);
-  return Math.round((num + Number.EPSILON) * factor) / factor;
+  // 15 significant digits drop the binary noise (1007.4999999999999 -> 1007.5) before rounding.
+  const scaled = Number((Math.abs(num) * factor).toPrecision(15));
+  const rounded = (Math.sign(num) * Math.round(scaled)) / factor;
+  return rounded === 0 ? 0 : rounded;
 };
 
 /**
@@ -82,6 +89,9 @@ export const formatPercent = (
   return `${cleaned.toFixed(decimals).replace(/\.0+$/, '')}%`;
 };
 
+/** Pakistan Standard Time is UTC+5 all year (no daylight saving). */
+const PKT_OFFSET_HOURS = 5;
+
 /**
  * Returns today's Pakistan business date as 'YYYY-MM-DD' (Asia/Karachi), whatever the device clock zone.
  * `new Date().toISOString().split('T')[0]` is the UTC date, which is yesterday between 00:00 and 05:00 PKT.
@@ -148,8 +158,9 @@ export const normalizeTransactionTimestamp = (dateInput?: string | Date | null):
 
   const [y, m, d] = datePart.split('-').map(Number);
   if (!y || !m || !d) return new Date().toISOString();
-  const targetDate = new Date(y, m - 1, d, 12, 0, 0, 0);
-  return targetDate.toISOString();
+  // Noon Pakistan time (07:00 UTC), not device-local noon: a device set to a far-west zone would
+  // otherwise store the next Pakistan day.
+  return new Date(Date.UTC(y, m - 1, d, 12 - PKT_OFFSET_HOURS, 0, 0, 0)).toISOString();
 };
 
 /**
@@ -172,7 +183,8 @@ export const formatTransactionTime = (
       return fallback;
     }
 
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Shop time, like getTodayLocalDate: a device on another zone must not shift bill times.
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Karachi' });
   } catch {
     return fallback;
   }
