@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
@@ -6,20 +6,27 @@ import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../types';
 import {
   FolderTree, Wallet, CreditCard, Plus, Bookmark, UserPlus, ArrowUpRight
 } from 'lucide-react';
-import { ExpensesHeader, PrimaryButton, ToolbarButton, paidOf } from '../components/expenses/ExpenseUI';
+import { ExpensesHeader, dayKey, paidOf, pkToday } from '../components/expenses/ExpenseUI';
+import { Button } from '../components/ui';
 import { RichSelectOption } from '../components/RichSelect';
-import { 
-  CategoryStructure, SubcategoryStructure, LedgerRow, 
-  DEFAULT_EXPENSE_STRUCTURE, ExpenseDateFilterMode, KhataDateRangeType 
+import {
+  CategoryStructure, SubcategoryStructure, LedgerRow,
+  DEFAULT_EXPENSE_STRUCTURE, ExpenseDateFilterMode, KhataDateRangeType
 } from '../components/expenses/ExpenseTypes';
-import { ExpenseTransactionsTab } from '../components/expenses/ExpenseTransactionsTab';
+import { ExpenseStats, ExpenseTransactionsTab } from '../components/expenses/ExpenseTransactionsTab';
 import { ExpenseVendorsTab } from '../components/expenses/ExpenseVendorsTab';
-import { 
-  ExpenseCategoryModal, ExpenseFormModal, SavedExpensesModal,
-  ExpenseVendorModal, VendorPaymentModal 
-} from '../components/expenses/ExpenseModals';
+import { inRange, periodRange, previousPeriod } from '../components/expenses/expensePeriods';
 import { formatCurrency } from '../lib/formatters';
 import { confirmAction } from '../components/ui/ConfirmDialog';
+
+// The dialogs (~1,200 lines) load in their own chunk: prefetched once the screen is idle and
+// mounted only while open, so they are not part of the screen's first paint.
+const loadExpenseModals = () => import('../components/expenses/ExpenseModals');
+const ExpenseCategoryModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseCategoryModal })));
+const ExpenseFormModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseFormModal })));
+const SavedExpensesModal = lazy(() => loadExpenseModals().then(m => ({ default: m.SavedExpensesModal })));
+const ExpenseVendorModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseVendorModal })));
+const VendorPaymentModal = lazy(() => loadExpenseModals().then(m => ({ default: m.VendorPaymentModal })));
 
 const Expenses: React.FC = () => {
   const { 
@@ -92,6 +99,17 @@ const Expenses: React.FC = () => {
       setIsMobileLedgerOpen(true);
     }
   }, [location.search]);
+
+  // Warm the dialogs chunk while the screen is idle, so the first "Record expense" opens at once.
+  useEffect(() => {
+    const prefetch = () => { loadExpenseModals().catch(() => { /* opening a dialog loads it again */ }); };
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(prefetch, { timeout: 4000 });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(prefetch, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const [isAddMode, setIsAddMode] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
@@ -323,119 +341,135 @@ const Expenses: React.FC = () => {
     return accounts.find(a => a.id === paymentFormData.account_id) || accounts[0];
   }, [accounts, paymentFormData.account_id]);
 
+  // Entries per category and per category::sub-category, counted once instead of per row of the dialog.
+  const categoryUsage = useMemo(() => {
+    const byCategory = new Map<string, number>();
+    const bySub = new Map<string, number>();
+    expenses.forEach(e => {
+      const cat = (e.category || '').toLowerCase();
+      if (!cat) return;
+      byCategory.set(cat, (byCategory.get(cat) || 0) + 1);
+      if (e.subcategory) {
+        const key = `${cat}::${e.subcategory.toLowerCase()}`;
+        bySub.set(key, (bySub.get(key) || 0) + 1);
+      }
+    });
+    return { byCategory, bySub };
+  }, [expenses]);
+
+  // Renaming a category does not rewrite past entries: they keep the old name. Counting only the
+  // new name let a renamed category with entries pass the delete guard ("no entries") and hid
+  // its old entries from the category filter. Lower-cased current name -> every name it has had.
+  const categoryNames = useMemo(() => {
+    const finalName = (name: string) => {
+      let current = name;
+      const seen = new Set<string>();
+      while (renamedCats[current] && !seen.has(current)) { seen.add(current); current = renamedCats[current]; }
+      return current;
+    };
+    const names = new Map<string, Set<string>>();
+    const add = (target: string, alias: string) => {
+      const key = target.toLowerCase();
+      if (!names.has(key)) names.set(key, new Set([key]));
+      names.get(key)!.add(alias.toLowerCase());
+    };
+    categoryTree.forEach(c => { add(c.name, c.name); if (c.originalName) add(c.name, c.originalName); });
+    Object.keys(renamedCats).forEach(from => add(finalName(from), from));
+    return names;
+  }, [categoryTree, renamedCats]);
+
+  const namesOfCategory = (name: string) => categoryNames.get(name.toLowerCase()) || new Set([name.toLowerCase()]);
+
   const getCategoryUsageCount = (catName: string) => {
-    return expenses.filter(e => e.category?.toLowerCase() === catName.toLowerCase()).length;
+    let count = 0;
+    namesOfCategory(catName).forEach(name => { count += categoryUsage.byCategory.get(name) || 0; });
+    return count;
   };
 
   const getSubcategoryUsageCount = (catName: string, subcatName: string) => {
-    return expenses.filter(e => 
-      e.category?.toLowerCase() === catName.toLowerCase() && 
-      e.subcategory?.toLowerCase() === subcatName.toLowerCase()
-    ).length;
+    const cats = namesOfCategory(catName);
+    const subs = new Set([subcatName.toLowerCase()]);
+    const original = categoryTree.find(c => c.name === catName)?.subcategories.find(s => s.name === subcatName)?.originalName;
+    if (original) subs.add(original.toLowerCase());
+    Object.entries(renamedSubcats as Record<string, string>).forEach(([key, to]) => {
+      const [fromCat, ...fromSub] = key.split('::');
+      if (String(to).toLowerCase() === subcatName.toLowerCase() && cats.has(fromCat.toLowerCase())) subs.add(fromSub.join('::').toLowerCase());
+    });
+    let count = 0;
+    cats.forEach(cat => subs.forEach(sub => { count += categoryUsage.bySub.get(`${cat}::${sub}`) || 0; }));
+    return count;
   };
 
-  const filteredExpenses = useMemo(() => {
+  // Day key and lower-cased search text per expense, worked out once per data change, not per keystroke.
+  const indexedExpenses = useMemo(() => expenses.map(exp => ({
+    exp,
+    day: dayKey(exp.date),
+    text: [exp.description, exp.vendor_name, exp.category, exp.subcategory, exp.notes, exp.referenceNo]
+      .filter(Boolean).join(' ').toLowerCase(),
+  })), [expenses]);
+
+  const today = pkToday();
+  const periodInput = useMemo(() => ({
+    mode: dateFilterMode, today, month: filterMonth, singleDate: filterSingleDate, startDate: filterStartDate, endDate: filterEndDate,
+  }), [dateFilterMode, today, filterMonth, filterSingleDate, filterStartDate, filterEndDate]);
+
+  const { filteredExpenses, previousTotal, previousLabel } = useMemo(() => {
     // Every comparison uses the Pakistan business day, for the filter edges and the expense alike.
-    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    const todayStr = pkDay(new Date());
-    const yday = new Date();
-    yday.setDate(yday.getDate() - 1);
-    const ydayStr = pkDay(yday);
+    const range = periodRange(periodInput);
+    const previous = previousPeriod(periodInput);
+    const needle = searchTerm.trim().toLowerCase();
+    const categoryFilter = filterCategory === 'All' ? null : (categoryNames.get(filterCategory.toLowerCase()) || new Set([filterCategory.toLowerCase()]));
+    const matches = (exp: ExpenseEntry, text: string) =>
+      (!needle || text.includes(needle)) &&
+      (!categoryFilter || categoryFilter.has((exp.category || '').toLowerCase())) &&
+      (filterVendor === 'All' || exp.vendor_id === filterVendor) &&
+      (filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus);
 
-    const d7 = new Date();
-    d7.setDate(d7.getDate() - 6);
-    const d7Str = pkDay(d7);
-
-    const d30 = new Date();
-    d30.setDate(d30.getDate() - 29);
-    const d30Str = pkDay(d30);
-
-    // Built from the Pakistan date: toISOString() on a local midnight rolled back to the month before last.
-    const [curYear, curMonth] = todayStr.split('-').map(Number);
-    const prevMonthStr = curMonth === 1 ? `${curYear - 1}-12` : `${curYear}-${String(curMonth - 1).padStart(2, '0')}`;
-
-    return expenses.filter(exp => {
-      const matchesSearch = 
-        exp.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (exp.vendor_name && exp.vendor_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (exp.subcategory && exp.subcategory.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      const matchesCategory = filterCategory === 'All' || exp.category === filterCategory;
-      const matchesVendor = filterVendor === 'All' || exp.vendor_id === filterVendor;
-      const matchesStatus = filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus;
-
-      const rawDate = exp.date || '';
-      const expDate = rawDate.includes('T') ? pkDay(new Date(rawDate)) : rawDate.slice(0, 10);
-
-      let matchesDate = true;
-      if (dateFilterMode === 'all') {
-        matchesDate = true;
-      } else if (dateFilterMode === 'today') {
-        matchesDate = expDate === todayStr;
-      } else if (dateFilterMode === 'yesterday') {
-        matchesDate = expDate === ydayStr;
-      } else if (dateFilterMode === '7days') {
-        matchesDate = Boolean(expDate && expDate >= d7Str && expDate <= todayStr);
-      } else if (dateFilterMode === '30days') {
-        matchesDate = Boolean(expDate && expDate >= d30Str && expDate <= todayStr);
-      } else if (dateFilterMode === 'this_month') {
-        matchesDate = Boolean(expDate && expDate.startsWith(filterMonth));
-      } else if (dateFilterMode === 'last_month') {
-        matchesDate = Boolean(expDate && expDate.startsWith(prevMonthStr));
-      } else if (dateFilterMode === 'single_date') {
-        matchesDate = Boolean(filterSingleDate && expDate === filterSingleDate);
-      } else if (dateFilterMode === 'custom_range') {
-        if (filterStartDate && filterEndDate) {
-          matchesDate = Boolean(expDate && expDate >= filterStartDate && expDate <= filterEndDate);
-        } else if (filterStartDate) {
-          matchesDate = Boolean(expDate && expDate >= filterStartDate);
-        } else if (filterEndDate) {
-          matchesDate = Boolean(expDate && expDate <= filterEndDate);
-        }
-      }
-
-      return matchesSearch && matchesCategory && matchesVendor && matchesStatus && matchesDate;
+    const list: ExpenseEntry[] = [];
+    let prevTotal = 0;
+    indexedExpenses.forEach(({ exp, day, text }) => {
+      const inCurrent = inRange(day, range);
+      const inPrevious = previous ? inRange(day, previous.range) : false;
+      if (!inCurrent && !inPrevious) return;
+      if (!matches(exp, text)) return;
+      if (inCurrent) list.push(exp);
+      if (inPrevious) prevTotal += Number(exp.amount || 0);
     });
-  }, [
-    expenses, searchTerm, filterCategory, filterVendor, filterPaymentStatus,
-    dateFilterMode, filterSingleDate, filterStartDate, filterEndDate, filterMonth
-  ]);
+    return { filteredExpenses: list, previousTotal: previous ? prevTotal : null, previousLabel: previous?.label };
+  }, [indexedExpenses, periodInput, searchTerm, filterCategory, categoryNames, filterVendor, filterPaymentStatus]);
 
-  const filteredVendors = useMemo(() => {
-    return expenseVendors.filter(v => {
-      const matchesSearch = 
-        v.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (v.service_type && v.service_type.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (v.phone && v.phone.includes(searchTerm)) ||
-        (v.contact_person && v.contact_person.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      if (!matchesSearch) return false;
+  // Billed / paid per vendor in one pass over expenses and vendor payments (was one pass per vendor).
+  const vendorsWithTotals = useMemo(() => {
+    const idsByName = new Map<string, string[]>();
+    expenseVendors.forEach(v => {
+      const key = v.name.toLowerCase();
+      idsByName.set(key, [...(idsByName.get(key) || []), v.id]);
+    });
+    const totals = new Map<string, { billed: number; paid: number; direct: number }>();
+    const bucket = (id: string) => {
+      let entry = totals.get(id);
+      if (!entry) { entry = { billed: 0, paid: 0, direct: 0 }; totals.set(id, entry); }
+      return entry;
+    };
+    expenses.forEach(e => {
+      // Same match as the khata: the vendor id, or (older rows) the vendor's name.
+      const ids = new Set<string>();
+      if (e.vendor_id) ids.add(e.vendor_id);
+      if (e.vendor_name) (idsByName.get(e.vendor_name.toLowerCase()) || []).forEach(id => ids.add(id));
+      if (!ids.size) return;
+      const billed = e.amount || 0;
+      const paid = paidOf(e);
+      ids.forEach(id => { const entry = bucket(id); entry.billed += billed; entry.paid += paid; });
+    });
+    expenseVendorTransactions.forEach(t => {
+      if (t.type === 'Payment') bucket(t.vendor_id).direct += t.amount || 0;
+      else if (t.type === 'Refund') bucket(t.vendor_id).direct -= t.amount || 0;
+    });
 
-      if (filterVendorTabStatus === 'Active') return v.isActive !== false;
-      if (filterVendorTabStatus === 'Inactive') return v.isActive === false;
-      if (filterVendorTabStatus === 'With Dues') return (v.pending_balance || 0) > 0;
-      if (filterVendorTabStatus === 'Advance') return (v.pending_balance || 0) < 0;
-      return true;
-    }).map(v => {
-      const vendorExpenses = expenses.filter(e => e.vendor_id === v.id || (e.vendor_name && e.vendor_name.toLowerCase() === v.name.toLowerCase()));
-      const liveTotalBilled = vendorExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-      const liveExpensesPaid = vendorExpenses.reduce((sum, e) => {
-        const isUnpaid = e.paymentStatus === 'Unpaid' || (e as any).payment_status === 'Unpaid';
-        if (isUnpaid) return sum;
-        const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-          ? Number(e.paidAmount) 
-          : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-        return sum + paid;
-      }, 0);
-      const directPayments = expenseVendorTransactions
-        .filter(t => t.vendor_id === v.id && t.type === 'Payment')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-      const directRefunds = expenseVendorTransactions
-        .filter(t => t.vendor_id === v.id && t.type === 'Refund')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-      
-      const totalPaidCalc = Math.max(0, liveExpensesPaid + directPayments - directRefunds);
-
+    return expenseVendors.map(v => {
+      const entry = totals.get(v.id);
+      const liveTotalBilled = entry?.billed || 0;
+      const totalPaidCalc = Math.max(0, (entry?.paid || 0) + (entry?.direct || 0));
       return {
         ...v,
         total_billed: liveTotalBilled > 0 ? liveTotalBilled : (v.total_billed || 0),
@@ -443,48 +477,66 @@ const Expenses: React.FC = () => {
         pending_balance: v.pending_balance !== undefined ? v.pending_balance : 0
       };
     });
-  }, [expenseVendors, expenses, expenseVendorTransactions, searchTerm, filterVendorTabStatus]);
+  }, [expenseVendors, expenses, expenseVendorTransactions]);
+
+  const filteredVendors = useMemo(() => {
+    const needle = searchTerm.toLowerCase();
+    return vendorsWithTotals.filter(v => {
+      const matchesSearch =
+        v.name.toLowerCase().includes(needle) ||
+        (v.service_type && v.service_type.toLowerCase().includes(needle)) ||
+        (v.phone && v.phone.includes(searchTerm)) ||
+        (v.contact_person && v.contact_person.toLowerCase().includes(needle));
+
+      if (!matchesSearch) return false;
+
+      if (filterVendorTabStatus === 'Active') return v.isActive !== false;
+      if (filterVendorTabStatus === 'Inactive') return v.isActive === false;
+      if (filterVendorTabStatus === 'With Dues') return (v.pending_balance || 0) > 0;
+      if (filterVendorTabStatus === 'Advance') return (v.pending_balance || 0) < 0;
+      return true;
+    });
+  }, [vendorsWithTotals, searchTerm, filterVendorTabStatus]);
 
   const selectedVendor = useMemo(() => {
     if (selectedVendorId) {
-      const found = filteredVendors.find(v => v.id === selectedVendorId) || expenseVendors.find(v => v.id === selectedVendorId);
+      const found = vendorsWithTotals.find(v => v.id === selectedVendorId);
       if (found) return found;
     }
     // Nothing picked yet: open the vendor we owe the most, matching the list's default order.
     return [...filteredVendors].sort((a, b) => (b.pending_balance || 0) - (a.pending_balance || 0) || a.name.localeCompare(b.name))[0];
-  }, [selectedVendorId, filteredVendors, expenseVendors]);
+  }, [selectedVendorId, filteredVendors, vendorsWithTotals]);
 
-  const totalExpense = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const actualPaidExpense = filteredExpenses.reduce((sum, e) => {
-    const isUnpaid = e.paymentStatus === 'Unpaid' || (e as any).payment_status === 'Unpaid';
-    if (isUnpaid) return sum;
-    const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-      ? Number(e.paidAmount) 
-      : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-    return sum + paid;
-  }, 0);
-  const cashExpense = filteredExpenses.filter(e => (e.paymentMode === 'Cash' || (e as any).payment_mode === 'Cash') && e.paymentStatus !== 'Unpaid' && (e as any).payment_status !== 'Unpaid').reduce((sum, e) => {
-    const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-      ? Number(e.paidAmount) 
-      : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-    return sum + paid;
-  }, 0);
-  const onlineExpense = actualPaidExpense - cashExpense;
-
+  // Every vendor we owe, inactive ones too: switching a vendor off does not settle its dues. This
+  // tile left them out while the vendors tab and the Reports balance sheet count them.
   const totalOutstandingVendorDues = useMemo(() => {
-    return expenseVendors
-      .filter(v => v.isActive !== false)
-      .reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
+    return expenseVendors.reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
   }, [expenseVendors]);
 
-  const expenseStats = {
-    total: totalExpense,
-    cash: cashExpense,
-    digital: onlineExpense,
-    onCredit: filteredExpenses.reduce((sum, e) => sum + Math.max(0, Number(e.amount || 0) - paidOf(e)), 0),
-    vendorDues: totalOutstandingVendorDues,
-    vendorDueCount: expenseVendors.filter(v => v.isActive !== false && (v.pending_balance || 0) > 0).length,
-  };
+  const vendorsWithDuesCount = useMemo(() => expenseVendors.filter(v => (v.pending_balance || 0) > 0).length, [expenseVendors]);
+
+  const expenseStats = useMemo<ExpenseStats>(() => {
+    let total = 0, paid = 0, cash = 0, onCredit = 0;
+    filteredExpenses.forEach(e => {
+      const amount = Number(e.amount || 0);
+      const paidPart = paidOf(e);
+      total += amount;
+      paid += paidPart;
+      if ((e.paymentMode || (e as any).payment_mode) === 'Cash') cash += paidPart;
+      onCredit += Math.max(0, amount - paidPart);
+    });
+    return {
+      total,
+      cash,
+      digital: paid - cash,
+      onCredit,
+      vendorDues: totalOutstandingVendorDues,
+      vendorDueCount: vendorsWithDuesCount,
+      trend: previousTotal && previousTotal > 0 ? ((total - previousTotal) / previousTotal) * 100 : null,
+      trendLabel: previousTotal && previousTotal > 0 ? previousLabel : undefined,
+    };
+  }, [filteredExpenses, totalOutstandingVendorDues, vendorsWithDuesCount, previousTotal, previousLabel]);
+  const totalExpense = expenseStats.total;
 
   const vendorRichOptions: RichSelectOption[] = useMemo(() => {
     return expenseVendors.filter(v => v.isActive !== false).map(v => {
@@ -501,7 +553,7 @@ const Expenses: React.FC = () => {
           variant: 'slate'
         },
         avatarLetter: v.name.charAt(0).toUpperCase(),
-        avatarBg: bal > 0 ? 'bg-rose-100 text-rose-800' : 'bg-lime-100 text-lime-800'
+        avatarBg: bal > 0 ? 'bg-danger-soft text-danger-fg' : 'bg-brand-soft text-brand-fg'
       };
     });
   }, [expenseVendors]);
@@ -580,6 +632,10 @@ const Expenses: React.FC = () => {
     showToast(`Sub-category "${sub.name}" ab ${newStatus ? 'Active' : 'Inactive'} hai`, newStatus ? 'success' : 'info');
   };
 
+  // One category write at a time: a double Enter created the same category or sub-category twice,
+  // because the duplicate check reads the list before the first save has reached it.
+  const categoryWriteRef = useRef(false);
+
   const handleCreateMainCategory = async (name: string): Promise<string | null> => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -592,20 +648,25 @@ const Expenses: React.FC = () => {
       return trimmed;
     }
 
-    const success = await addManualAccount({
-      name: trimmed,
-      type: 'Expense',
-      balance: 0,
-      description: 'Parent Expense Category',
-      isActive: true
-    });
+    if (categoryWriteRef.current) return null;
+    categoryWriteRef.current = true;
+    try {
+      const success = await addManualAccount({
+        name: trimmed,
+        type: 'Expense',
+        balance: 0,
+        description: 'Parent Expense Category',
+        isActive: true
+      });
 
-    if (success) {
-      showToast(`Category "${trimmed}" ban gayi`, 'success');
-      return trimmed;
-    } else {
+      if (success) {
+        showToast(`Category "${trimmed}" ban gayi`, 'success');
+        return trimmed;
+      }
       showToast("Category save nahi hui, dobara koshish karein", "error");
       return null;
+    } finally {
+      categoryWriteRef.current = false;
     }
   };
 
@@ -616,47 +677,69 @@ const Expenses: React.FC = () => {
       return null;
     }
 
-    const parentAcc = manualAccounts.find(a => a.type === 'Expense' && a.name.toLowerCase() === parentCatName.toLowerCase() && !a.parentId);
-    let parentId = parentAcc?.id;
-
-    if (!parentId) {
-      const generatedId = `ma_${Date.now()}_root`;
-      await addManualAccount({
-        id: generatedId,
-        name: parentCatName,
-        type: 'Expense',
-        balance: 0,
-        description: 'Parent Expense Category',
-        isActive: true
-      });
-      parentId = generatedId;
+    // Adding a name that already exists created a second ledger account with the same name.
+    const existing = categoryTree
+      .find(c => c.name.toLowerCase() === parentCatName.toLowerCase())
+      ?.subcategories.find(s => s.name.toLowerCase() === trimmedSub.toLowerCase());
+    if (existing) {
+      showToast(`Sub-category "${existing.name}" pehle se "${parentCatName}" mein mojood hai`, "info");
+      return existing.name;
     }
 
-    const success = await addManualAccount({
-      name: trimmedSub,
-      type: 'Expense',
-      balance: 0,
-      parentId: parentId,
-      description: `Sub-category under ${parentCatName}`,
-      isActive: true
-    });
+    if (categoryWriteRef.current) return null;
+    categoryWriteRef.current = true;
+    try {
+      const parentAcc = manualAccounts.find(a => a.type === 'Expense' && a.name.toLowerCase() === parentCatName.toLowerCase() && !a.parentId);
+      let parentId = parentAcc?.id;
 
-    if (success) {
-      showToast(`Sub-category "${trimmedSub}" "${parentCatName}" ke neeche add ho gayi`, 'success');
-      return trimmedSub;
-    } else {
+      if (!parentId) {
+        const generatedId = `ma_${Date.now()}_root`;
+        const rootSaved = await addManualAccount({
+          id: generatedId,
+          name: parentCatName,
+          type: 'Expense',
+          balance: 0,
+          description: 'Parent Expense Category',
+          isActive: true
+        });
+        // Without its parent account the sub-category would be saved but never shown.
+        if (!rootSaved) {
+          showToast("Sub-category save nahi hui", "error");
+          return null;
+        }
+        parentId = generatedId;
+      }
+
+      const success = await addManualAccount({
+        name: trimmedSub,
+        type: 'Expense',
+        balance: 0,
+        parentId: parentId,
+        description: `Sub-category under ${parentCatName}`,
+        isActive: true
+      });
+
+      if (success) {
+        showToast(`Sub-category "${trimmedSub}" "${parentCatName}" ke neeche add ho gayi`, 'success');
+        return trimmedSub;
+      }
       showToast("Sub-category save nahi hui", "error");
       return null;
+    } finally {
+      categoryWriteRef.current = false;
     }
   };
 
-  const handleModalAddCategory = async (e: React.FormEvent) => {
+  /** Resolves to false when nothing was saved, so the dialog keeps the typed name open. */
+  const handleModalAddCategory = async (e: React.FormEvent): Promise<boolean> => {
     e.preventDefault();
-    if (!modalNewCategoryName.trim()) return;
+    if (!modalNewCategoryName.trim()) return false;
     const res = await handleCreateMainCategory(modalNewCategoryName);
     if (res) {
       setModalNewCategoryName('');
+      return true;
     }
+    return false;
   };
 
   const handleModalAddSubcat = async (parentCatName: string) => {
@@ -975,8 +1058,9 @@ const Expenses: React.FC = () => {
       showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
       return;
     }
-    if (!formData.amount || formData.amount <= 0 || !formData.description || isSubmitting || isSubmittingExpenseRef.current) {
-      if (!formData.amount || formData.amount <= 0 || !formData.description) {
+    const description = (formData.description || '').trim();
+    if (!formData.amount || formData.amount <= 0 || !description || isSubmitting || isSubmittingExpenseRef.current) {
+      if (!formData.amount || formData.amount <= 0 || !description) {
         showToast("Sahi amount aur tafseel likhein", "warning");
       }
       return;
@@ -987,8 +1071,14 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    // A cleared date input sent '' and the entry was stamped with the current time instead.
+    if (!formData.date) {
+      showToast("Kharche ki tareekh chunein", "warning");
+      return;
+    }
+
     // The disabled Save button is not enough: Ctrl+Enter calls requestSubmit(), and addExpense only checks the books lock date.
-    if (formData.date && isDayLocked && isDayLocked(formData.date)) {
+    if (isDayLocked && isDayLocked(formData.date)) {
       showToast(`${formData.date} ka din lock hai — is tareekh par kharcha save nahi ho sakta.`, "error");
       return;
     }
@@ -1002,7 +1092,15 @@ const Expenses: React.FC = () => {
       actualPaid = 0;
     }
 
-    if ((formData.paymentStatus === 'Unpaid' || formData.paymentStatus === 'Partial') && !formData.vendor_id) {
+    // "Partial" with nothing paid used to be saved as Partial with no money moved; with the full
+    // amount paid it stayed Partial forever (the loader keeps a stored Partial), showing a bill that was settled.
+    if (formData.paymentStatus === 'Partial' && actualPaid <= 0) {
+      showToast("Partial mein abhi ada ki gayi raqam likhein, ya 'On credit' chunein", "warning");
+      return;
+    }
+    const paymentStatus: 'Paid' | 'Partial' | 'Unpaid' = actualPaid >= formData.amount ? 'Paid' : formData.paymentStatus;
+
+    if ((paymentStatus === 'Unpaid' || paymentStatus === 'Partial') && !formData.vendor_id) {
       showToast("Baqi raqam khata mein likhne ke liye vendor chunein", "warning");
       return;
     }
@@ -1027,11 +1125,13 @@ const Expenses: React.FC = () => {
     try {
       const expensePayload = {
         ...formData,
+        description,
         date: submitDate,
         amount: formData.amount,
         paidAmount: actualPaid,
-        paymentStatus: formData.paymentStatus,
-        dueDate: formData.dueDate,
+        paymentStatus,
+        // A "pay by" date only means something while part of the bill is still owed.
+        dueDate: paymentStatus === 'Paid' ? '' : formData.dueDate,
         category: formData.category,
         subcategory: formData.subcategory || '',
         account_id: actualPaid > 0 ? formData.account_id : undefined,
@@ -1050,13 +1150,13 @@ const Expenses: React.FC = () => {
 
         if (rememberExpense) {
           await upsertSavedExpense({
-            name: (rememberName || formData.description || '').trim(),
+            name: (rememberName || description).trim(),
             category: formData.category,
             subcategory: formData.subcategory || '',
-            description: formData.description,
+            description,
             amount: formData.amount,
             paidAmount: actualPaid,
-            paymentStatus: formData.paymentStatus,
+            paymentStatus,
             paymentMode: formData.paymentMode || 'Cash',
             account_id: formData.account_id,
             vendor_id: formData.vendor_id || undefined,
@@ -1094,7 +1194,8 @@ const Expenses: React.FC = () => {
       subcategory: expense.subcategory || '',
       description: expense.description,
       amount: expense.amount,
-      paidAmount: expense.paidAmount || (expense.paymentStatus === 'Unpaid' ? 0 : expense.amount),
+      // paidOf: a Partial bill with 0 paid used to be saved as fully paid (0 || amount).
+      paidAmount: paidOf(expense),
       paymentStatus: expense.paymentStatus || 'Paid',
       paymentMode: expense.paymentMode || 'Cash',
       account_id: expense.account_id,
@@ -1105,6 +1206,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleOpenAddVendorModal = () => {
+    if (!canCreate) {
+      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      return;
+    }
     setEditingVendor(null);
     setVendorFormData({
       name: '',
@@ -1123,6 +1228,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleOpenEditVendorModal = (vendor: ExpenseVendor) => {
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     setEditingVendor(vendor);
     setVendorFormData({
       name: vendor.name,
@@ -1140,23 +1249,43 @@ const Expenses: React.FC = () => {
     setIsVendorModalOpen(true);
   };
 
+  // State alone let a fast double submit through (both clicks ran before the re-render disabled Save).
+  const isSubmittingVendorRef = useRef(false);
+
+  /** Another vendor (any status) already using this name; the khata also matches entries by name. */
+  const findVendorByName = (name: string, exceptId?: string) => {
+    const key = name.trim().toLowerCase();
+    return expenseVendors.find(v => v.id !== exceptId && v.name.trim().toLowerCase() === key);
+  };
+
   const handleVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!vendorFormData.name?.trim() || isSubmittingVendor) {
-      if (!vendorFormData.name?.trim()) showToast("Vendor ka naam zaroori hai", "warning");
+    const name = vendorFormData.name?.trim() || '';
+    if (!name || isSubmittingVendor || isSubmittingVendorRef.current) {
+      if (!name) showToast("Vendor ka naam zaroori hai", "warning");
+      return;
+    }
+    if (editingVendor ? !canEdit : !canCreate) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
+    const duplicate = findVendorByName(name, editingVendor?.id);
+    if (duplicate) {
+      showToast(`"${duplicate.name}" naam ka vendor pehle se mojood hai${duplicate.isActive === false ? ' (Inactive)' : ''}. Doosra naam rakhein.`, "warning");
       return;
     }
 
+    isSubmittingVendorRef.current = true;
     setIsSubmittingVendor(true);
     try {
       if (editingVendor) {
-        const success = await updateExpenseVendor(editingVendor.id, vendorFormData);
+        const success = await updateExpenseVendor(editingVendor.id, { ...vendorFormData, name });
         if (success) {
           setIsVendorModalOpen(false);
           setEditingVendor(null);
         }
       } else {
-        const success = await addExpenseVendor(vendorFormData as Omit<ExpenseVendor, 'id' | 'total_paid'>);
+        const success = await addExpenseVendor({ ...vendorFormData, name } as Omit<ExpenseVendor, 'id' | 'total_paid'>);
         if (success) {
           setIsVendorModalOpen(false);
         }
@@ -1164,17 +1293,30 @@ const Expenses: React.FC = () => {
     } catch (err: any) {
       showToast("Vendor save nahi hua: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
+      isSubmittingVendorRef.current = false;
       setIsSubmittingVendor(false);
     }
   };
 
+  // Ids whose delete is already running: a second click during the network call reversed the money twice.
+  const pendingDeletesRef = useRef(new Set<string>());
+
   const handleDeleteVendor = async (vendor: ExpenseVendor) => {
+    if (!canDelete) {
+      showToast("Aap ko vendor delete karne ki ijazat nahi.", "warning");
+      return;
+    }
+    if (pendingDeletesRef.current.has(vendor.id)) return;
     const assessment = getDeleteAssessment('vendor', vendor.id);
     if (assessment.balance !== 0) {
       showToast(`Vendor delete nahi ho sakta: ${formatCurrency(Math.abs(assessment.balance))} baqi hain. Pehle hisaab barabar karein.`, 'error');
       return;
     }
     if (assessment.hasHistory) {
+      if (vendor.isActive === false) {
+        showToast(`"${vendor.name}" pehle se Inactive hai. Record wale vendor delete nahi hote.`, 'info');
+        return;
+      }
       const deactivate = await confirmAction({
         tone: 'warning',
         title: `"${vendor.name}" Inactive karein?`,
@@ -1182,9 +1324,15 @@ const Expenses: React.FC = () => {
         consequences: ['Purane kharche aur khata waise hi rahenge.', 'Naye kharche mein yeh vendor nazar nahi aayega.'],
         confirmLabel: 'Haan, Inactive karein',
       });
-      if (deactivate) {
-        updateExpenseVendor(vendor.id, { isActive: false });
-        showToast(`Vendor "${vendor.name}" Inactive ho gaya`, 'info');
+      if (!deactivate) return;
+      pendingDeletesRef.current.add(vendor.id);
+      try {
+        // Was fire-and-forget: the "Inactive ho gaya" toast showed even when the save failed.
+        if (await updateExpenseVendor(vendor.id, { isActive: false })) {
+          showToast(`Vendor "${vendor.name}" Inactive ho gaya`, 'info');
+        }
+      } finally {
+        pendingDeletesRef.current.delete(vendor.id);
       }
       return;
     }
@@ -1193,31 +1341,67 @@ const Expenses: React.FC = () => {
       message: 'Is vendor ka koi record nahi, is liye yeh hamesha ke liye hat jayega.',
       consequences: ['Yeh kaam wapas nahi ho sakta.'],
     });
-    if (hardDelete) {
-      deleteExpenseVendor(vendor.id);
+    if (!hardDelete) return;
+    pendingDeletesRef.current.add(vendor.id);
+    try {
+      // The detail pane kept pointing at the deleted vendor ("Vendor not found").
+      if (await deleteExpenseVendor(vendor.id) && selectedVendorId === vendor.id) selectVendor(null);
+    } finally {
+      pendingDeletesRef.current.delete(vendor.id);
     }
   };
 
+  const [isCreatingQuickVendor, setIsCreatingQuickVendor] = useState(false);
+  const isCreatingQuickVendorRef = useRef(false);
+
   const handleQuickCreateVendor = async () => {
-    if (!quickVendorName.trim()) {
+    const name = quickVendorName.trim();
+    if (!name) {
       showToast("Vendor ka naam likhein", "warning");
       return;
     }
+    if (isCreatingQuickVendorRef.current) return;
+    if (!canCreate) {
+      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      return;
+    }
 
-    const createdId = await addExpenseVendor({
-      name: quickVendorName.trim(),
-      service_type: 'Other',
-      phone: quickVendorPhone.trim(),
-      isActive: true,
-      pending_balance: 0,
-      opening_balance: 0
-    } as any);
-
-    if (createdId && typeof createdId === 'string') {
-      setFormData(prev => ({ ...prev, vendor_id: createdId }));
+    // Enter on an existing name used to create a second vendor with the same khata name.
+    const existing = findVendorByName(name);
+    if (existing) {
+      if (existing.isActive === false) {
+        showToast(`"${existing.name}" Inactive vendor hai. Vendors tab se use Active karein.`, "warning");
+        return;
+      }
+      setFormData(prev => ({ ...prev, vendor_id: existing.id }));
       setQuickVendorName('');
       setQuickVendorPhone('');
       setIsModalCreatingVendor(false);
+      showToast(`"${existing.name}" pehle se mojood hai, wohi chun liya`, "info");
+      return;
+    }
+
+    isCreatingQuickVendorRef.current = true;
+    setIsCreatingQuickVendor(true);
+    try {
+      const createdId = await addExpenseVendor({
+        name,
+        service_type: 'Other',
+        phone: quickVendorPhone.trim(),
+        isActive: true,
+        pending_balance: 0,
+        opening_balance: 0
+      } as any);
+
+      if (createdId && typeof createdId === 'string') {
+        setFormData(prev => ({ ...prev, vendor_id: createdId }));
+        setQuickVendorName('');
+        setQuickVendorPhone('');
+        setIsModalCreatingVendor(false);
+      }
+    } finally {
+      isCreatingQuickVendorRef.current = false;
+      setIsCreatingQuickVendor(false);
     }
   };
 
@@ -1226,6 +1410,7 @@ const Expenses: React.FC = () => {
       showToast("Aap ko kharcha delete karne ki ijazat nahi.", "warning");
       return;
     }
+    if (pendingDeletesRef.current.has(id)) return;
     const assessment = getDeleteAssessment('expense', id);
     if (assessment.isLocked) {
       showToast("Yeh kharcha band shift ya lock din ka hai, is liye delete nahi ho sakta.", "error");
@@ -1239,15 +1424,23 @@ const Expenses: React.FC = () => {
         'Yeh kaam wapas nahi ho sakta.',
       ],
     });
-    if (ok) {
+    if (!ok || pendingDeletesRef.current.has(id)) return;
+    pendingDeletesRef.current.add(id);
+    try {
       const success = await safeDeleteExpense(id);
       if (success) {
         showToast("Kharcha delete ho gaya, accounts theek kar diye gaye", 'info');
       }
+    } finally {
+      pendingDeletesRef.current.delete(id);
     }
   };
 
   const handleOpenPaymentModal = (vendor?: ExpenseVendor, prefilledAmount?: number, defaultType: 'payment' | 'refund' = 'payment') => {
+    if (!canCreate) {
+      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      return;
+    }
     const defaultAcc = settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '';
     const targetVendor = vendor || (expenseVendors.find(v => v.isActive !== false) || null);
 
@@ -1281,9 +1474,16 @@ const Expenses: React.FC = () => {
     setIsPaymentModalOpen(true);
   };
 
+  // Held from the first check until the save ends, including while the low-balance confirm is open.
+  const isSubmittingPaymentRef = useRef(false);
+
   const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmittingPayment) return;
+    if (isSubmittingPayment || isSubmittingPaymentRef.current) return;
+    if (!canCreate) {
+      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      return;
+    }
 
     const amt = parseFloat(paymentFormData.amount as string);
     if (!amt || amt <= 0) {
@@ -1301,28 +1501,34 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    if (!paymentFormData.date) {
+      showToast("Payment ki tareekh chunein", "warning");
+      return;
+    }
+
     // Ctrl+Enter submits past the disabled button, and the payment engine only checks the books lock date.
-    if (paymentFormData.date && isDayLocked && isDayLocked(paymentFormData.date)) {
+    if (isDayLocked && isDayLocked(paymentFormData.date)) {
       showToast(`${paymentFormData.date} ka din lock hai — is tareekh par payment save nahi ho sakti.`, "error");
       return;
     }
 
-    const isRefund = paymentFormData.type === 'refund';
-    const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
-    if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
-      if (!(await confirmAction({
-        tone: 'warning',
-        title: 'Account mein itna balance nahi',
-        message: `"${chosenAccount.name}" mein ${formatCurrency(chosenAccount.balance)} hain, aur payment ${formatCurrency(amt)} ki hai.`,
-        consequences: [`Payment ke baad "${chosenAccount.name}" ka balance ${formatCurrency(chosenAccount.balance - amt)} (minus) ho jayega.`],
-        confirmLabel: 'Phir bhi payment karein',
-      }))) {
-        return;
-      }
-    }
-
-    setIsSubmittingPayment(true);
+    isSubmittingPaymentRef.current = true;
     try {
+      const isRefund = paymentFormData.type === 'refund';
+      const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
+      if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
+        if (!(await confirmAction({
+          tone: 'warning',
+          title: 'Account mein itna balance nahi',
+          message: `"${chosenAccount.name}" mein ${formatCurrency(chosenAccount.balance)} hain, aur payment ${formatCurrency(amt)} ki hai.`,
+          consequences: [`Payment ke baad "${chosenAccount.name}" ka balance ${formatCurrency(chosenAccount.balance - amt)} (minus) ho jayega.`],
+          confirmLabel: 'Phir bhi payment karein',
+        }))) {
+          return;
+        }
+      }
+
+      setIsSubmittingPayment(true);
       const success = await recordExpenseVendorPayment(
         paymentFormData.vendor_id,
         amt,
@@ -1341,6 +1547,7 @@ const Expenses: React.FC = () => {
     } catch (err: any) {
       showToast("Payment record nahi hui: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
+      isSubmittingPaymentRef.current = false;
       setIsSubmittingPayment(false);
     }
   };
@@ -1350,6 +1557,7 @@ const Expenses: React.FC = () => {
       showToast("Sirf Admin vendor payment delete kar sakta hai.", "error");
       return;
     }
+    if (pendingDeletesRef.current.has(txId)) return;
     // Reversing a payment from a closed day would change that day's reconciled cash.
     const vendorTx = expenseVendorTransactions.find(t => t.id === txId);
     if (vendorTx?.date && isDayLocked && isDayLocked(vendorTx.date)) {
@@ -1366,11 +1574,18 @@ const Expenses: React.FC = () => {
     }))) {
       return;
     }
-    await deleteExpenseVendorTransaction(txId);
+    if (pendingDeletesRef.current.has(txId)) return;
+    pendingDeletesRef.current.add(txId);
+    try {
+      await deleteExpenseVendorTransaction(txId);
+    } finally {
+      pendingDeletesRef.current.delete(txId);
+    }
   };
 
   const khataLedgerRows = useMemo<LedgerRow[]>(() => {
-    const targetVendor = selectedVendor;
+    // Only the vendors tab shows the khata; skip the work while the expenses list is open.
+    const targetVendor = activeTab === 'vendors' ? selectedVendor : undefined;
     if (!targetVendor) return [];
 
     const rows: LedgerRow[] = [];
@@ -1443,49 +1658,27 @@ const Expenses: React.FC = () => {
       }
     });
 
-    rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    // Opening balance first, then by Pakistan day, then by time. Comparing Date objects put a
+    // date-only entry (read as 05:00 PKT) after a same-day timestamp from the early morning.
+    const rowDay = (r: LedgerRow) => (r.id === `ob_${vId}` ? '' : dayKey(r.date));
+    rows.sort((a, b) => rowDay(a).localeCompare(rowDay(b)) || String(a.date).localeCompare(String(b.date)));
 
-    let startDateLimit = '';
-    let endDateLimit = '';
-
-    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    const todayStr = pkDay(new Date());
-    const yday = new Date();
-    yday.setDate(yday.getDate() - 1);
-    const ydayStr = pkDay(yday);
-    const d7 = new Date();
-    d7.setDate(d7.getDate() - 6);
-    const d7Str = pkDay(d7);
-
-    if (khataDateRange === 'today') {
-      startDateLimit = todayStr;
-      endDateLimit = todayStr;
-    } else if (khataDateRange === 'yesterday') {
-      startDateLimit = ydayStr;
-      endDateLimit = ydayStr;
-    } else if (khataDateRange === '7days') {
-      startDateLimit = d7Str;
-      endDateLimit = todayStr;
-    } else if (khataDateRange === 'single_date') {
-      startDateLimit = khataStartDate;
-      endDateLimit = khataStartDate;
-    } else if (khataDateRange === 'this_month') {
-      startDateLimit = `${todayStr.slice(0, 7)}-01`;
-    } else if (khataDateRange === 'last_month') {
-      // Pakistan calendar month; the device clock / UTC slice could land on the wrong month.
-      const [curYear, curMonth] = todayStr.split('-').map(Number);
-      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
-      const prevMonthNum = curMonth === 1 ? 12 : curMonth - 1;
-      const lastDay = new Date(Date.UTC(prevYear, prevMonthNum, 0)).getUTCDate();
-      startDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-01`;
-      endDateLimit = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    } else if (khataDateRange === 'last_30_days') {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      startDateLimit = pkDay(thirtyDaysAgo);
-    } else if (khataDateRange === 'custom') {
-      startDateLimit = khataStartDate;
-      endDateLimit = khataEndDate;
-    }
+    // Same Pakistan-day ranges as the expense list, so "This month" ends on the month's last day and a
+    // reversed custom range still works.
+    const KHATA_MODE: Record<KhataDateRangeType, ExpenseDateFilterMode> = {
+      today: 'today', yesterday: 'yesterday', '7days': '7days', '30days': '30days', last_30_days: '30days',
+      this_month: 'this_month', last_month: 'last_month', single_date: 'single_date', custom: 'custom_range', all: 'all',
+    };
+    const range = periodRange({
+      mode: KHATA_MODE[khataDateRange] || 'all',
+      today,
+      month: today.slice(0, 7),
+      singleDate: khataStartDate,
+      startDate: khataStartDate,
+      endDate: khataEndDate,
+    });
+    const startDateLimit = range?.start || '';
+    const endDateLimit = range?.end || '';
 
     if (!startDateLimit && !endDateLimit) {
       let currentBalance = 0;
@@ -1502,7 +1695,9 @@ const Expenses: React.FC = () => {
     const periodRows: LedgerRow[] = [];
 
     rows.forEach(r => {
-      const rDate = r.date ? (r.date.includes('T') ? pkDay(new Date(r.date)) : r.date.slice(0, 10)) : '';
+      // The opening balance (day '') always counts before the period; it was dropped when a custom
+      // range started before its placeholder date.
+      const rDate = rowDay(r);
       if (startDateLimit && rDate < startDateLimit) {
         priorBalance = priorBalance + r.debit - r.credit;
       } else if (!endDateLimit || rDate <= endDateLimit) {
@@ -1536,10 +1731,21 @@ const Expenses: React.FC = () => {
     });
 
     return resultRows;
-  }, [selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate]);
+  }, [activeTab, selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate, today]);
+
+  /** International number for wa.me: 0300…, 300…, +92 300… and 0092 300… all become 92300…. */
+  const whatsAppNumber = (phone: string) => {
+    const digits = phone.replace(/[^0-9]/g, '');
+    if (digits.startsWith('0092')) return digits.slice(2);
+    if (digits.startsWith('92')) return digits;
+    if (digits.startsWith('0')) return `92${digits.slice(1)}`;
+    // A local mobile number typed without the leading 0 opened a chat with a non-existent number.
+    if (digits.length === 10 && digits.startsWith('3')) return `92${digits}`;
+    return digits;
+  };
 
   const handleShareWhatsAppStatement = (vendor: ExpenseVendor) => {
-    const phoneClean = (vendor.phone || '').replace(/[^0-9]/g, '');
+    const phoneClean = whatsAppNumber(vendor.phone || '');
     if (!phoneClean) {
       showToast("Vendor ka phone number nahi hai", "warning");
       return;
@@ -1549,25 +1755,32 @@ const Expenses: React.FC = () => {
     const totalBilled = vendor.total_billed || 0;
     const totalPaid = vendor.total_paid || 0;
     const pendingDues = vendor.pending_balance || 0;
+    // An advance used to read "Net Outstanding Dues: -Rs 3,000".
+    const balanceLine = pendingDues > 0
+      ? `*Net Outstanding Dues:* ${formatCurrency(pendingDues)}`
+      : pendingDues < 0
+        ? `*Advance with you:* ${formatCurrency(Math.abs(pendingDues))}`
+        : '*Balance:* Settled';
 
     let text = `*${companyName} - Vendor Account Statement*\n`;
     text += `To: *${vendor.name}* (${vendor.service_type || 'Vendor'})\n`;
-    text += `Date: ${new Date().toLocaleDateString('en-GB')}\n\n`;
+    // Pakistan date, like every other date here (the device date could be a day off).
+    text += `Date: ${formatDateDisplay(pkToday())}\n\n`;
     text += `📊 *Summary*\n`;
     text += `• Total Billed: ${formatCurrency(totalBilled)}\n`;
     text += `• Total Paid: ${formatCurrency(totalPaid)}\n`;
-    text += `• *Net Outstanding Dues:* ${formatCurrency(pendingDues)}\n\n`;
+    text += `• ${balanceLine}\n\n`;
     text += `*Last Activity:*\n`;
-    
+
+    // Readable dates instead of raw ISO timestamps (2026-10-21T09:12:44.000Z).
     khataLedgerRows.slice(-5).forEach(r => {
-      text += `• ${r.date} | ${r.description} | Bill: ${formatCurrency(r.debit)} | Paid: ${formatCurrency(r.credit)}\n`;
+      text += `• ${formatDateDisplay(r.date)} | ${r.description} | Bill: ${formatCurrency(r.debit)} | Paid: ${formatCurrency(r.credit)}\n`;
     });
 
     text += `\nThank you!`;
 
     const encoded = encodeURIComponent(text);
-    const url = `https://wa.me/${phoneClean.startsWith('0') ? '92' + phoneClean.slice(1) : phoneClean}?text=${encoded}`;
-    window.open(url, '_blank');
+    window.open(`https://wa.me/${phoneClean}?text=${encoded}`, '_blank');
   };
 
   const handlePrintStatement = () => {
@@ -1598,48 +1811,47 @@ const Expenses: React.FC = () => {
     : `${expenseVendors.length} vendors · ${formatCurrency(totalOutstandingVendorDues)} to pay`;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4 px-2 pb-24 sm:px-4 md:pb-8">
+    <div className="mx-auto flex max-w-7xl flex-col gap-4 pb-24 md:pb-8">
       <ExpensesHeader
         active={activeTab}
         onChange={switchTab}
         subtitle={headerSubtitle}
-        counts={{ vendors: expenseVendors.filter(v => (v.pending_balance || 0) > 0).length }}
+        counts={{ vendors: vendorsWithDuesCount }}
         actions={activeTab === 'transactions' ? (
           <>
             {canCreate && (
-              <ToolbarButton onClick={() => setIsSavedExpensesOpen(true)} title="Saved quick records" className="hidden sm:flex">
-                <Bookmark size={14} className="text-amber-500" />
-                <span className="hidden 2xl:inline">Saved</span>
-                {savedExpenses.length > 0 && <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-700">{savedExpenses.length}</span>}
-              </ToolbarButton>
+              <Button variant="secondary" leftIcon={<Bookmark />} onClick={() => setIsSavedExpensesOpen(true)} title="Saved quick records" aria-label="Saved quick records">
+                <span className="hidden sm:inline">Saved</span>
+                {savedExpenses.length > 0 && <span className="min-w-5 rounded-full bg-warning-soft px-1.5 text-[10px] font-bold tabular-nums leading-5 text-warning-fg">{savedExpenses.length}</span>}
+              </Button>
             )}
-            <ToolbarButton onClick={() => setIsCategoryModalOpen(true)} title="Manage categories" aria-label="Categories">
-              <FolderTree size={14} className="text-lime-600" />
-              <span className="hidden 2xl:inline">Categories</span>
-            </ToolbarButton>
+            <Button variant="secondary" leftIcon={<FolderTree />} onClick={() => setIsCategoryModalOpen(true)} title="Manage categories" aria-label="Categories">
+              <span className="hidden sm:inline">Categories</span>
+            </Button>
             {canCreate && (
-              <PrimaryButton onClick={handleOpenAddModal} title="Record expense (N)" className="hidden md:flex">
-                <Plus size={15} /> Record expense
-              </PrimaryButton>
+              <Button leftIcon={<Plus />} onClick={handleOpenAddModal} title="Record expense (N)" className="hidden md:inline-flex">
+                Record expense
+              </Button>
             )}
           </>
         ) : (
-          <>
-            <ToolbarButton onClick={handleOpenAddVendorModal} title="Add vendor">
-              <UserPlus size={14} className="text-lime-600" />
-              <span className="hidden 2xl:inline">New vendor</span>
-            </ToolbarButton>
-            <PrimaryButton
-              tone="emerald"
-              onClick={() => {
-                const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
-                if (target) handleOpenPaymentModal(target);
-                else handleOpenAddVendorModal();
-              }}
-            >
-              <ArrowUpRight size={15} /> <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
-            </PrimaryButton>
-          </>
+          canCreate && (
+            <>
+              <Button variant="secondary" leftIcon={<UserPlus />} onClick={handleOpenAddVendorModal} title="Add vendor" aria-label="New vendor">
+                <span className="hidden sm:inline">New vendor</span>
+              </Button>
+              <Button
+                leftIcon={<ArrowUpRight />}
+                onClick={() => {
+                  const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
+                  if (target) handleOpenPaymentModal(target);
+                  else handleOpenAddVendorModal();
+                }}
+              >
+                <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
+              </Button>
+            </>
+          )
         )}
       />
 
@@ -1682,6 +1894,7 @@ const Expenses: React.FC = () => {
           onUseSaved={handleUseSavedExpense}
           onSaveRecorded={saveRecordedExpense}
           onOpenVendor={openVendorKhata}
+          onShowVendorDues={() => { setFilterVendorTabStatus('With Dues'); switchTab('vendors'); }}
           formatDateDisplay={formatDateDisplay}
         />
       )}
@@ -1719,132 +1932,154 @@ const Expenses: React.FC = () => {
           expenses={expenses}
           expenseVendorTransactions={expenseVendorTransactions}
           canCreate={canCreate}
+          canEdit={canEdit}
           canDelete={canDelete}
           handleDeleteVendorTransaction={handleDeleteVendorTx}
         />
       )}
 
-      <ExpenseCategoryModal
-        isOpen={isCategoryModalOpen}
-        onClose={() => setIsCategoryModalOpen(false)}
-        categoryTree={categoryTree}
-        categorySearch={categorySearch}
-        setCategorySearch={setCategorySearch}
-        modalCatFilter={modalCatFilter}
-        setModalCatFilter={setModalCatFilter}
-        isModalCreatingMainCat={isModalCreatingMainCat}
-        setIsModalCreatingMainCat={setIsModalCreatingMainCat}
-        modalNewCategoryName={modalNewCategoryName}
-        setModalNewCategoryName={setModalNewCategoryName}
-        handleModalAddCategory={handleModalAddCategory}
-        handleToggleCategoryActive={handleToggleCategoryActive}
-        handleStartEditCategory={handleStartEditCategory}
-        handleSaveEditCategory={handleSaveEditCategory}
-        editingCatName={editingCatName}
-        setEditingCatName={setEditingCatName}
-        editCatInput={editCatInput}
-        setEditCatInput={setEditCatInput}
-        handleDeleteCategory={handleDeleteCategory}
-        getCategoryUsageCount={getCategoryUsageCount}
-        expandedCatsInModal={expandedCatsInModal}
-        setExpandedCatsInModal={setExpandedCatsInModal}
-        getSubcategoryUsageCount={getSubcategoryUsageCount}
-        editingSubcatKey={editingSubcatKey}
-        setEditingSubcatKey={setEditingSubcatKey}
-        editSubcatInput={editSubcatInput}
-        setEditSubcatInput={setEditSubcatInput}
-        handleStartEditSubcategory={handleStartEditSubcategory}
-        handleSaveEditSubcategory={handleSaveEditSubcategory}
-        handleToggleSubcategoryActive={handleToggleSubcategoryActive}
-        handleDeleteSubcategory={handleDeleteSubcategory}
-        newSubcatInputs={newSubcatInputs}
-        setNewSubcatInputs={setNewSubcatInputs}
-        handleModalAddSubcat={handleModalAddSubcat}
-      />
+      {isCategoryModalOpen && (
+        <Suspense fallback={null}>
+          <ExpenseCategoryModal
+            isOpen={isCategoryModalOpen}
+            onClose={() => setIsCategoryModalOpen(false)}
+            categoryTree={categoryTree}
+            categorySearch={categorySearch}
+            setCategorySearch={setCategorySearch}
+            modalCatFilter={modalCatFilter}
+            setModalCatFilter={setModalCatFilter}
+            isModalCreatingMainCat={isModalCreatingMainCat}
+            setIsModalCreatingMainCat={setIsModalCreatingMainCat}
+            modalNewCategoryName={modalNewCategoryName}
+            setModalNewCategoryName={setModalNewCategoryName}
+            handleModalAddCategory={handleModalAddCategory}
+            handleToggleCategoryActive={handleToggleCategoryActive}
+            handleStartEditCategory={handleStartEditCategory}
+            handleSaveEditCategory={handleSaveEditCategory}
+            editingCatName={editingCatName}
+            setEditingCatName={setEditingCatName}
+            editCatInput={editCatInput}
+            setEditCatInput={setEditCatInput}
+            handleDeleteCategory={handleDeleteCategory}
+            getCategoryUsageCount={getCategoryUsageCount}
+            expandedCatsInModal={expandedCatsInModal}
+            setExpandedCatsInModal={setExpandedCatsInModal}
+            getSubcategoryUsageCount={getSubcategoryUsageCount}
+            editingSubcatKey={editingSubcatKey}
+            setEditingSubcatKey={setEditingSubcatKey}
+            editSubcatInput={editSubcatInput}
+            setEditSubcatInput={setEditSubcatInput}
+            handleStartEditSubcategory={handleStartEditSubcategory}
+            handleSaveEditSubcategory={handleSaveEditSubcategory}
+            handleToggleSubcategoryActive={handleToggleSubcategoryActive}
+            handleDeleteSubcategory={handleDeleteSubcategory}
+            newSubcatInputs={newSubcatInputs}
+            setNewSubcatInputs={setNewSubcatInputs}
+            handleModalAddSubcat={handleModalAddSubcat}
+          />
+        </Suspense>
+      )}
 
-      <SavedExpensesModal
-        isOpen={isSavedExpensesOpen}
-        onClose={() => setIsSavedExpensesOpen(false)}
-        savedExpenses={savedExpenses}
-        accounts={accounts}
-        onUse={handleUseSavedExpense}
-        onDelete={deleteSavedExpense}
-      />
+      {isSavedExpensesOpen && (
+        <Suspense fallback={null}>
+          <SavedExpensesModal
+            isOpen={isSavedExpensesOpen}
+            onClose={() => setIsSavedExpensesOpen(false)}
+            savedExpenses={savedExpenses}
+            accounts={accounts}
+            onUse={handleUseSavedExpense}
+            onDelete={deleteSavedExpense}
+          />
+        </Suspense>
+      )}
 
-      <ExpenseFormModal
-        isOpen={isAddMode}
-        onClose={() => setIsAddMode(false)}
-        isEditing={Boolean(editingExpenseId)}
-        formData={formData}
-        setFormData={setFormData}
-        handleSubmitExpense={handleSubmitExpense}
-        isSubmitting={isSubmitting}
-        categoryRichOptions={categoryRichOptions}
-        activeSubcategoryList={activeSubcategoryList}
-        vendorRichOptions={vendorRichOptions}
-        accountRichOptions={accountRichOptions}
-        selectedPaymentAccount={selectedPaymentAccount}
-        isModalCreatingCat={isModalCreatingCat}
-        setIsModalCreatingCat={setIsModalCreatingCat}
-        modalNewCatInput={modalNewCatInput}
-        setModalNewCatInput={setModalNewCatInput}
-        handleCreateMainCategory={handleCreateMainCategory}
-        isModalCreatingSub={isModalCreatingSub}
-        setIsModalCreatingSub={setIsModalCreatingSub}
-        modalNewSubInput={modalNewSubInput}
-        setModalNewSubInput={setModalNewSubInput}
-        handleCreateSubcategory={handleCreateSubcategory}
-        isModalCreatingVendor={isModalCreatingVendor}
-        setIsModalCreatingVendor={setIsModalCreatingVendor}
-        quickVendorName={quickVendorName}
-        setQuickVendorName={setQuickVendorName}
-        quickVendorPhone={quickVendorPhone}
-        setQuickVendorPhone={setQuickVendorPhone}
-        handleQuickCreateVendor={handleQuickCreateVendor}
-        accounts={accounts}
-        settings={settings}
-        rememberExpense={rememberExpense}
-        setRememberExpense={setRememberExpense}
-        rememberName={rememberName}
-        setRememberName={setRememberName}
-      />
+      {isAddMode && (
+        <Suspense fallback={null}>
+          <ExpenseFormModal
+            isOpen={isAddMode}
+            onClose={() => setIsAddMode(false)}
+            isEditing={Boolean(editingExpenseId)}
+            formData={formData}
+            setFormData={setFormData}
+            handleSubmitExpense={handleSubmitExpense}
+            isSubmitting={isSubmitting}
+            categoryRichOptions={categoryRichOptions}
+            activeSubcategoryList={activeSubcategoryList}
+            vendorRichOptions={vendorRichOptions}
+            accountRichOptions={accountRichOptions}
+            selectedPaymentAccount={selectedPaymentAccount}
+            isModalCreatingCat={isModalCreatingCat}
+            setIsModalCreatingCat={setIsModalCreatingCat}
+            modalNewCatInput={modalNewCatInput}
+            setModalNewCatInput={setModalNewCatInput}
+            handleCreateMainCategory={handleCreateMainCategory}
+            isModalCreatingSub={isModalCreatingSub}
+            setIsModalCreatingSub={setIsModalCreatingSub}
+            modalNewSubInput={modalNewSubInput}
+            setModalNewSubInput={setModalNewSubInput}
+            handleCreateSubcategory={handleCreateSubcategory}
+            isModalCreatingVendor={isModalCreatingVendor}
+            setIsModalCreatingVendor={setIsModalCreatingVendor}
+            quickVendorName={quickVendorName}
+            setQuickVendorName={setQuickVendorName}
+            quickVendorPhone={quickVendorPhone}
+            setQuickVendorPhone={setQuickVendorPhone}
+            handleQuickCreateVendor={handleQuickCreateVendor}
+            isCreatingQuickVendor={isCreatingQuickVendor}
+            accounts={accounts}
+            settings={settings}
+            rememberExpense={rememberExpense}
+            setRememberExpense={setRememberExpense}
+            rememberName={rememberName}
+            setRememberName={setRememberName}
+          />
+        </Suspense>
+      )}
 
-      <ExpenseVendorModal
-        isOpen={isVendorModalOpen}
-        onClose={() => setIsVendorModalOpen(false)}
-        vendorFormData={vendorFormData}
-        setVendorFormData={setVendorFormData}
-        handleVendorSubmit={handleVendorSubmit}
-        isSubmittingVendor={isSubmittingVendor}
-        editingVendor={editingVendor}
-      />
+      {isVendorModalOpen && (
+        <Suspense fallback={null}>
+          <ExpenseVendorModal
+            isOpen={isVendorModalOpen}
+            onClose={() => setIsVendorModalOpen(false)}
+            vendorFormData={vendorFormData}
+            setVendorFormData={setVendorFormData}
+            handleVendorSubmit={handleVendorSubmit}
+            isSubmittingVendor={isSubmittingVendor}
+            editingVendor={editingVendor}
+          />
+        </Suspense>
+      )}
 
-      <VendorPaymentModal
-        isOpen={isPaymentModalOpen}
-        onClose={() => setIsPaymentModalOpen(false)}
-        paymentFormData={paymentFormData}
-        setPaymentFormData={setPaymentFormData}
-        handlePaymentSubmit={handlePaymentSubmit}
-        isSubmittingPayment={isSubmittingPayment}
-        expenseVendors={expenseVendors}
-        vendorRichOptions={vendorRichOptions}
-        accountRichOptions={accountRichOptions}
-        selectedDirectPaymentAccount={selectedDirectPaymentAccount}
-        setSelectedPaymentVendor={setSelectedPaymentVendor}
-        accounts={accounts}
-        settings={settings}
-      />
+      {isPaymentModalOpen && (
+        <Suspense fallback={null}>
+          <VendorPaymentModal
+            isOpen={isPaymentModalOpen}
+            onClose={() => setIsPaymentModalOpen(false)}
+            paymentFormData={paymentFormData}
+            setPaymentFormData={setPaymentFormData}
+            handlePaymentSubmit={handlePaymentSubmit}
+            isSubmittingPayment={isSubmittingPayment}
+            expenseVendors={expenseVendors}
+            vendorRichOptions={vendorRichOptions}
+            accountRichOptions={accountRichOptions}
+            selectedDirectPaymentAccount={selectedDirectPaymentAccount}
+            setSelectedPaymentVendor={setSelectedPaymentVendor}
+            accounts={accounts}
+            settings={settings}
+          />
+        </Suspense>
+      )}
 
       {canCreate && activeTab === 'transactions' && (
-        <button
-          type="button"
+        <Button
+          size="lg"
+          leftIcon={<Plus />}
           onClick={handleOpenAddModal}
-          className="fixed bottom-6 right-4 z-40 flex items-center gap-2 rounded-2xl bg-gradient-to-br from-lime-500 to-lime-700 px-4 py-3 text-xs font-black text-white shadow-xl shadow-lime-600/40 transition-transform active:scale-95 animate-in zoom-in-95 duration-150 md:hidden print:hidden"
           title="Record expense"
+          className="fixed bottom-6 right-4 z-40 rounded-card shadow-e3 animate-in zoom-in-95 duration-150 md:hidden print:hidden"
         >
-          <Plus size={18} className="stroke-[3]" />
-          <span>Record expense</span>
-        </button>
+          Record expense
+        </Button>
       )}
     </div>
   );
