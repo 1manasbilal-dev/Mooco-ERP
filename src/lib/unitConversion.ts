@@ -1,4 +1,5 @@
 import { UnitDefinition, UnitGroup } from '../types';
+import { cleanNumber } from './formatters';
 
 /**
  * Built-in units, including Pakistani dairy measures (pao, maund, dozen).
@@ -416,7 +417,7 @@ export const convertQuantity = (
   const inBase = quantity * fromFactor;
   const result = inBase / toFactor;
 
-  return Math.round((result + Number.EPSILON) * 10000) / 10000;
+  return cleanNumber(result, 4);
 };
 
 /**
