@@ -37,65 +37,69 @@ const WORKSPACE_COLORS = {
 
 export const DASHBOARD_COLORS = WORKSPACE_COLORS;
 
+/**
+ * Legacy class strings for screens not yet on src/components/ui. They now use the design tokens,
+ * so they match the new primitives in both themes; new code should use the components instead.
+ */
 export const MOOCO_THEME = {
   button: {
-    primary: "mooco-button mooco-button-primary bg-lime-600 hover:bg-lime-700 text-white font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-lime-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer",
-    secondary: "mooco-button mooco-button-secondary bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer",
-    danger: "mooco-button mooco-button-danger bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-red-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer",
-    icon: "p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer",
-    iconDanger: "p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer",
+    primary: "mooco-button mooco-button-primary bg-brand hover:bg-brand-hover text-brand-on font-bold px-4 py-2.5 rounded-control shadow-e1-lit active:scale-[.98] transition-all flex items-center justify-center gap-2 cursor-pointer",
+    secondary: "mooco-button mooco-button-secondary bg-surface hover:bg-surface-2 border border-line hover:border-line-strong text-fg font-bold px-4 py-2.5 rounded-control shadow-e1 transition-all flex items-center justify-center gap-2 cursor-pointer",
+    danger: "mooco-button mooco-button-danger bg-danger hover:bg-danger/90 text-white font-bold px-4 py-2.5 rounded-control shadow-e1 active:scale-[.98] transition-all flex items-center justify-center gap-2 cursor-pointer",
+    icon: "p-2 rounded-control text-fg-faint hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer",
+    iconDanger: "p-2 rounded-control text-fg-faint hover:text-danger-fg hover:bg-danger-soft transition-colors cursor-pointer",
   },
 
   tab: {
-    container: "mooco-tabs bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200/80",
-    item: (isActive: boolean) => 
+    container: "mooco-tabs bg-surface-2 p-1 rounded-control flex gap-1 ring-1 ring-inset ring-line",
+    item: (isActive: boolean) =>
       `mooco-tab flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
-        isActive 
-          ? 'bg-lime-600 text-white shadow-md shadow-lime-200 font-extrabold' 
-          : 'bg-white text-slate-500 hover:text-slate-700 hover:bg-slate-50 border border-transparent'
+        isActive
+          ? 'bg-brand text-brand-on shadow-e1 font-extrabold'
+          : 'text-fg-subtle hover:text-fg hover:bg-surface'
       }`,
     pill: (isActive: boolean) =>
-      `mooco-pill px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-        isActive 
-          ? 'bg-slate-900 text-white shadow-md shadow-slate-900/10' 
-          : 'text-slate-600 hover:bg-slate-100'
+      `mooco-pill px-3.5 py-1.5 rounded-control text-xs font-bold transition-all ${
+        isActive
+          ? 'bg-fg text-surface shadow-e1'
+          : 'text-fg-muted hover:bg-surface-2'
       }`
   },
 
   card: {
-    base: "mooco-card bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden",
-    panel: "mooco-panel bg-slate-50 rounded-xl border border-slate-200/80 p-4",
-    stat: "mooco-card mooco-stat bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-slate-300 transition-all",
+    base: "mooco-card bg-surface rounded-card border border-line shadow-e1 overflow-hidden",
+    panel: "mooco-panel bg-surface-2 rounded-control border border-line p-4",
+    stat: "mooco-card mooco-stat bg-surface p-5 rounded-card border border-line shadow-e1 relative overflow-hidden group hover:border-line-strong transition-all",
   },
 
   input: {
-    base: "mooco-input w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 outline-none transition-all",
-    label: "block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5",
-    search: "mooco-input w-full h-11 pl-10 pr-10 rounded-xl border border-slate-200 bg-white text-sm font-medium focus:ring-2 focus:ring-lime-500/20 focus:border-lime-500 outline-none transition-all placeholder:text-slate-400",
-    largeAmount: "mooco-input w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-2xl font-black text-slate-900 shadow-sm focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 outline-none transition-all",
+    base: "mooco-input ds-control w-full rounded-control border border-line bg-surface px-3.5 py-2.5 text-sm font-semibold text-fg shadow-e1 focus:border-brand-accent focus:ring-4 focus:ring-ring/20 outline-none transition-all",
+    label: "block text-[11px] font-bold text-fg-subtle uppercase tracking-wider mb-1.5",
+    search: "mooco-input ds-control w-full h-11 pl-10 pr-10 rounded-control border border-line bg-surface text-sm font-medium text-fg focus:ring-4 focus:ring-ring/20 focus:border-brand-accent outline-none transition-all placeholder:text-fg-faint",
+    largeAmount: "mooco-input ds-control w-full rounded-control border border-line bg-surface px-4 py-3 text-2xl font-black text-fg shadow-e1 focus:border-brand-accent focus:ring-4 focus:ring-ring/20 outline-none transition-all",
   },
 
   table: {
-    container: "mooco-card mooco-table bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm",
-    thead: "mooco-table-head bg-slate-50 border-b border-slate-200 text-[11px] uppercase font-bold text-slate-500 tracking-wider",
+    container: "mooco-card mooco-table bg-surface border border-line rounded-card overflow-hidden shadow-e1",
+    thead: "mooco-table-head bg-surface-2 border-b border-line text-[11px] uppercase font-bold text-fg-subtle tracking-wider",
     th: "px-6 py-4",
-    tr: "hover:bg-slate-50 group transition-colors border-b border-slate-100 last:border-0",
-    td: "px-6 py-4 text-sm text-slate-800 font-medium",
+    tr: "hover:bg-surface-2 group transition-colors border-b border-line last:border-0",
+    td: "px-6 py-4 text-sm text-fg font-medium",
   },
 
   badge: {
-    due: "inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 font-bold px-2.5 py-1 rounded-lg text-xs",
-    advance: "inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-xs",
-    settled: "inline-flex items-center gap-1 bg-slate-100 text-slate-500 border border-slate-200 font-semibold px-2.5 py-1 rounded-lg text-xs",
-    active: "bg-lime-100 text-lime-800 font-extrabold px-2.5 py-0.5 rounded-full text-[11px]",
-    neutral: "bg-slate-100 text-slate-700 font-bold px-2.5 py-0.5 rounded-md text-[11px] border border-slate-200",
+    due: "inline-flex items-center gap-1 bg-danger-soft text-danger-fg ring-1 ring-inset ring-danger/20 font-bold px-2.5 py-1 rounded-lg text-xs",
+    advance: "inline-flex items-center gap-1 bg-success-soft text-success-fg ring-1 ring-inset ring-success/20 font-bold px-2.5 py-1 rounded-lg text-xs",
+    settled: "inline-flex items-center gap-1 bg-surface-2 text-fg-subtle ring-1 ring-inset ring-line font-semibold px-2.5 py-1 rounded-lg text-xs",
+    active: "bg-brand-soft text-brand-fg font-extrabold px-2.5 py-0.5 rounded-full text-[11px]",
+    neutral: "bg-surface-2 text-fg-muted font-bold px-2.5 py-0.5 rounded-md text-[11px] ring-1 ring-inset ring-line",
   },
 
   modal: {
-    overlay: "fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm overflow-hidden",
-    box: "mooco-modal relative bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200",
-    header: "bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0",
+    overlay: "fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgb(2_6_23/0.5)] overflow-hidden",
+    box: "mooco-modal relative bg-surface rounded-card shadow-e3 w-full max-w-lg overflow-hidden border border-line animate-in zoom-in-95 duration-200",
+    header: "bg-surface-2 text-fg border-b border-line px-6 py-4 flex justify-between items-center shrink-0",
     body: "p-6 space-y-4 overflow-y-auto",
-    footer: "p-6 border-t border-slate-100 bg-white flex gap-3",
+    footer: "p-6 border-t border-line bg-surface flex gap-3",
   }
 } as const;

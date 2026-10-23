@@ -1,0 +1,209 @@
+/*
+ * App shell: root surface, sidebar, workspace system and shell motion.
+ * Imported by src/index.css. Colours come from the tokens in tokens.css only,
+ * so light and dark mode need no duplicates here. Owner: app-shell.
+ */
+
+/* Root surface. The dashboard section of index.css still paints `.mooco-app` with colour
+   washes; the shell outranks it (html + two classes) so the canvas stays calm and flat. */
+html .mooco-app.mooco-shell {
+  background: rgb(var(--canvas)) !important;
+}
+html .mooco-app.mooco-shell::before {
+  content: none;
+}
+
+/* Theme switch: swap every colour in one frame instead of animating hundreds of elements. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* Sidebar */
+.mooco-sidebar { flex-shrink: 0; z-index: 30; box-sizing: border-box; }
+.mooco-sidebar[data-desktop="true"] { position: relative; width: 248px; height: 100%; transition: width .2s var(--ease-out); }
+.mooco-sidebar[data-desktop="true"][data-compact="true"] { width: 68px; }
+.sb-panel {
+  position: absolute; inset: 0; width: 100%;
+  display: flex; flex-direction: column; min-height: 0;
+  background: rgb(var(--surface)); border-right: 1px solid rgb(var(--line));
+  transition: width .2s var(--ease-out), box-shadow .2s var(--ease-out);
+}
+/* Compact rail opened by hover or keyboard: it floats over the page instead of pushing it. */
+.mooco-sidebar[data-desktop="true"][data-compact="true"][data-reveal="true"] .sb-panel { width: 248px; box-shadow: var(--shadow-e3); }
+
+.sb-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 64px; padding: 0 14px; flex: none; }
+.sb-brand { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: -4px; padding: 4px; border-radius: 12px; text-align: left; cursor: pointer; }
+.sb-brand:disabled { cursor: default; }
+.sb-brand-mark {
+  display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 10px;
+  background: rgb(var(--brand)); color: rgb(var(--brand-on));
+  font-size: 16px; font-weight: 800; letter-spacing: -.04em;
+  box-shadow: var(--shadow-e1), inset 0 1px 0 rgb(255 255 255 / .18);
+}
+.sb-brand-copy { min-width: 0; animation: sb-fade .16s ease-out both; }
+.sb-brand-copy strong { display: block; color: rgb(var(--fg)); font-size: 15px; font-weight: 800; line-height: 1.15; letter-spacing: -.02em; }
+.sb-brand-copy small { display: block; margin-top: 1px; color: rgb(var(--fg-subtle)); font-size: 11px; font-weight: 600; }
+
+.sb-nav {
+  flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 2px 10px 12px;
+  overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgb(var(--line-strong)) transparent;
+}
+.sb-nav::-webkit-scrollbar { width: 4px; }
+.sb-nav::-webkit-scrollbar-track { background: transparent; }
+.sb-nav::-webkit-scrollbar-thumb { background: rgb(var(--line-strong)); }
+.sb-section { padding: 18px 10px 6px; }
+.sb-section > span { display: block; overflow: hidden; color: rgb(var(--fg-faint)); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.sb-entry + .sb-entry { margin-top: 2px; }
+
+.sb-item {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; height: 38px; padding: 0 10px;
+  border-radius: 10px; color: rgb(var(--fg-muted)); font-size: 13.5px; font-weight: 500; text-align: left; cursor: pointer;
+  transition: background-color .15s, color .15s;
+}
+.sb-item:hover { background: rgb(var(--surface-2)); color: rgb(var(--fg)); }
+.sb-item-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: none; color: rgb(var(--fg-subtle)); transition: color .15s; }
+.sb-item:hover .sb-item-icon { color: rgb(var(--fg-muted)); }
+.sb-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; animation: sb-fade .16s ease-out both; }
+.sb-item[data-state="active"] { background: rgb(var(--brand-soft)); color: rgb(var(--brand-fg)); font-weight: 650; }
+.sb-item[data-state="active"] .sb-item-icon { color: rgb(var(--brand-accent)); }
+.sb-item[data-state="active"]::before { content: ''; position: absolute; left: -10px; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--brand-accent)); }
+/* A group whose active page is visible inside it. */
+.sb-item[data-state="parent"] { color: rgb(var(--fg)); font-weight: 600; }
+.sb-item[data-state="parent"] .sb-item-icon { color: rgb(var(--brand-accent)); }
+.sb-chevron { flex: none; color: rgb(var(--fg-faint)); transition: transform .2s var(--ease-out); }
+.sb-chevron[data-expanded="true"] { transform: rotate(180deg); }
+
+.sb-sub { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .2s var(--ease-out), visibility .2s; }
+.sb-sub[data-open="true"] { grid-template-rows: 1fr; visibility: visible; }
+.sb-sub > div { min-height: 0; overflow: hidden; margin-left: 19px; padding-left: 9px; border-left: 1px solid rgb(var(--line)); }
+.sb-subitem {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; margin-top: 2px; padding: 0 10px;
+  border-radius: 8px; color: rgb(var(--fg-subtle)); font-size: 13px; font-weight: 500; text-align: left; cursor: pointer;
+  transition: background-color .15s, color .15s;
+}
+.sb-subitem:first-child { margin-top: 4px; }
+.sb-subitem:last-child { margin-bottom: 4px; }
+.sb-subitem > svg { flex: none; opacity: .85; }
+.sb-subitem > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-subitem:hover { background: rgb(var(--surface-2)); color: rgb(var(--fg)); }
+.sb-subitem[aria-current="page"] { background: rgb(var(--brand-soft)); color: rgb(var(--brand-fg)); font-weight: 650; }
+
+.sb-footer { position: relative; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 10px; border-top: 1px solid rgb(var(--line)); }
+.sb-profile { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 12px; text-align: left; cursor: pointer; transition: background-color .15s; }
+.sb-profile:hover, .sb-profile[aria-expanded="true"] { background: rgb(var(--surface-2)); }
+.sb-avatar {
+  position: relative; display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 10px;
+  background: rgb(var(--brand-soft)); color: rgb(var(--brand-fg)); font-size: 12px; font-weight: 750;
+  box-shadow: inset 0 0 0 1px rgb(var(--brand) / .15);
+}
+.sb-avatar > i { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgb(var(--surface)); background: rgb(var(--success)); }
+.sb-profile-copy { flex: 1; min-width: 0; animation: sb-fade .16s ease-out both; }
+.sb-profile-copy strong { display: block; overflow: hidden; color: rgb(var(--fg)); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.sb-profile-copy small { display: block; overflow: hidden; color: rgb(var(--fg-subtle)); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.sb-profile-chevron { flex: none; color: rgb(var(--fg-faint)); }
+
+.sb-user-menu {
+  position: absolute; left: 10px; right: 10px; bottom: calc(100% + 6px); z-index: 3; padding: 6px;
+  border: 1px solid rgb(var(--line)); border-radius: 14px; background: rgb(var(--surface)); box-shadow: var(--shadow-e2);
+  animation: sb-menu-in .16s var(--ease-out) both;
+}
+.sb-user-menu-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 6px 6px 10px; border-bottom: 1px solid rgb(var(--line)); }
+.sb-user-menu-head > div { min-width: 0; }
+.sb-user-menu-head strong { display: block; overflow: hidden; color: rgb(var(--fg)); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.sb-user-menu-head span { display: flex; align-items: center; gap: 4px; margin-top: 2px; color: rgb(var(--fg-subtle)); font-size: 11.5px; }
+.sb-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; height: 38px; padding: 0 10px; border-radius: 9px; color: rgb(var(--fg-muted)); font-size: 13px; font-weight: 550; text-align: left; cursor: pointer; }
+.sb-menu-item > svg { flex: none; color: rgb(var(--fg-subtle)); }
+.sb-menu-item:hover, .sb-menu-item:focus-visible { background: rgb(var(--surface-2)); color: rgb(var(--fg)); }
+.sb-menu-item[data-tone="danger"], .sb-menu-item[data-tone="danger"] > svg { color: rgb(var(--danger-fg)); }
+.sb-menu-item[data-tone="danger"]:hover, .sb-menu-item[data-tone="danger"]:focus-visible { background: rgb(var(--danger-soft)); }
+
+/* Inset focus ring: the menu and submenus clip overflow, an outside outline would be cut off. */
+.mooco-sidebar button:focus-visible { outline: 2px solid rgb(var(--ring)); outline-offset: -2px; }
+.mooco-sidebar .sb-brand:focus-visible { outline-offset: 0; }
+
+/* Compact rail (desktop, not revealed) */
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-brand-row { padding: 0 18px; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-brand { margin-left: -4px; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-section { padding: 12px 8px 8px; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-section > span { height: 1px; background: rgb(var(--line)); color: transparent; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-item { justify-content: center; width: 44px; height: 40px; margin: 0 auto; padding: 0; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-item[data-state="active"]::before { left: -2px; }
+.mooco-sidebar[data-compact="true"][data-reveal="false"] .sb-profile { justify-content: center; width: 48px; margin: 0 auto; padding: 6px; }
+
+/* Mobile drawer */
+.sidebar-backdrop {
+  position: fixed; inset: 0; z-index: 55; background: rgb(2 6 23 / .5);
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s, visibility .2s;
+}
+.sidebar-backdrop[data-open="true"] { opacity: 1; visibility: visible; pointer-events: auto; }
+.mooco-sidebar[data-desktop="false"] {
+  position: fixed; top: 0; bottom: 0; left: 0; z-index: 60; width: min(300px, calc(100vw - 48px)); height: 100dvh;
+  transform: translateX(-100%); visibility: hidden; transition: transform .24s var(--ease-out), visibility .24s;
+}
+.mooco-sidebar[data-desktop="false"][data-open="true"] { transform: translateX(0); visibility: visible; }
+.mooco-sidebar[data-desktop="false"] .sb-panel { box-shadow: var(--shadow-e3); padding-bottom: env(safe-area-inset-bottom); }
+.mooco-sidebar[data-desktop="false"] .sb-brand-row { height: 56px; }
+.mooco-sidebar[data-desktop="false"] .sb-item { height: 44px; }
+.mooco-sidebar[data-desktop="false"] .sb-subitem { height: 42px; }
+
+@keyframes sb-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sb-menu-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Lock screen: the PIN dots shake once after a wrong PIN. */
+.lock-shake { animation: lock-shake .36s cubic-bezier(.36,.07,.19,.97) both; }
+@keyframes lock-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+
+/* Workspace system: legacy screens pick up the design-system surfaces until their teams migrate them. */
+.mooco-app[data-workspace="purchase"], .mooco-app[data-workspace="allocation"],
+.mooco-app[data-workspace="inventory"], .mooco-app[data-workspace="bank-cash"],
+.mooco-app[data-workspace="cash-control"] { --workspace-accent: var(--glass-cyan); }
+.mooco-app[data-workspace="production"], .mooco-app[data-workspace="items"],
+.mooco-app[data-workspace="accounts"] { --workspace-accent: var(--glass-violet); }
+.mooco-app[data-workspace="expenses"] { --workspace-accent: var(--glass-rose); }
+.workspace-pane { overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+.workspace-page { min-width: 0; color: rgb(var(--fg)); }
+.workspace-page :where(h1, h2, h3) { text-wrap: balance; letter-spacing: -.025em; }
+.workspace-page :where(table, input[type="number"], .font-mono) { font-variant-numeric: tabular-nums; }
+
+/* Legacy white cards (bg-white + rounded + border) render as design-system cards. */
+.mooco-card,
+.workspace-page :is(div, section, article, form).bg-white:is(.rounded-xl, .rounded-2xl, .rounded-3xl)[class*="border"]:not(:where([id$="-preview"], [id$="-preview"] *)) {
+  background-color: rgb(var(--surface)) !important;
+  border-color: rgb(var(--line)) !important;
+  box-shadow: var(--shadow-e1);
+}
+.mooco-panel { background: rgb(var(--surface-2)); border-color: rgb(var(--line)); }
+.mooco-button { transition: background-color .15s, border-color .15s, box-shadow .15s, transform .15s; }
+.mooco-tabs { background: rgb(var(--surface-2)) !important; border-color: rgb(var(--line)); }
+.mooco-tab.bg-white { background: transparent !important; }
+.mooco-input,
+.workspace-page :where(input, select, textarea):is(.bg-white, .bg-slate-50, .bg-slate-100):not([type="checkbox"], [type="radio"], [type="range"]) {
+  background-color: rgb(var(--surface)) !important;
+  border-color: rgb(var(--line));
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+.workspace-page :where(input, select, textarea):not([type="checkbox"], [type="radio"], [type="range"], .ds-control):focus,
+.mooco-input:focus { border-color: rgb(var(--brand-accent)) !important; box-shadow: 0 0 0 3px rgb(var(--ring) / .18); }
+.mooco-app :where(button, a, input, select, textarea):not(.ds-control, .ds-button):focus-visible,
+.mooco-modal :where(button, a, input, select, textarea):focus-visible { outline: 2px solid rgb(var(--ring)); outline-offset: 2px; }
+.mooco-app :where(button):disabled { cursor: not-allowed; }
+.workspace-page :where(thead.bg-slate-50, thead.bg-slate-100, .mooco-table-head) { background-color: rgb(var(--surface-2)) !important; }
+.workspace-page :where(thead th) { color: rgb(var(--fg-subtle)); }
+.workspace-page :where(tbody tr):hover { background-color: color-mix(in srgb, var(--workspace-accent, rgb(var(--brand-accent))) 4%, transparent); }
+.mooco-modal { background-color: rgb(var(--surface)) !important; border-color: rgb(var(--line)); box-shadow: var(--shadow-e3); }
+
+@media (max-width: 767px) {
+  .workspace-page :where(button, input, select, textarea) { -webkit-tap-highlight-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mooco-sidebar, .mooco-sidebar *, .sidebar-backdrop, .mooco-button, .mooco-input { transition: none !important; animation: none !important; }
+  .lock-shake { animation: none; }
+}
