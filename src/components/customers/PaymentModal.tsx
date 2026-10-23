@@ -55,6 +55,10 @@ export default function PaymentModal({
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const amountRef = useRef<HTMLInputElement>(null);
+  // The context posts the new balance before the server answers; while saving, the dialog keeps
+  // showing the balance it was posting against so "balance after" does not count the entry twice.
+  const postingBaseRef = useRef(Number(customer.balance || 0));
+  const baseBalance = saving ? postingBaseRef.current : Number(customer.balance || 0);
 
   const activeAccounts = useMemo(() => accounts.filter(a => a.isActive !== false), [accounts]);
   const parsed = parseAmount(amount);
@@ -62,7 +66,7 @@ export default function PaymentModal({
   const dateError = !date ? 'Tareekh chunein' : date > today ? 'Aage ki tareekh par entry nahi ho sakti' : undefined;
   const accountError = type === 'Payment' && !accountId ? 'Account chunein jahan payment jama hogi' : undefined;
   const selectedAccount = activeAccounts.find(a => a.id === accountId);
-  const balanceAfter = roundCurrency(Number(customer.balance || 0) + (parsed.error ? 0 : type === 'Payment' ? -parsed.value : parsed.value));
+  const balanceAfter = roundCurrency(baseBalance + (parsed.error ? 0 : type === 'Payment' ? -parsed.value : parsed.value));
   const canWhatsApp = Boolean(customer.whatsapp || customer.phone);
   const isPayment = type === 'Payment';
 
@@ -75,6 +79,7 @@ export default function PaymentModal({
       return;
     }
     savingRef.current = true;
+    postingBaseRef.current = Number(customer.balance || 0);
     setSaving(true);
     try {
       await onSubmit({ type, amount: parsed.value, date, mode, accountId, note: note.trim(), sendWhatsApp: canWhatsApp && sendWhatsApp });
@@ -93,7 +98,7 @@ export default function PaymentModal({
       initialFocusRef={amountRef}
       icon={<span className={cn('flex size-10 items-center justify-center rounded-xl', isPayment ? 'bg-success-soft text-success-fg' : 'bg-danger-soft text-danger-fg')}><HandCoins size={20} /></span>}
       title="Khata entry"
-      description={<span className="flex flex-wrap items-center gap-x-2">{customer.name} · <KhataBalance balance={customer.balance} /></span>}
+      description={<span className="flex flex-wrap items-center gap-x-2">{customer.name} · <KhataBalance balance={baseBalance} /></span>}
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button type="submit" form={FORM_ID} variant={isPayment ? 'primary' : 'danger'} loading={saving}>
