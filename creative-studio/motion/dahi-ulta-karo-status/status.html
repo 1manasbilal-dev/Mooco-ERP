@@ -1,0 +1,182 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Nunito:wght@600;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --lime:#98C237; --leaf:#B9D96F; --mist:#E8F3CC; --pasture:#2F5A1E;
+    --cream:#FFF8E8; --butter:#FFF0B3; --night:#0F1C0A; --ink:#1A2412;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1080px;height:1920px;overflow:hidden;background:var(--cream)}
+  .layer{position:absolute;inset:0}
+  .abs{position:absolute;will-change:transform,opacity}
+  /* background mesh */
+  #mesh{background:var(--cream)}
+  .blob{position:absolute;border-radius:50%;filter:blur(60px)}
+  /* night end card */
+  #night{background:radial-gradient(circle at 50% 42%,rgba(152,194,55,.38) 0,rgba(47,90,30,.35) 28%,transparent 58%),var(--night);opacity:0}
+  /* photo */
+  #photo{background:url(photo916.jpg) center/cover;opacity:0;transform-origin:800px 1095px}
+  /* logo chip */
+  .chip-logo{background:#fff;border-radius:24px;padding:14px 20px;box-shadow:0 8px 22px rgba(26,36,18,.14)}
+  .chip-logo img{height:76px;display:block}
+  /* text */
+  .fred{font-family:'Fredoka',sans-serif;font-weight:700;letter-spacing:-1px}
+  .nun{font-family:'Nunito',sans-serif}
+  .word{display:inline-block;will-change:transform,opacity}
+  #hook{left:0;right:0;top:700px;text-align:center;font-size:104px;line-height:1.08}
+  #hook .l1{color:var(--ink)} #hook .l2{color:var(--pasture)}
+  #hl{left:72px;top:320px;font-size:124px;line-height:1.0;color:var(--pasture)}
+  #sub{left:76px;top:600px;font-size:46px;font-weight:600;color:var(--ink)}
+  /* badges */
+  .badge{display:flex;align-items:center;gap:16px;background:var(--ink);color:var(--cream);border-radius:999px;padding:14px 30px 14px 14px;font-family:'Nunito';font-weight:900;font-size:40px;box-shadow:0 10px 24px rgba(15,28,10,.25);white-space:nowrap}
+  .badge i{width:58px;height:58px;border-radius:50%;background:var(--lime);display:flex;align-items:center;justify-content:center}
+  /* feature scene */
+  #why{left:90px;top:262px;font-size:64px;color:var(--pasture)}
+  #card{left:90px;top:370px;width:900px;height:580px;border-radius:40px;background:url(photo916.jpg) no-repeat;background-size:900px 1600px;background-position:0 -705px;box-shadow:0 24px 50px rgba(26,36,18,.18)}
+  .row{left:90px;width:900px;height:118px;background:#fff;border-radius:30px;display:flex;align-items:center;gap:26px;padding:0 30px;box-shadow:0 10px 24px rgba(26,36,18,.10)}
+  .row i{width:76px;height:76px;flex:none;border-radius:50%;background:var(--lime);display:flex;align-items:center;justify-content:center}
+  .row span{font-family:'Nunito';font-weight:900;font-size:46px;color:var(--ink)}
+  /* end card */
+  #endLogo{left:50%;top:300px}
+  #pack{left:50%;top:450px;width:440px;height:480px;border-radius:40px;background:url(photo916.jpg) no-repeat;background-size:980px 1742px;background-position:-6px -1010px;box-shadow:0 0 0 6px rgba(152,194,55,.55),0 30px 80px rgba(152,194,55,.35)}
+  #endTitle{left:0;right:0;top:985px;text-align:center;font-size:118px;color:var(--lime)}
+  #endSub{left:0;right:0;top:1128px;text-align:center;font-size:46px;font-weight:800;color:var(--cream)}
+  #cta{left:50%;top:1240px;display:flex;align-items:center;background:var(--lime);border-radius:999px;padding:12px 12px 12px 40px;box-shadow:0 14px 34px rgba(152,194,55,.35)}
+  #cta span{font-family:'Nunito';font-weight:900;font-size:42px;color:var(--ink);margin-right:24px;white-space:nowrap}
+  #cta b{font-family:'Nunito';font-weight:900;font-size:38px;color:var(--cream);background:var(--ink);border-radius:999px;padding:18px 30px;white-space:nowrap}
+  #tag{left:0;right:0;top:1420px;text-align:center;font-size:36px;font-weight:600;color:rgba(255,248,232,.85)}
+</style>
+</head>
+<body>
+<div class="layer" id="mesh">
+  <div class="blob" id="b1" style="width:620px;height:620px;background:var(--butter);left:-120px;top:120px"></div>
+  <div class="blob" id="b2" style="width:700px;height:700px;background:var(--mist);right:-200px;top:820px"></div>
+  <div class="blob" id="b3" style="width:520px;height:520px;background:var(--leaf);left:140px;top:1380px;opacity:.55"></div>
+</div>
+<div class="layer" id="photo"></div>
+<div class="layer" id="night"></div>
+
+<!-- Scene 1: hook -->
+<div class="abs fred" id="hook"><div class="l1"><span class="word">Aap</span> <span class="word">ka</span> <span class="word">dahi</span></div><div class="l2"><span class="word">kitna</span> <span class="word">gaarha</span> <span class="word">hai?</span></div></div>
+
+<!-- Scene 2: proof -->
+<div class="abs fred" id="hl"><div><span class="word">Ulta</span> <span class="word">Karo,</span></div><div><span class="word">Girega</span> <span class="word">Nahi!</span></div></div>
+<div class="abs nun" id="sub">Itna gaarha, roz taaza Mooco Dahi</div>
+<svg class="abs" id="ring" width="1080" height="1920" style="left:0;top:0">
+  <circle id="ringC" cx="792" cy="1095" r="280" fill="none" stroke="#2F5A1E" stroke-width="9" stroke-linecap="round" stroke-dasharray="1760" stroke-dashoffset="1760" transform="rotate(-90 792 1095)"/>
+</svg>
+<div class="abs badge" id="bd1" style="left:60px;top:850px"><i><svg width="34" height="34" viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="#1A2412" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></i>Ek boond nahi giri!</div>
+<div class="abs badge" id="bd2" style="left:60px;top:975px"><i><svg width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="#1A2412"/><g stroke="#1A2412" stroke-width="2.4" stroke-linecap="round"><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></g></svg></i>Roz taaza</div>
+
+<!-- Scene 3: why Mooco -->
+<div class="abs fred" id="why">Kyun Mooco Dahi?</div>
+<div class="abs" id="card"></div>
+<div class="abs row" id="r1" style="top:1000px"><i><svg width="44" height="44" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="#1A2412"/><g stroke="#1A2412" stroke-width="2.2" stroke-linecap="round"><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></g></svg></i><span>Roz taaza</span></div>
+<div class="abs row" id="r2" style="top:1146px"><i><svg width="44" height="44" viewBox="0 0 24 24"><path d="M12 2.8C9 7 6.5 10.3 6.5 14a5.5 5.5 0 0 0 11 0c0-3.7-2.5-7-5.5-11.2z" fill="#1A2412"/></svg></i><span>100% khalis</span></div>
+<div class="abs row" id="r3" style="top:1292px"><i><svg width="46" height="46" viewBox="0 0 24 24"><path d="M2.5 6.5h11v9h-11z M13.5 9.5h4l3 3v3h-7z" fill="#1A2412"/><circle cx="7" cy="17.5" r="2" fill="#1A2412" stroke="#98C237" stroke-width="1"/><circle cx="17" cy="17.5" r="2" fill="#1A2412" stroke="#98C237" stroke-width="1"/></svg></i><span>Ghar tak delivery · Shorkot</span></div>
+
+<!-- logo chip (scenes 1–3) -->
+<div class="abs chip-logo" id="logo" style="right:56px;top:262px"><img src="logo.png"></div>
+
+<!-- Scene 4: end card -->
+<div class="abs chip-logo" id="endLogo"><img src="logo.png"></div>
+<div class="abs" id="pack"></div>
+<div class="abs fred" id="endTitle">Mooco Dahi</div>
+<div class="abs nun" id="endSub">Gaarha · Taaza · Khalis</div>
+<div class="abs" id="cta"><span>Abhi Order Karein</span><b>mooco.pk →</b></div>
+<div class="abs nun" id="tag">Promise of purity &amp; freshness</div>
+
+<script>
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const E={
+  lin:x=>x,
+  out:x=>1-Math.pow(1-x,3),
+  inOut:x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2,
+  back:x=>{const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)},
+};
+const p=(t,t0,t1,ease=E.out)=>ease(clamp((t-t0)/(t1-t0)));
+const mix=(a,b,k)=>a+(b-a)*k;
+const $=id=>document.getElementById(id);
+function set(el,{o=1,x=0,y=0,s=1,r=0,blur=0,center=false}){
+  el.style.opacity=o;
+  el.style.transform=(center?'translateX(-50%) ':'')+`translate(${x}px,${y}px) scale(${s}) rotate(${r}deg)`;
+  el.style.filter=blur?`blur(${blur}px)`:'none';
+}
+// pop-in for a group of words, then group exit
+function words(groupId,start,stagger,exitAt,exitDur=.4){
+  const ws=$(groupId).querySelectorAll('.word');
+  ws.forEach((w,i)=>{ /* set later by render */ w.dataset.t0=start+i*stagger; });
+  return {ws,exitAt,exitDur};
+}
+const G={hook:words('hook',.45,.13,2.35), hl:words('hl',3.05,.16,7.75)};
+function renderWords(g,t){
+  const out=p(t,g.exitAt,g.exitAt+g.exitDur,E.inOut);
+  g.ws.forEach(w=>{
+    const k=p(t,+w.dataset.t0,+w.dataset.t0+.42,E.back);
+    const a=p(t,+w.dataset.t0,+w.dataset.t0+.2,E.lin);
+    w.style.opacity=a*(1-out);
+    w.style.transform=`translateY(${mix(46,0,k)-out*60}px) scale(${mix(.55,1,k)})`;
+  });
+}
+window.render=function(t){
+  // background mesh drift
+  $('b1').style.transform=`translate(${Math.sin(t*.6)*40}px,${Math.cos(t*.5)*30}px)`;
+  $('b2').style.transform=`translate(${Math.cos(t*.45)*50}px,${Math.sin(t*.55)*35}px)`;
+  $('b3').style.transform=`translate(${Math.sin(t*.5+1)*45}px,${Math.cos(t*.4)*25}px)`;
+
+  // logo chip: in at .15, out with scene 3 exit
+  const lo=p(t,.15,.6)*(1-p(t,11.1,11.45,E.inOut));
+  set($('logo'),{o:lo,y:mix(-30,0,p(t,.15,.6,E.back))});
+
+  // Scene 1 hook
+  renderWords(G.hook,t);
+
+  // Scene 2 photo: in 2.55–3.25, slow push, out 7.85–8.4 (blur + fade)
+  const pin=p(t,2.55,3.25,E.out), pout=p(t,7.85,8.4,E.inOut);
+  set($('photo'),{o:pin*(1-pout),s:mix(1.14,1.0,p(t,2.55,7.9,E.out))+pout*.04,blur:pout*14});
+  renderWords(G.hl,t);
+  const so=p(t,3.85,4.3)*(1-p(t,7.75,8.1,E.inOut));
+  set($('sub'),{o:so,y:mix(30,0,p(t,3.85,4.3))});
+  // ring draw
+  const rd=p(t,4.5,5.35,E.inOut), ro=1-p(t,7.75,8.1,E.inOut);
+  $('ringC').setAttribute('stroke-dashoffset',1760*(1-rd));
+  $('ring').style.opacity=(rd>0?1:0)*ro;
+  // badges
+  [['bd1',5.3],['bd2',5.85]].forEach(([id,t0])=>{
+    const k=p(t,t0,t0+.45,E.back), o=p(t,t0,t0+.2,E.lin)*(1-p(t,7.7,8.05,E.inOut));
+    set($(id),{o,x:mix(-60,0,k),s:mix(.7,1,k)});
+  });
+
+  // Scene 3 why Mooco: 8.15–11.45
+  const s3out=p(t,11.1,11.45,E.inOut);
+  set($('why'),{o:p(t,8.2,8.55)*(1-s3out),y:mix(30,0,p(t,8.2,8.55))});
+  const ck=p(t,8.15,8.75,E.back);
+  set($('card'),{o:p(t,8.15,8.4,E.lin)*(1-s3out),s:mix(.82,1,ck),y:mix(60,0,ck)});
+  [['r1',8.7],['r2',9.05],['r3',9.4]].forEach(([id,t0])=>{
+    const k=p(t,t0,t0+.5,E.back);
+    set($(id),{o:p(t,t0,t0+.2,E.lin)*(1-s3out),x:mix(220,0,k)});
+  });
+
+  // Scene 4 end card: 11.3–15
+  const n=p(t,11.25,11.75,E.inOut);
+  $('night').style.opacity=n;
+  $('night').style.backgroundPosition=`0 ${Math.sin(t*1.2)*20}px`;
+  const el=p(t,11.55,12.0,E.back);
+  set($('endLogo'),{o:p(t,11.55,11.75,E.lin),y:mix(-30,0,el),center:true});
+  const pk=p(t,11.7,12.3,E.back);
+  set($('pack'),{o:p(t,11.7,11.9,E.lin),s:mix(.7,1,pk),y:mix(80,0,pk)+Math.sin((t-12.3)*2.2)*(t>12.3?8:0),center:true});
+  const tt=p(t,12.1,12.55,E.back);
+  set($('endTitle'),{o:p(t,12.1,12.3,E.lin),y:mix(40,0,tt),s:mix(.8,1,tt)});
+  set($('endSub'),{o:p(t,12.4,12.75),y:mix(24,0,p(t,12.4,12.75))});
+  const ct=p(t,12.7,13.15,E.back);
+  const pulse=t>13.4?1+0.035*Math.sin((t-13.4)*Math.PI*2/0.9):1;
+  set($('cta'),{o:p(t,12.7,12.9,E.lin),s:mix(.7,1,ct)*pulse,center:true});
+  set($('tag'),{o:p(t,13.2,13.6)});
+};
+window.render(0);
+</script>
+</body>
+</html>
