@@ -1,5 +1,26 @@
-
-import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
+/**
+ * DairyContext: the workspace's records and every action that changes them.
+ *
+ * Reading it (for page code)
+ * - `useDairy()` keeps its old shape, but a component now re-renders only when a field it read
+ *   changes. Reads are tracked per component (destructuring at the top is the usual way), so a
+ *   page that reads `items` does not re-render when a bill syncs or the bank history arrives.
+ *   Fields read only inside handlers or effects still return current values.
+ * - Actions (`addSale`, `recordCustomerPayment`, ...) keep one identity for the session and always
+ *   run with current state, so they are safe in effect deps and memoized children.
+ * - Read helpers: `hasPermission` / `canPerform` change only with the operator or role,
+ *   `isPeriodLocked` / `isDayLocked` with the lock date and business days; `getBusinessDate` never
+ *   changes. `getShiftTotals`, `getDeleteAssessment` and `buildBackup` change with any record.
+ * - `useDairySelector(d => d.sales.length)` subscribes to a derived value only; pass an `isEqual`
+ *   (e.g. shallow) when the selector builds a new object or array.
+ * - Hidden kept-alive pages sit inside `DairyFreeze` and stay on the records they last showed
+ *   until they are opened again (an operator change always reaches them).
+ *
+ * Loading (inside this file)
+ * - `fetchData()` reads every table; `fetchData(['items'])` only the listed ones (see LoadKey).
+ *   A write reloads just what it changed; optimistic updates cover the rest.
+ */
+import React, { createContext, useCallback, useContext, useLayoutEffect, useState, useEffect, useMemo, useRef, useSyncExternalStore, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { db, generateUUID, generateInvoiceNumber, LocalOrder, LocalOrderItem, LocalCustomer, OutboxActionType, roundCurrency, roundQuantity } from '../lib/db';
 import { actionLock } from '../lib/actionLock';
@@ -387,7 +408,117 @@ export interface DeleteAssessment {
   details?: any;
 }
 
-const DairyContext = createContext<DairyContextType | undefined>(undefined);
+// The provider publishes each new context value to a store; useDairy subscribes per component and
+// re-renders only for the fields that component reads (one React context re-rendered every consumer
+// on every change: a synced bill re-rendered the sidebar, the header and the open page).
+interface DairySource {
+  get: () => DairyContextType;
+  subscribe: (listener: () => void) => () => void;
+}
+
+interface DairyStore extends DairySource {
+  set: (value: DairyContextType) => void;
+}
+
+const createDairyStore = (initial: DairyContextType): DairyStore => {
+  let value = initial;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    subscribe: listener => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    set: next => {
+      if (next === value) return;
+      value = next;
+      listeners.forEach(listener => listener());
+    }
+  };
+};
+
+const DairyStoreContext = createContext<DairySource | null>(null);
+
+// Sign-out / user switch always reaches hidden pages, so they lock instead of keeping old data.
+const sameOperator = (a: DairyContextType, b: DairyContextType) =>
+  a.currentUser?.id === b.currentUser?.id && a.currentRole?.id === b.currentRole?.id;
+
+// What a kept-alive page reads through (see DairyFreeze): while frozen it keeps the value it last
+// handed out, except for an operator change; once thawed it follows the parent again.
+const createFrozenView = (parent: DairySource) => {
+  let frozen = false;
+  let value = parent.get();
+  const listeners = new Set<() => void>();
+  let detach: (() => void) | null = null;
+  const notify = () => listeners.forEach(listener => listener());
+  return {
+    get: () => {
+      const next = parent.get();
+      if (next !== value && (!frozen || !sameOperator(value, next))) value = next;
+      return value;
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      // Subscribed to the parent only while someone listens, so a page that unmounts leaves nothing behind.
+      if (!detach) {
+        detach = parent.subscribe(() => {
+          if (!frozen || !sameOperator(value, parent.get())) notify();
+        });
+      }
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size && detach) {
+          detach();
+          detach = null;
+        }
+      };
+    },
+    setFrozen: (next: boolean) => { frozen = next; },
+    notify
+  };
+};
+
+// A view of the context value that records every field read through it. Values come from `current`
+// (the newest value, or the frozen one on a hidden page), so a handler running after the render
+// still sees current records, as it did when every consumer re-rendered on every change.
+const trackReads = (snapshot: DairyContextType, tracked: Set<PropertyKey>, current: () => DairyContextType): DairyContextType =>
+  new Proxy(snapshot, {
+    get(_target, key) {
+      tracked.add(key);
+      return (current() as any)[key];
+    },
+    has(target, key) {
+      tracked.add(key);
+      return key in target;
+    },
+    ownKeys(target) {
+      const keys = Reflect.ownKeys(target);
+      keys.forEach(key => tracked.add(key));
+      return keys;
+    }
+  });
+
+// Wrappers that always call the newest render's implementation, created once.
+const bindLatest = <T extends Record<string, (...args: any[]) => any>>(ref: { current: T }): T => {
+  const bound = {} as T;
+  for (const key of Object.keys(ref.current) as Array<keyof T>) {
+    bound[key] = ((...args: any[]) => ref.current[key](...args)) as T[keyof T];
+  }
+  return bound;
+};
+
+// A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
+const businessDayOf = (dateStr: string): string =>
+  /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
+
+// Today's business date in Pakistan (YYYY-MM-DD).
+const getBusinessDate = (): string => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const part = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
 
 const getErrorMessage = (err: any): string => {
   if (typeof err === 'string') return err;
@@ -5090,14 +5221,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const getBusinessDate = (): string => {
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).formatToParts(new Date());
-    const part = (type: string) => parts.find(p => p.type === type)?.value || '';
-    return `${part('year')}-${part('month')}-${part('day')}`;
-  };
-
   const mapCashShift = (row: any): ShiftSession => mapCashShiftRow(row, accounts, cashDrawers);
 
   // Custody drawer ids are cash_drawers ids; resolve the financial account a
@@ -6612,15 +6735,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // A timestamp belongs to the Pakistan business day it happened on, not its UTC date.
-  const businessDayOf = (dateStr: string): string =>
-    /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-
-  const isPeriodLocked = (dateStr: string): boolean => {
-    const lockDate = settings.security?.lockDate;
+  const lockDate = settings.security?.lockDate;
+  const isPeriodLocked = useCallback((dateStr: string): boolean => {
     if (!lockDate || !dateStr) return false;
     return businessDayOf(dateStr) <= lockDate;
-  };
+  }, [lockDate]);
 
   // Shared guard for anything that writes a dated entry: refuses dates inside the closed books.
   const guardOpenPeriod = (dateStr?: string): boolean => {
@@ -6629,11 +6748,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return false;
   };
 
-  const isDayLocked = (dateStr: string): boolean => {
+  const isDayLocked = useCallback((dateStr: string): boolean => {
     if (isPeriodLocked(dateStr)) return true;
     const d = businessDayOf(dateStr);
     return businessDays.some(day => day.business_date === d && day.status === 'Closed');
-  };
+  }, [isPeriodLocked, businessDays]);
 
   const reopenDayClosing = async (dayClosingId: string): Promise<boolean> => {
     if (!canPerform('cash_control', 'reopen')) {
@@ -8865,7 +8984,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return roles.find(r => r.id === currentUser.role_id) || null;
   }, [roles, currentUser]);
 
-  const hasPermission = (moduleKey: PermissionModule | string): boolean => {
+  const hasPermission = useCallback((moduleKey: PermissionModule | string): boolean => {
     if (!currentUser) return false;
     if (currentUser.role_id === 'role_super_admin') return true;
     // Per-user extra accesses (granted on the user, merged over the role).
@@ -8878,9 +8997,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (perms.includes(moduleKey as any)) return true;
     if (moduleKey === 'cash_control' && perms.includes('retail_stock')) return true;
     return perms.some(p => typeof p === 'string' && (p === moduleKey || p.startsWith(`${moduleKey}:`)));
-  };
+  }, [currentUser, currentRole]);
 
-  const canPerform = (moduleKey: string, action: string = 'view'): boolean => {
+  const canPerform = useCallback((moduleKey: string, action: string = 'view'): boolean => {
     if (!currentUser) return false;
     if (currentUser.role_id === 'role_super_admin') return true;
     // Per-user extra accesses take priority, then the role's permissions.
@@ -8902,7 +9021,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     }
     return false;
-  };
+  }, [currentUser, currentRole]);
 
   // A user row as returned by the secure auth RPCs (no PIN / hash fields).
   const mapRpcUser = (u: any): AppUser => ({
@@ -9169,73 +9288,156 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   latest.current = { loadData, rolloverStaleShift, accounts, cashDrawers, inventoryLogs, shiftSessions, activeShiftSession };
 
-  const contextValue = useMemo(() => ({
-    users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isTerminalLocked, lockTerminalNow, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
-    loginWithCredentials, switchUserWithPin, switchUserByIdAndPin, setCurrentUserDirectly, logoutUser,
-    addUser, updateUser, deleteUser, createRole, updateRole, deleteRole, hasPermission, canPerform,
-    purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
-    productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
-    accounts, bankTransactions, manualAccounts, journalEntries, settings, 
-    categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
-    businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
-    refreshCashControl, getShiftTotals, startCashierShift, closeCashierShift, acceptHeadRemittance, resolveCashVariance,
-    resolveCashHandover, closeBusinessDay, reopenBusinessDay, upsertCashDrawer, getBusinessDate, submitDayCloseStockCount, addDrawerOpeningCash, closeDayCash, closeDayStock,
-    inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries,
-    openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, isDayLocked, isPeriodLocked, requestManagerApproval, buildBackup,
+  // Every action runs the newest render's implementation through a wrapper created once: a screen
+  // that only uses actions never re-renders for data, a handler kept from an older render still
+  // sees current state, and effects that list an action as a dependency no longer re-run on every
+  // change (refreshCashControl as a dependency re-downloaded the cash tables after each sale).
+  const actionImpls = {
+    retryLoading, lockTerminalNow, loginWithCredentials, switchUserWithPin, switchUserByIdAndPin, setCurrentUserDirectly, logoutUser,
+    addUser, updateUser, deleteUser, createRole, updateRole, deleteRole,
+    refreshCashControl, startCashierShift, closeCashierShift, acceptHeadRemittance, resolveCashVariance,
+    resolveCashHandover, closeBusinessDay, reopenBusinessDay, upsertCashDrawer, submitDayCloseStockCount, addDrawerOpeningCash, closeDayCash, closeDayStock,
+    openShiftSession, closeShiftSession, performDayClosing, reopenDayClosing, requestManagerApproval,
     addPurchase, returnPurchase, deletePurchase, returnMaterialPurchase, deleteMaterialPurchase, addBulkMaterialPurchase, recordSupplierPayment,
     addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
-    allocateBulkMilk, allocateFromRetailStock, setAllocations,
-    addItem, updateItem, deleteItem, reorderItems, adjustStock, setInventory,
-    setProductionBatches, createBatch, discardBatch, trimBatchToSource, updateBatchStage, cancelBatch,
+    allocateBulkMilk, allocateFromRetailStock,
+    addItem, updateItem, deleteItem, reorderItems, adjustStock, syncItemAndInventoryStock,
+    createBatch, discardBatch, trimBatchToSource, updateBatchStage, cancelBatch,
     addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, performRetailClosing, postClosingStockSale,
     addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
-    addExpense, updateExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense, 
+    addExpense, updateExpense, deleteExpense, addRecurringExpense, deleteRecurringExpense,
     addExpenseVendor, updateExpenseVendor, deleteExpenseVendor, recordExpenseVendorPayment, deleteExpenseVendorTransaction,
     addAccount, updateAccount, deleteAccount, recordBankTransaction, transferFunds, addManualAccount, deleteManualAccount, updateManualAccount, addJournalEntry,
     updateSettings, resetSystem, clearData, addCategory, removeCategory,
     addUnit, updateUnit, deleteUnit,
-    getDeleteAssessment, safeDeleteCustomer, safeDeleteSupplier, safeDeleteItem,
-    safeDeleteExpense, safeDeleteAccount, reactivateEntity
-  }), [
+    safeDeleteCustomer, safeDeleteSupplier, safeDeleteItem, safeDeleteExpense, safeDeleteAccount, reactivateEntity
+  };
+  const actionsRef = useRef(actionImpls);
+  actionsRef.current = actionImpls;
+  const [actions] = useState(() => bindLatest(actionsRef));
+
+  // getShiftTotals, getDeleteAssessment and buildBackup read many records; they are taken from the
+  // render that rebuilt the value, i.e. whenever any record below changed (as before).
+  const contextValue = useMemo(() => {
+    const value: DairyContextType = {
+      ...actions,
+      setIsUserSwitcherOpen, setAllocations, setInventory, setProductionBatches,
+      hasPermission, canPerform, getBusinessDate, isDayLocked, isPeriodLocked,
+      getShiftTotals, getDeleteAssessment, buildBackup,
+      users, roles, currentUser, currentRole, isUserSwitcherOpen, isTerminalLocked, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError,
+      purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers,
+      productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
+      accounts, bankTransactions, manualAccounts, journalEntries, settings,
+      categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
+      businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
+      inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries
+    };
+    return value;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the three record-wide getters follow the records listed here
+  }, [
+    actions, hasPermission, canPerform, isDayLocked, isPeriodLocked,
     users, roles, currentUser, currentRole, isUserSwitcherOpen, isTerminalLocked, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError,
-    purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers, 
+    purchases, materialPurchases, suppliers, allocations, inventory, items, sales, customers,
     productionBatches, expenses, recurringExpenses, expenseVendors, expenseVendorTransactions,
-    accounts, bankTransactions, manualAccounts, journalEntries, settings, 
+    accounts, bankTransactions, manualAccounts, journalEntries, settings,
     categories, unitGroups, retailClosings, shiftSessions, dayClosings, activeShiftSession,
     businessDays, cashDrawers, cashHandovers, cashRemittances, cashVariances, shiftCashEvents, cashInTransit,
     inventoryLogs, customerTransactions, supplierTransactions, dailySupplyEntries
   ]);
 
+  const [store] = useState(() => createDairyStore(contextValue));
+  // Published after commit; each subscribed component re-renders (before paint) only if a field it
+  // reads changed.
+  useLayoutEffect(() => {
+    store.set(contextValue);
+  }, [store, contextValue]);
+
   return (
-    <DairyContext.Provider value={contextValue}>
+    <DairyStoreContext.Provider value={store}>
       {children}
-    </DairyContext.Provider>
+    </DairyStoreContext.Provider>
   );
 };
 
 /**
- * Keeps a hidden (kept-alive) page on the context value it last saw, so sales
- * and syncs do not re-render screens nobody is looking at. When `frozen` turns
- * false the live value flows through again and the page catches up at once.
+ * Keeps a hidden (kept-alive) page on the records it last showed, so sales and syncs do not
+ * re-render screens nobody is looking at. When `frozen` turns false the page catches up at once.
  */
 export const DairyFreeze: React.FC<{ frozen: boolean; children: ReactNode }> = ({ frozen, children }) => {
-  const live = useContext(DairyContext);
-  const snapshotRef = useRef(live);
-  // Sign-out / user switch always reaches hidden pages, so they lock instead of keeping old data.
-  if (!frozen || live?.currentUser?.id !== snapshotRef.current?.currentUser?.id || live?.currentRole?.id !== snapshotRef.current?.currentRole?.id) {
-    snapshotRef.current = live;
-  }
+  const parent = useDairyStore();
+  const [view] = useState(() => createFrozenView(parent));
+  // Set while rendering, so hiding a page re-renders nothing below it; thawing tells its readers to
+  // check for what they missed.
+  view.setFrozen(frozen);
+  useLayoutEffect(() => {
+    if (!frozen) view.notify();
+  }, [frozen, view]);
   return (
-    <DairyContext.Provider value={frozen ? snapshotRef.current : live}>
+    <DairyStoreContext.Provider value={view}>
       {children}
-    </DairyContext.Provider>
+    </DairyStoreContext.Provider>
   );
 };
 
-export const useDairy = () => {
-  const context = useContext(DairyContext);
-  if (context === undefined) {
+const useDairyStore = (): DairySource => {
+  const store = useContext(DairyStoreContext);
+  if (!store) {
     throw new Error('useDairy must be used within a DairyProvider');
   }
-  return context;
+  return store;
+};
+
+/**
+ * The workspace records and actions. Re-renders only when a field this component read changes.
+ * Returned as `any`, as it effectively always was (React has no type package in this project);
+ * typing it as DairyContextType surfaces type mismatches in pages that need their own fixes.
+ */
+export const useDairy = (): any => {
+  const store = useDairyStore();
+  // Every field this component has read, kept for its lifetime: a field read only on some renders
+  // (or only in an effect) still re-renders it when it changes.
+  const trackedRef = useRef<Set<PropertyKey> | null>(null);
+  if (!trackedRef.current) trackedRef.current = new Set();
+  const renderedRef = useRef<DairyContextType | null>(null);
+
+  const getSnapshot = useCallback(() => {
+    const next = store.get();
+    const rendered = renderedRef.current;
+    if (!rendered || rendered === next) return next;
+    for (const key of trackedRef.current!) {
+      if (!Object.is((rendered as any)[key], (next as any)[key])) return next;
+    }
+    return rendered;
+  }, [store]);
+
+  const snapshot = useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  renderedRef.current = snapshot;
+  return useMemo(() => trackReads(snapshot, trackedRef.current!, store.get), [snapshot, store]);
+};
+
+/**
+ * Subscribes to one derived value: the component re-renders only when the selected value changes
+ * (by `isEqual`, default Object.is). Return primitives or existing records; for a new object or
+ * array per call pass a shallow `isEqual`, or the component re-renders on every change.
+ *
+ *   const billCount = useDairySelector(d => d.sales.length);
+ */
+export const useDairySelector = <T,>(selector: (dairy: DairyContextType) => T, isEqual: (a: T, b: T) => boolean = Object.is): T => {
+  const store = useDairyStore();
+  const lastRef = useRef<{ source: DairyContextType; selector: (dairy: DairyContextType) => T; selected: T } | null>(null);
+
+  const getSnapshot = () => {
+    const source = store.get();
+    const last = lastRef.current;
+    if (last && last.source === source && last.selector === selector) return last.selected;
+    const selected = selector(source);
+    if (last && isEqual(last.selected, selected)) {
+      lastRef.current = { source, selector, selected: last.selected };
+      return last.selected;
+    }
+    lastRef.current = { source, selector, selected };
+    return selected;
+  };
+
+  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
 };
