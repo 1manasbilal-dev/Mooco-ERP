@@ -11,7 +11,9 @@ import { RichSelect, type RichSelectOption } from '../components/RichSelect';
 import { SmartNumberInput } from '../components/SmartNumberInput';
 import { PageLoadingFallback } from '../components/PageLoadingFallback';
 import ErrorBoundary from '../components/ErrorBoundary';
-import { Badge, Button, Card, CardBody, CardHeader, LoadMoreRow, confirmAction } from '../components/ui';
+import {
+  Badge, Button, Card, CardBody, CardHeader, LoadMoreRow, Modal, Money, SegmentedControl, TBody, TD, TH, THead, TR, Table, TableContainer, confirmAction,
+} from '../components/ui';
 
 /**
  * Dev-only preview of the app shell (sidebar, header, lock screen, toasts, dialogs, shared inputs)
@@ -59,6 +61,8 @@ function ShellDemo({ themeMode, toggleTheme }: { themeMode: ThemeMode; toggleThe
   const [visibleRows, setVisibleRows] = useState(3);
   const [crash, setCrash] = useState(false);
   const [crashKey, setCrashKey] = useState(0);
+  const [wideOpen, setWideOpen] = useState(false);
+  const [filter, setFilter] = useState<'' | 'due' | 'paid'>('');
 
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
@@ -180,6 +184,60 @@ function ShellDemo({ themeMode, toggleTheme }: { themeMode: ThemeMode; toggleThe
           </CardBody>
         </Card>
       </section>
+
+      <section className="grid items-start gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader title="Layers" description="xl modal; a confirm opened inside it stacks on top" />
+          <CardBody className="flex flex-wrap items-center gap-3">
+            <Button variant="secondary" onClick={() => setWideOpen(true)}>Open xl modal</Button>
+            <SegmentedControl
+              aria-label="Sample filter with no selection"
+              size="sm"
+              value={filter}
+              onChange={setFilter}
+              options={[{ value: 'due', label: 'Due' }, { value: 'paid', label: 'Paid' }]}
+            />
+          </CardBody>
+        </Card>
+
+        <TableContainer>
+          <Table scroll="both" wrapperClassName="max-h-64">
+            <THead>
+              <tr><TH>Bill</TH><TH>Customer</TH><TH numeric>Amount</TH></tr>
+            </THead>
+            <TBody>
+              {Array.from({ length: 20 }, (_, i) => (
+                <TR key={i}>
+                  <TD className="tabular-nums text-fg-muted">#{1040 + i}</TD>
+                  <TD>{CUSTOMER_OPTIONS[i % 4].label}</TD>
+                  <TD numeric><Money amount={(i + 3) * 450} /></TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableContainer>
+      </section>
+
+      <Modal
+        open={wideOpen}
+        onClose={() => setWideOpen(false)}
+        size="xl"
+        title="Purchase return (xl)"
+        description="Wide form; header and footer stay put while the body scrolls."
+        footer={<>
+          <Button variant="secondary" onClick={() => setWideOpen(false)}>Cancel</Button>
+          <Button onClick={() => void confirmAction({ title: 'Return save karein?', message: 'Confirm should sit above this modal.', tone: 'warning' })}>Save return</Button>
+        </>}
+      >
+        <div className="space-y-2">
+          {Array.from({ length: 24 }, (_, i) => (
+            <div key={i} className="flex items-center justify-between rounded-control bg-surface-2 px-3 py-2 text-sm text-fg-muted ring-1 ring-inset ring-line">
+              <span>Line item {i + 1}</span>
+              <Money amount={(i + 1) * 120} />
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       <Card>
         <CardHeader title="LoadMoreRow" description="Pagination row under long lists" />
