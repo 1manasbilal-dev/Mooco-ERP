@@ -1,138 +1,173 @@
-import React from 'react';
-import { Calendar, ImageDown, Printer, Receipt, Trash2 } from 'lucide-react';
-import { CashDay, CashLine, DatePreset, formatLedgerDate, formatMoney } from '../../lib/supplierStatement';
-import { formatCurrency } from '../../lib/formatters';
+import React, { memo } from 'react';
+import { BookOpen, CalendarDays, ImageDown, Milk, Printer, Receipt, Trash2 } from 'lucide-react';
+import { CashDay, CashLine, DatePreset, formatLedgerDate } from '../../lib/supplierStatement';
+import { useProgressiveList } from '../../hooks/useProgressiveList';
+import { Badge, Button, Card, EmptyState, IconButton, Input, LoadMoreRow, Money, SegmentedControl } from '../ui';
+import type { SegmentOption } from '../ui';
+import { cn } from '../../lib/cn';
+import { SupplierBalance } from './supplierUi';
 
-const PRESETS: { id: DatePreset; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'today', label: 'Today' },
-  { id: 'week', label: 'Week' },
-  { id: 'tendays', label: '10 Days' },
-  { id: 'fifteendays', label: '15 Days' },
-  { id: 'month', label: 'Month' },
-  { id: 'lastmonth', label: 'Last Mo' },
-  { id: 'custom', label: 'Custom' }
+export type LedgerView = 'statement' | 'milk' | 'payments';
+
+const PRESETS: SegmentOption<DatePreset>[] = [
+  { value: 'all', label: 'All' },
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'Week' },
+  { value: 'tendays', label: '10 days' },
+  { value: 'fifteendays', label: '15 days' },
+  { value: 'month', label: 'Month' },
+  { value: 'lastmonth', label: 'Last month' },
+  { value: 'custom', label: 'Custom' },
 ];
 
+const VIEWS: SegmentOption<LedgerView>[] = [
+  { value: 'statement', label: 'Ledger', icon: <BookOpen /> },
+  { value: 'milk', label: 'Milk', icon: <Milk /> },
+  { value: 'payments', label: 'Payments', icon: <Receipt /> },
+];
+
+/** Kept for older call sites: a khata amount with a Pay / Adv tag. */
 export function BalanceAmount({ value, className = '' }: { value: number; className?: string }) {
-  const settled = Math.abs(value) < 0.5;
-  const payable = value > 0.5;
-  return (
-    <span className={`${className} ${settled ? 'text-slate-700' : payable ? 'text-amber-600' : 'text-emerald-600'}`}>
-      {formatCurrency(Math.abs(value))}
-      {!settled && <span className="ml-1 text-[9px] font-black uppercase">{payable ? ' Pay' : ' Adv'}</span>}
-    </span>
-  );
+  return <SupplierBalance value={value} className={className} />;
 }
 
-export function LedgerRangeBar(props: {
+export const LedgerRangeBar = memo(function LedgerRangeBar(props: {
   preset: DatePreset;
   from: string;
   to: string;
   onPreset: (preset: DatePreset) => void;
   onFrom: (value: string) => void;
   onTo: (value: string) => void;
-  view?: 'statement' | 'milk' | 'payments';
-  onView?: (view: 'statement' | 'milk' | 'payments') => void;
+  view?: LedgerView;
+  onView?: (view: LedgerView) => void;
   onPrint: () => void;
-  onOpenPrintModal?: () => void;
   printLabel: string;
   onShare?: () => void;
   shareLabel?: string;
   sharing?: boolean;
   rangeLabel: string;
 }) {
-  const views = [
-    { id: 'statement' as const, label: 'Ledger' },
-    { id: 'milk' as const, label: 'Milk' },
-    { id: 'payments' as const, label: 'Payments' }
-  ];
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-2.5 shadow-2xs space-y-2">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-1 flex-wrap">
-          {props.onView && (
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-[11px] font-bold text-slate-600 mr-1">
-              {views.map(view => (
-                <button
-                  key={view.id}
-                  type="button"
-                  onClick={() => props.onView?.(view.id)}
-                  className={`px-2.5 py-1.5 rounded-lg cursor-pointer ${props.view === view.id ? 'bg-white text-slate-900 shadow-2xs' : 'hover:text-slate-900'}`}
-                >
-                  {view.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {PRESETS.map(preset => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => props.onPreset(preset.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
-                props.preset === preset.id
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1.5">
+    <Card className="flex flex-col gap-3 p-3 sm:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {props.onView && props.view ? (
+          <SegmentedControl aria-label="Khata view" value={props.view} onChange={props.onView} options={VIEWS} />
+        ) : (
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold text-fg-muted">
+            <CalendarDays className="size-4 text-fg-faint" aria-hidden="true" />
+            Period
+          </p>
+        )}
+        <div className="flex items-center gap-2">
           {props.onShare && (
-            <button
-              type="button"
-              onClick={props.onShare}
-              disabled={props.sharing}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-            >
-              <ImageDown size={13} />
-              <span>{props.sharing ? 'Saving...' : (props.shareLabel || 'Send Image')}</span>
-            </button>
+            <Button variant="soft" size="sm" leftIcon={<ImageDown />} onClick={props.onShare} loading={props.sharing}>
+              {props.sharing ? 'Ban raha hai...' : props.shareLabel || 'Send image'}
+            </Button>
           )}
-          {props.onOpenPrintModal && props.view === 'statement' ? (
-            <button
-              type="button"
-              onClick={props.onOpenPrintModal}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              title="Print with Custom Filters & Options"
-            >
-              <Printer size={13} />
-              <span>{props.printLabel}</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={props.onPrint}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-            >
-              <Printer size={13} />
-              <span>{props.printLabel}</span>
-            </button>
-          )}
+          <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={props.onPrint}>
+            {props.printLabel}
+          </Button>
         </div>
       </div>
+
+      <SegmentedControl aria-label="Date range" size="sm" value={props.preset} onChange={props.onPreset} options={PRESETS} />
+
       {props.preset === 'custom' && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+          <label className="flex min-w-0 flex-col gap-1 text-xs font-semibold text-fg-muted sm:flex-row sm:items-center sm:gap-2">
             From
-            <input type="date" value={props.from} onChange={event => props.onFrom(event.target.value)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-800" />
+            <Input type="date" inputSize="sm" value={props.from} max={props.to || undefined} onChange={event => props.onFrom(event.target.value)} className="sm:w-40" />
           </label>
-          <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500">
+          <label className="flex min-w-0 flex-col gap-1 text-xs font-semibold text-fg-muted sm:flex-row sm:items-center sm:gap-2">
             To
-            <input type="date" value={props.to} onChange={event => props.onTo(event.target.value)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-800" />
+            <Input type="date" inputSize="sm" value={props.to} min={props.from || undefined} onChange={event => props.onTo(event.target.value)} className="sm:w-40" />
           </label>
+          <p className="col-span-2 text-[11px] text-fg-subtle">Dono tareekhein shamil hain (Pakistan time).</p>
         </div>
       )}
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
-        <Calendar size={12} />
-        <span>{props.rangeLabel}</span>
-      </div>
-    </div>
+
+      <p className="flex items-center gap-1.5 text-xs font-medium text-fg-subtle">
+        <CalendarDays className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate">{props.rangeLabel}</span>
+      </p>
+    </Card>
   );
-}
+});
+
+const CashRow = memo(function CashRow({
+  row, showSupplier, onOpenSupplier, onVoucher, onDelete,
+}: {
+  row: CashLine;
+  showSupplier?: boolean;
+  onOpenSupplier?: (id: string) => void;
+  onVoucher?: (line: CashLine) => void;
+  onDelete?: (id: string) => void;
+}) {
+  const isRefund = row.direction === 'in';
+  return (
+    <li className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
+      <div className="min-w-0 space-y-1">
+        {showSupplier && (
+          <button
+            type="button"
+            onClick={() => onOpenSupplier?.(row.supplierId)}
+            className="block max-w-full cursor-pointer truncate text-left text-sm font-bold text-fg hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+          >
+            {row.supplierName}
+          </button>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+          <Badge tone={isRefund ? 'warning' : row.subtype === 'Advance' ? 'info' : 'success'}>{row.subtype}</Badge>
+          <span className="font-medium">{row.mode}{row.accountName ? ` · ${row.accountName}` : ''}</span>
+        </div>
+        {row.note && <p className="break-words text-[11px] text-fg-subtle">{row.note}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <span className={cn('mr-1 text-sm font-bold', isRefund ? 'text-warning-fg' : 'text-success-fg')} title={isRefund ? 'Refund wapas aaya' : 'Supplier ko diya'}>
+          {isRefund ? '−' : ''}<Money amount={row.amount} />
+        </span>
+        {onVoucher && <IconButton size="sm" aria-label="Voucher print karein" icon={<Printer />} onClick={() => onVoucher(row)} />}
+        {row.canDelete && onDelete && (
+          <IconButton
+            size="sm"
+            aria-label="Payment delete karein"
+            icon={<Trash2 />}
+            className="hover:bg-danger-soft hover:text-danger-fg"
+            onClick={() => onDelete(row.id)}
+          />
+        )}
+      </div>
+    </li>
+  );
+});
+
+const CashDayCard = memo(function CashDayCard({
+  day, showSupplier, onOpenSupplier, onVoucher, onDelete,
+}: {
+  day: CashDay;
+  showSupplier?: boolean;
+  onOpenSupplier?: (id: string) => void;
+  onVoucher?: (line: CashLine) => void;
+  onDelete?: (id: string) => void;
+}) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-line bg-surface-2 px-4 py-2.5 sm:px-5">
+        <span className="text-[13px] font-bold text-fg">{formatLedgerDate(day.date, true)}</span>
+        <span className="flex flex-wrap items-center gap-x-2 text-xs font-semibold text-fg-subtle">
+          <span>Paid <Money amount={day.paid} className="text-fg-muted" /></span>
+          {day.refunded > 0 && <span>· Refund <Money amount={day.refunded} className="text-warning-fg" /></span>}
+          <span>· Net <Money amount={day.net} className="text-fg" /></span>
+        </span>
+      </div>
+      <ul className="divide-y divide-line/70">
+        {day.rows.map(row => (
+          <CashRow key={row.id} row={row} showSupplier={showSupplier} onOpenSupplier={onOpenSupplier} onVoucher={onVoucher} onDelete={onDelete} />
+        ))}
+      </ul>
+    </Card>
+  );
+});
 
 export function CashPaymentDays(props: {
   days: CashDay[];
@@ -141,67 +176,37 @@ export function CashPaymentDays(props: {
   onOpenSupplier?: (id: string) => void;
   showSupplier?: boolean;
   emptyText?: string;
+  /** Changing it (supplier, range) jumps back to the first page of days. */
+  resetKey?: unknown;
 }) {
+  const { visibleItems, hiddenCount, sentinelRef, showMore, showAll } = useProgressiveList(props.days, 20, props.resetKey);
+
   if (props.days.length === 0) {
     return (
-      <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-2xs">
-        <Receipt size={28} className="mx-auto text-slate-300 mb-2" />
-        <p className="font-bold text-sm text-slate-700">{props.emptyText || 'No payments in this period'}</p>
-        <p className="text-[11px] text-slate-400 mt-1">Change the date or record a supplier payment.</p>
-      </div>
+      <Card>
+        <EmptyState
+          size="compact"
+          icon={<Receipt />}
+          title={props.emptyText || 'Is period mein koi payment nahi'}
+          description="Tareekh badlein ya supplier ki payment record karein."
+        />
+      </Card>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {props.days.map(day => (
-        <div key={day.date} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-            <span className="text-xs font-black text-slate-800">{formatLedgerDate(day.date, true)}</span>
-            <span className="text-[11px] font-bold text-slate-500">
-              Paid {formatMoney(day.paid)}
-              {day.refunded > 0 ? ` · Refund ${formatMoney(day.refunded)}` : ''}
-              <span className="text-slate-900"> · Net {day.net < -0.5 ? '-' : ''}{formatMoney(day.net)}</span>
-            </span>
-          </div>
-          <div className="divide-y divide-slate-100">
-            {day.rows.map(row => (
-              <div key={row.id} className="px-4 py-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  {props.showSupplier && (
-                    <button
-                      type="button"
-                      onClick={() => props.onOpenSupplier?.(row.supplierId)}
-                      className="font-bold text-sm text-slate-900 hover:text-lime-700 cursor-pointer text-left"
-                    >
-                      {row.supplierName}
-                    </button>
-                  )}
-                  <p className="text-xs font-semibold text-slate-700">
-                    {row.subtype} · {row.mode}{row.accountName ? ` · ${row.accountName}` : ''}
-                  </p>
-                  {row.note && <p className="text-[11px] text-slate-400 mt-0.5">{row.note}</p>}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`font-mono font-black text-sm ${row.direction === 'in' ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {row.direction === 'in' ? '-' : ''}{formatMoney(row.amount)}
-                  </span>
-                  {props.onVoucher && (
-                    <button aria-label="Print voucher" type="button" onClick={() => props.onVoucher?.(row)} className="p-1.5 text-slate-400 hover:text-slate-800 cursor-pointer" title="Print voucher">
-                      <Printer size={14} />
-                    </button>
-                  )}
-                  {row.canDelete && props.onDelete && (
-                    <button aria-label="Delete payment" type="button" onClick={() => props.onDelete?.(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer" title="Delete payment">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+    <div className="flex flex-col gap-3">
+      {visibleItems.map(day => (
+        <CashDayCard
+          key={day.date}
+          day={day}
+          showSupplier={props.showSupplier}
+          onOpenSupplier={props.onOpenSupplier}
+          onVoucher={props.onVoucher}
+          onDelete={props.onDelete}
+        />
       ))}
+      <LoadMoreRow sentinelRef={sentinelRef} hiddenCount={hiddenCount} onShowMore={showMore} onShowAll={showAll} />
     </div>
   );
 }
