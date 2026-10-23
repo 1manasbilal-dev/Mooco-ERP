@@ -1,0 +1,57 @@
+/*
+ * Reports Centre. Imported by src/pages/Reports.tsx.
+ *
+ * Chart series colours, one per business meaning (sales, cash, online, ...), as RGB triplets.
+ * Both modes were checked with the dataviz palette validator against the card surface
+ * (white / rgb(16 21 31)) for every pair of series that appear in the same report chart:
+ * colour-blind (protan/deutan) separation >= 8 and normal-vision separation >= 15.
+ * Dark mode is its own set, darker and calmer, not an automatic flip.
+ * Amber, orange and violet sit under 3:1 on white, so every chart carries a legend,
+ * a tooltip and the full table below it.
+ */
+.report-chart {
+  --chart-sales: 77 124 15;
+  --chart-cash: 0 131 0;
+  --chart-online: 42 120 214;
+  --chart-credit: 237 161 0;
+  --chart-expense: 232 87 126;
+  --chart-purchase: 8 145 178;
+  --chart-profit: 83 50 176;
+  --chart-returns: 240 138 60;
+  --chart-neutral: 138 143 152;
+}
+
+.dark .report-chart {
+  --chart-sales: 77 112 2;
+  --chart-cash: 50 112 54;
+  --chart-online: 53 102 162;
+  --chart-credit: 201 133 0;
+  --chart-expense: 224 96 126;
+  --chart-purchase: 14 165 198;
+  --chart-profit: 144 133 233;
+  --chart-returns: 195 117 82;
+  /* "Other" is a light grey here: a mid grey sits too close to the online blue and the violet. */
+  --chart-neutral: 167 173 184;
+}
+
+/* Recharts draws a focus box around the whole SVG on click; the bars carry their own hover state. */
+.report-chart .recharts-wrapper:focus,
+.report-chart .recharts-surface:focus {
+  outline: none;
+}
+
+@media print {
+  /* Ctrl+P on the screen itself: tables print in full and charts keep their colours. */
+  .report-print-flat {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .report-print-flat thead,
+  .report-print-flat tfoot {
+    position: static !important;
+  }
+  .report-chart {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
