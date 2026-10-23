@@ -1,9 +1,8 @@
 import type { ReportDefinition, ReportRow } from '../types';
 import {
-  autoGroup, cashierOf, COLOR, customerName, dayOf, groupSum, n, pct, r2, r3, reportSales,
-  saleFigures, saleLines, saleMode, sum, timeSeries, topSlices, weekdayOf
+  autoGroup, cashierOf, COLOR, customerName, dayOf, findCustomer, groupSum, hourOf, inRange, isFullyReturned, isVoidStatus, n, pct, r2, r3,
+  reportSales, saleFigures, saleLines, saleMode, saleReturnEvents, sum, timeSeries, topSlices, weekdayOf
 } from '../helpers';
-import { reportingHour } from '../../dashboardAnalytics';
 import type { POSBill } from '../../../types';
 
 const matchesFilters = (sale: POSBill, f: { customerId?: string; paymentMode?: string; cashierId?: string }) =>
@@ -31,13 +30,16 @@ export const salesReports: ReportDefinition[] = [
       }, ['bills', 'gross', 'discount', 'refund', 'net', 'cash', 'online', 'credit']);
       const net = sum(figs, r => r.net);
       const bills = figs.length;
+      // A fully returned bill keeps nothing, so it would only drag the average bill down.
+      const returnedBills = figs.filter(isFullyReturned).length;
+      const keptBills = bills - returnedBills;
       const best = [...series].sort((a: any, b: any) => b.net - a.net)[0] as any;
       const activeBuckets = series.filter((s: any) => s.bills > 0).length;
       return {
         kpis: [
           { key: 'net', label: 'Net sales', value: net, format: 'money', tone: 'good' },
-          { key: 'bills', label: 'Bills', value: bills, format: 'number' },
-          { key: 'avg', label: 'Average bill', value: bills ? r2(net / bills) : 0, format: 'money' },
+          { key: 'bills', label: 'Bills', value: bills, format: 'number', hint: returnedBills ? `${returnedBills} fully returned` : undefined },
+          { key: 'avg', label: 'Average bill', value: keptBills ? r2(net / keptBills) : 0, format: 'money' },
           { key: 'cash', label: 'Cash', value: sum(figs, r => r.cash), format: 'money' },
           { key: 'online', label: 'Online', value: sum(figs, r => r.online), format: 'money' },
           { key: 'credit', label: 'Credit (khata)', value: sum(figs, r => r.credit), format: 'money', inverse: true },
@@ -90,7 +92,7 @@ export const salesReports: ReportDefinition[] = [
           date: s.date, bill: s.bill_number, customer: customerName(data, s.customer_id, s.customer_name),
           cashier: cashierOf(s, data), mode: saleMode(s), items: (s.items || []).length,
           gross: fig.gross, discount: fig.discount, refund: fig.refund, net: fig.net, paid: fig.paid, credit: fig.credit,
-          status: fig.refund >= fig.total && fig.total > 0 ? 'Returned' : fig.refund > 0 ? 'Partly returned' : 'Completed',
+          status: isFullyReturned(fig) ? 'Returned' : fig.refund > 0 ? 'Partly returned' : 'Completed',
           _tone: fig.refund > 0 ? 'warn' : undefined,
         };
       });
@@ -141,7 +143,8 @@ export const salesReports: ReportDefinition[] = [
         if (f.category && line.category !== f.category) return;
         if (f.itemId && line.itemId !== f.itemId) return;
         const row = map.get(line.itemId) || { item: line.name, itemId: line.itemId, category: line.category, unit: line.unit, qty: 0, returned: 0, bills: new Set(), revenue: 0, cost: 0, profit: 0 };
-        row.qty += line.baseQty; row.returned += line.returnedQty; row.bills.add(sale.id);
+        // Both in base units: a returned pack of 12 is 12 base units, like the sold quantity next to it.
+        row.qty += line.baseQty; row.returned += line.returnedBaseQty; row.bills.add(sale.id);
         row.revenue += line.revenue; row.cost += line.cost; row.profit += line.profit;
         if (!line.costKnown && line.qty > 0) costMissing++;
         map.set(line.itemId, row);
@@ -308,7 +311,7 @@ export const salesReports: ReportDefinition[] = [
       const rows: ReportRow[] = [...map.values()].map(r => ({
         customer: r.customer, bills: r.bills, net: r2(r.net), avg: r.bills ? r2(r.net / r.bills) : 0,
         discount: r2(r.discount), refund: r2(r.refund), credit: r2(r.credit), share: pct(r.net, total), last: r.last,
-        balance: r.customerId ? n(data.customers.find(c => c.id === r.customerId)?.balance) : 0,
+        balance: r.customerId ? n(findCustomer(data, r.customerId)?.balance) : 0,
         _drill: r.customerId ? { report: 'customer_statement', filters: { customerId: r.customerId }, label: 'Customer statement' } : undefined,
       }));
       const named = rows.filter(r => r.customer !== 'Walk-in customers');
@@ -353,16 +356,17 @@ export const salesReports: ReportDefinition[] = [
       reportSales(data, f).forEach(sale => {
         const name = cashierOf(sale, data);
         const fig = saleFigures(sale);
-        const row = map.get(name) || { cashier: name, cashierId: sale.cashier_id, bills: 0, net: 0, cash: 0, online: 0, credit: 0, discount: 0, refund: 0, days: new Set<string>() };
-        row.bills++; row.net += fig.net; row.cash += fig.cash; row.online += fig.online; row.credit += fig.credit;
+        const row = map.get(name) || { cashier: name, cashierId: sale.cashier_id, bills: 0, net: 0, gross: 0, cash: 0, online: 0, credit: 0, discount: 0, refund: 0, days: new Set<string>() };
+        row.bills++; row.net += fig.net; row.gross += fig.gross; row.cash += fig.cash; row.online += fig.online; row.credit += fig.credit;
         row.discount += fig.discount; row.refund += fig.refund; row.days.add(dayOf(sale.date));
         map.set(name, row);
       });
+      // Discount % is of gross (before discount), as in the Discount Report; net after returns would inflate it.
       const rows: ReportRow[] = [...map.values()].map(r => ({
         cashier: r.cashier, days: r.days.size, bills: r.bills, net: r2(r.net), avg: r.bills ? r2(r.net / r.bills) : 0,
         cash: r2(r.cash), online: r2(r.online), credit: r2(r.credit), discount: r2(r.discount), refund: r2(r.refund),
-        discountPct: pct(r.discount, r.net + r.discount),
-        _tone: pct(r.discount, r.net + r.discount) > 5 ? 'warn' : undefined,
+        discountPct: pct(r.discount, r.gross),
+        _tone: pct(r.discount, r.gross) > 5 ? 'warn' : undefined,
         _drill: r.cashierId ? { report: 'sale_register', filters: { cashierId: r.cashierId }, label: 'Bills by cashier' } : undefined,
       }));
       return {
@@ -406,7 +410,7 @@ export const salesReports: ReportDefinition[] = [
       const heat: Record<string, Record<number, number>> = {};
       sales.forEach(sale => {
         const fig = saleFigures(sale);
-        const h = reportingHour(sale.date);
+        const h = hourOf(sale.date);
         hours[h].bills++; hours[h].net += fig.net;
         const d = dayOf(sale.date);
         const wd = weekdayOf(d);
@@ -455,28 +459,33 @@ export const salesReports: ReportDefinition[] = [
     icon: 'Undo2',
     keywords: ['refund', 'wapsi', 'return'],
     comparable: true,
+    // One row per return event (bill + return day), dated when the goods came back, not when the bill
+    // was made. A bill returned in parts on two days shows on both days with its own refund, so the
+    // totals match the P&L "sales returns" line for the same dates.
     build: (data, f) => {
       const rows: ReportRow[] = [];
       const products = new Map<string, { qty: number; value: number }>();
       const reasons = new Map<string, number>();
       data.sales.forEach(sale => {
+        if (isVoidStatus(sale.status)) return;
+        const events = saleReturnEvents(sale);
+        if (!events.length) return;
         const fig = saleFigures(sale);
-        if (fig.refund <= 0) return;
-        const when = sale.returned_at || sale.details?.returned_at || sale.date;
-        if (!(dayOf(when) >= f.from && dayOf(when) <= f.to)) return;
-        const reason = sale.return_reason || sale.details?.return_reason || 'Not given';
-        reasons.set(reason, (reasons.get(reason) || 0) + fig.refund);
-        saleLines(sale, data.items).forEach(line => {
-          if (line.returnedQty <= 0) return;
-          const p = products.get(line.name) || { qty: 0, value: 0 };
-          const lineAll = (sale.items || []).find((l: any) => (l.itemId || l.name) === line.itemId || l.name === line.name);
-          p.qty += line.returnedQty; p.value += line.returnedQty * n(lineAll?.price);
-          products.set(line.name, p);
-        });
-        rows.push({
-          date: when, bill: sale.bill_number, billDate: sale.date, customer: customerName(data, sale.customer_id, sale.customer_name),
-          total: fig.total, refund: fig.refund, type: sale.return_type === 'replace' ? 'Replace' : 'Refund',
-          stock: sale.restock_action === 'scrap_spoilage' ? 'Scrapped' : 'Restocked', reason,
+        events.forEach(event => {
+          if (!inRange(event.date, f)) return;
+          const reason = event.reason || 'Not given';
+          reasons.set(reason, (reasons.get(reason) || 0) + event.amount);
+          event.lines.forEach(line => {
+            const key = line.name;
+            const p = products.get(key) || { qty: 0, value: 0 };
+            p.qty += line.qty; p.value += line.amount;
+            products.set(key, p);
+          });
+          rows.push({
+            date: event.date, bill: sale.bill_number, billDate: sale.date, customer: customerName(data, sale.customer_id, sale.customer_name),
+            total: fig.total, refund: event.amount, type: 'Refund',
+            stock: event.restocked && event.scrapped ? 'Part scrapped' : event.scrapped ? 'Scrapped' : 'Restocked', reason,
+          });
         });
       });
       const refund = sum(rows, r => n(r.refund));
@@ -496,9 +505,10 @@ export const salesReports: ReportDefinition[] = [
           columns: [
             { key: 'date', label: 'Returned on', format: 'datetime' }, { key: 'bill', label: 'Bill #' },
             { key: 'billDate', label: 'Bill date', format: 'date', hidden: true }, { key: 'customer', label: 'Customer' },
-            { key: 'total', label: 'Bill total', format: 'money', total: true }, { key: 'refund', label: 'Returned', format: 'money', total: true },
+            // Not totalled: a bill returned on two days has two rows, and its total would count twice.
+            { key: 'total', label: 'Bill total', format: 'money' }, { key: 'refund', label: 'Returned', format: 'money', total: true },
             { key: 'type', label: 'Type', format: 'badge', tones: { Refund: 'warn', Replace: 'info' } },
-            { key: 'stock', label: 'Stock', format: 'badge', tones: { Restocked: 'good', Scrapped: 'bad' } },
+            { key: 'stock', label: 'Stock', format: 'badge', tones: { Restocked: 'good', Scrapped: 'bad', 'Part scrapped': 'warn' } },
             { key: 'reason', label: 'Reason', wrap: true },
           ],
           rows,

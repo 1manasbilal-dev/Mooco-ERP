@@ -6,6 +6,10 @@ export interface DatePreset {
   range: (today: string) => { from: string; to: string };
 }
 
+/** Start of the "All time" preset. Ranges that start here are open-ended: charts begin at the first record. */
+export const ALL_TIME_FROM = '2000-01-01';
+export const isOpenStart = (from?: string) => !from || from <= ALL_TIME_FROM;
+
 const monthStart = (date: string) => `${date.slice(0, 7)}-01`;
 const monthEnd = (date: string) => {
   const d = new Date(`${monthStart(date)}T12:00:00Z`);
@@ -43,7 +47,7 @@ export const DATE_PRESETS: DatePreset[] = [
   { id: 'this_year', label: 'This year', range: t => ({ from: `${t.slice(0, 4)}-01-01`, to: t }) },
   { id: 'this_fy', label: 'Financial year (Jul–Jun)', range: t => ({ from: fiscalStart(t), to: t }) },
   { id: 'last_fy', label: 'Last financial year', range: t => { const s = fiscalStart(t); return { from: `${Number(s.slice(0, 4)) - 1}-07-01`, to: offsetDate(s, -1) }; } },
-  { id: 'all', label: 'All time', range: t => ({ from: '2000-01-01', to: t }) },
+  { id: 'all', label: 'All time', range: t => ({ from: ALL_TIME_FROM, to: t }) },
 ];
 
 export const presetRange = (id: string, today: string) =>
@@ -57,4 +61,4 @@ export const prettyDate = (date: string) => {
   return `${Number(date.slice(8, 10))} ${MONTHS[Number(date.slice(5, 7)) - 1]} ${date.slice(0, 4)}`;
 };
 export const rangeText = (from: string, to: string) =>
-  from === to ? prettyDate(from) : from <= '2000-01-01' ? `Up to ${prettyDate(to)}` : `${prettyDate(from)} – ${prettyDate(to)}`;
+  from === to ? prettyDate(from) : isOpenStart(from) ? `Up to ${prettyDate(to)}` : `${prettyDate(from)} – ${prettyDate(to)}`;

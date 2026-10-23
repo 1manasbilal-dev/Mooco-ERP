@@ -1,6 +1,7 @@
-import { buildXlsx, downloadBlob, XlsxCell, XlsxSheet } from './xlsx';
+import { buildXlsx, downloadBlob, excelSerial, XlsxCell, XlsxSheet } from './xlsx';
 import { cellText, formatValue, isNumericFormat, tableTotals } from './format';
-import type { ReportColumn, ReportDefinition, ReportFilters, ReportResult, ReportRow, ReportTable } from './types';
+import { businessDate, dayOf } from './helpers';
+import type { ReportColumn, ReportDefinition, ReportFilters, ReportResult, ReportRow, ReportSectionLine, ReportTable } from './types';
 
 export interface ExportInput {
   report: ReportDefinition;
@@ -15,26 +16,96 @@ export interface ExportInput {
 
 const viewOf = (input: ExportInput, table: ReportTable) => input.views?.[table.id] || { rows: table.rows, columns: table.columns.filter(c => !c.hidden) };
 
-const fileBase = (input: ExportInput) =>
-  `${input.report.title.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '')}_${input.filters.from}_to_${input.filters.to}`;
+/** Snapshot reports show today's position whatever dates are picked, so their file is named "as of" today. */
+const fileBase = (input: ExportInput) => {
+  const title = input.report.title.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') || 'Report';
+  return input.report.snapshot
+    ? `${title}_as_of_${businessDate()}`
+    : `${title}_${input.filters.from}_to_${input.filters.to}`;
+};
 
 const generatedAt = () => new Intl.DateTimeFormat('en-PK', { timeZone: 'Asia/Karachi', dateStyle: 'medium', timeStyle: 'short' }).format(new Date());
+
+const isBlank = (value: unknown) => value === null || value === undefined || value === '';
+
+/** A number cell, or blank when the report has no figure (e.g. not counted yet). Blank is not zero. */
+const numberOrBlank = (value: unknown): number | '' => {
+  if (isBlank(value)) return '';
+  const num = Number(value);
+  return Number.isFinite(num) ? num : '';
+};
+
+const PKT_MS = 5 * 3600000;
+/** Pakistan wall-clock time of a stored timestamp, as UTC fields (no DST since 2010). */
+const pktWallClock = (value: string): number | null => {
+  if (!value.includes('T')) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time + PKT_MS : null;
+};
+
+/** Date / date-time cells become real spreadsheet dates, so they sort and filter as dates. */
+const dateSerial = (value: unknown, format: 'date' | 'datetime'): number | null => {
+  if (isBlank(value)) return null;
+  const text = String(value);
+  if (format === 'datetime') {
+    const wall = pktWallClock(text);
+    if (wall !== null) return excelSerial(wall);
+  }
+  const day = dayOf(text);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  return excelSerial(Date.parse(`${day}T00:00:00Z`));
+};
+
+/** ISO text for CSV: every spreadsheet reads 2026-10-23 and 2026-10-23 14:05 as dates. */
+const isoDateText = (value: unknown, format: 'date' | 'datetime'): string | null => {
+  if (isBlank(value)) return '';
+  const text = String(value);
+  if (format === 'datetime') {
+    const wall = pktWallClock(text);
+    if (wall !== null) return new Date(wall).toISOString().slice(0, 16).replace('T', ' ');
+  }
+  const day = dayOf(text);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+};
 
 const cellStyle = (column: ReportColumn, strong?: boolean): XlsxCell['style'] => {
   if (column.format === 'money') return strong ? 'strongMoney' : 'money';
   if (column.format === 'qty') return strong ? 'strongQty' : 'qty';
   if (column.format === 'number') return strong ? 'strongQty' : 'number';
   if (column.format === 'percent') return 'percent';
+  if (column.format === 'date' || column.format === 'datetime') return column.format;
   return strong ? 'strong' : 'text';
 };
 
-const xlsxValue = (row: ReportRow, column: ReportColumn): string | number => {
+/** Typed value of one cell: numbers stay numbers (also in untyped columns like "Days of cover"), dates become dates. */
+const xlsxCell = (row: ReportRow, column: ReportColumn, strong?: boolean): XlsxCell => {
   const value = row[column.key];
-  if (isNumericFormat(column.format)) {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : 0;
+  if (isNumericFormat(column.format)) return { value: numberOrBlank(value), style: cellStyle(column, strong) };
+  if (column.format === 'date' || column.format === 'datetime') {
+    const serial = dateSerial(value, column.format);
+    if (serial !== null) return { value: serial, style: column.format };
+    return { value: cellText(row, column), style: strong ? 'strong' : 'text' };
   }
+  if (typeof value === 'number' && Number.isFinite(value)) return { value, style: strong ? 'strongQty' : 'number' };
+  return { value: cellText(row, column), style: cellStyle(column, strong) };
+};
+
+/** Same idea for CSV and clipboard text: raw numbers, ISO dates, blanks kept blank. */
+const plainValue = (row: ReportRow, column: ReportColumn): string | number => {
+  const value = row[column.key];
+  if (isNumericFormat(column.format)) return numberOrBlank(value);
+  if (column.format === 'date' || column.format === 'datetime') {
+    const iso = isoDateText(value, column.format);
+    if (iso !== null) return iso;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   return cellText(row, column);
+};
+
+const statementStyle = (line: ReportSectionLine): XlsxCell['style'] => {
+  if (line.format === 'percent') return 'percent';
+  if (line.format === 'qty' || line.format === 'number') return line.strong ? 'strongQty' : line.format;
+  return line.strong ? 'strongMoney' : 'money';
 };
 
 export function exportXlsx(input: ExportInput) {
@@ -49,14 +120,17 @@ export function exportXlsx(input: ExportInput) {
   ];
   if (result.kpis?.length) {
     summary.push([{ value: 'Key figures', style: 'header' }, { value: '', style: 'header' }]);
-    result.kpis.forEach(k => summary.push([{ value: k.label }, { value: k.value, style: k.format === 'money' ? 'money' : k.format === 'percent' ? 'percent' : 'number' }]));
+    result.kpis.forEach(k => summary.push([
+      { value: k.label + (k.unit ? ` (${k.unit})` : '') },
+      { value: k.value, style: k.format === 'money' ? 'money' : k.format === 'percent' ? 'percent' : 'number' },
+    ]));
     summary.push([]);
   }
   result.statements?.forEach(statement => {
     summary.push([{ value: statement.title, style: 'header' }, { value: '', style: 'header' }]);
     statement.lines.forEach(line => summary.push([
-      { value: `${'   '.repeat(line.indent || 0)}${line.label}`, style: line.strong ? 'strong' : 'text' },
-      { value: line.value, style: line.strong ? (line.format === 'percent' ? 'percent' : 'strongMoney') : line.format === 'percent' ? 'percent' : line.format === 'qty' ? 'qty' : 'money' },
+      { value: `${'   '.repeat(line.indent || 0)}${line.label}${line.note ? ` (${line.note})` : ''}`, style: line.strong ? 'strong' : 'text' },
+      { value: line.value, style: statementStyle(line) },
     ]));
     summary.push([]);
   });
@@ -67,14 +141,20 @@ export function exportXlsx(input: ExportInput) {
   result.tables?.forEach(table => {
     const { rows, columns } = viewOf(input, table);
     const header: XlsxCell[] = columns.map(c => ({ value: c.label + (c.unit ? ` (${c.unit})` : ''), style: 'header' }));
-    const body: XlsxCell[][] = rows.map(row => columns.map(c => ({ value: xlsxValue(row, c), style: cellStyle(c, Boolean(row._strong)) })));
+    const body: XlsxCell[][] = rows.map(row => columns.map(c => xlsxCell(row, c, Boolean(row._strong))));
     const extra: XlsxCell[][] = [];
     if (table.showTotals && rows.length) {
       const totals = tableTotals(table, rows);
       extra.push(columns.map((c, i) => ({ value: c.total ? Number(totals[c.key]) : i === 0 ? 'Total' : '', style: cellStyle(c, true) })));
     }
-    table.footer?.forEach(row => extra.push(columns.map(c => ({ value: xlsxValue(row, c), style: cellStyle(c, true) }))));
-    const widths = columns.map((c, i) => Math.max(c.label.length + 2, ...body.slice(0, 300).map(cells => String(cells[i]?.value ?? '').length + 2), isNumericFormat(c.format) ? 12 : 8));
+    table.footer?.forEach(row => extra.push(columns.map(c => xlsxCell(row, c, true))));
+    // Width from the text a person sees (a date serial is 5 digits but prints as "23 Oct 2026, 2:05 PM").
+    const shown = rows.slice(0, 300);
+    const widths = columns.map(c => Math.max(
+      c.label.length + (c.unit ? c.unit.length + 3 : 0) + 2,
+      ...shown.map(row => cellText(row, c).length + 2),
+      isNumericFormat(c.format) ? 12 : c.format === 'datetime' ? 20 : c.format === 'date' ? 13 : 8,
+    ));
     const titleRows: XlsxCell[][] = table.title ? [[{ value: table.title, style: 'strong' }]] : [];
     sheets.push({ name: table.title || report.title, rows: [...titleRows, header, ...body, ...extra], widths, freezeRow: titleRows.length + 1 });
   });
@@ -88,20 +168,37 @@ const csvSafe = (value: unknown) => {
 };
 const csvCell = (value: unknown) => `"${csvSafe(value).replace(/"/g, '""')}"`;
 
+/**
+ * CSV keeps everything the screen shows: key figures, statements (P&L, balance sheet), every table with
+ * its totals and opening/closing footer rows, and the notes. Numbers are raw, dates ISO, blanks blank.
+ */
 export function exportCsv(input: ExportInput) {
-  const lines: string[] = [csvCell(input.report.title), csvCell(input.rangeLabel), ''];
-  input.result.kpis?.forEach(k => lines.push([csvCell(k.label), csvCell(k.value)].join(',')));
-  input.result.tables?.forEach(table => {
+  const { result } = input;
+  const lines: string[] = [csvCell(input.company.companyName || 'Mooco Dairy'), csvCell(input.report.title), csvCell(input.rangeLabel), ''];
+  if (result.kpis?.length) {
+    lines.push([csvCell('Key figure'), csvCell('Value')].join(','));
+    result.kpis.forEach(k => lines.push([csvCell(k.label + (k.unit ? ` (${k.unit})` : '')), csvCell(k.value)].join(',')));
+  }
+  result.statements?.forEach(statement => {
+    lines.push('', csvCell(statement.title));
+    statement.lines.forEach(line => lines.push([
+      csvCell(`${'  '.repeat(line.indent || 0)}${line.label}${line.note ? ` (${line.note})` : ''}`), csvCell(line.value),
+    ].join(',')));
+  });
+  result.tables?.forEach(table => {
     const { rows, columns } = viewOf(input, table);
     lines.push('');
     if (table.title) lines.push(csvCell(table.title));
-    lines.push(columns.map(c => csvCell(c.label)).join(','));
-    rows.forEach(row => lines.push(columns.map(c => csvCell(isNumericFormat(c.format) ? Number(row[c.key]) || 0 : cellText(row, c))).join(',')));
+    lines.push(columns.map(c => csvCell(c.label + (c.unit ? ` (${c.unit})` : ''))).join(','));
+    rows.forEach(row => lines.push(columns.map(c => csvCell(plainValue(row, c))).join(',')));
     if (table.showTotals && rows.length) {
       const totals = tableTotals(table, rows);
       lines.push(columns.map((c, i) => csvCell(c.total ? totals[c.key] : i === 0 ? 'Total' : '')).join(','));
     }
+    table.footer?.forEach(row => lines.push(columns.map(c => csvCell(plainValue(row, c))).join(',')));
   });
+  const notes = [...(result.notes || []).map(note => `Note: ${note.text}`), ...(result.insights || [])];
+  if (notes.length) lines.push('', ...notes.map(csvCell));
   downloadBlob(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `${fileBase(input)}.csv`);
 }
 
@@ -111,7 +208,7 @@ export function tableAsTsv(table: ReportTable, view?: { rows: ReportRow[]; colum
   const clean = (v: unknown) => String(v ?? '').replace(/[\t\r\n]+/g, ' ');
   return [
     columns.map(c => clean(c.label)).join('\t'),
-    ...rows.map(row => columns.map(c => clean(isNumericFormat(c.format) ? Number(row[c.key]) || 0 : cellText(row, c))).join('\t')),
+    ...rows.map(row => columns.map(c => clean(plainValue(row, c))).join('\t')),
   ].join('\n');
 }
 

@@ -34,7 +34,8 @@ export const cashReports: ReportDefinition[] = [
           float: r2(n(s.opening_float)), bills: n(s.bills_count),
           gross: r2(n(s.gross_sales)), cash: r2(n(s.cash_sales)), online: r2(n(s.online_sales)), credit: r2(n(s.credit_sales)),
           recovered: r2(n(s.khata_cash_recovered)), expenses: r2(n(s.drawer_expenses_paid) + n(s.spot_purchases_paid)),
-          expected: r2(n(s.expected_drawer_cash)), counted: counted !== undefined && counted !== null ? r2(n(counted)) : 0,
+          // Not counted yet (open shift): blank, not Rs 0, which read as a full shortage.
+          expected: s.expected_drawer_cash !== undefined && s.expected_drawer_cash !== null ? r2(n(s.expected_drawer_cash)) : null, counted: counted !== undefined && counted !== null ? r2(n(counted)) : null,
           difference: diff, reason: s.difference_reason || '',
           _tone: signedTone(diff),
         };
@@ -159,7 +160,7 @@ export const cashReports: ReportDefinition[] = [
         const variance = r.variance !== undefined && r.variance !== null ? r2(n(r.variance)) : hasCount ? r2(n(r.counted_amount) - n(r.declared_amount)) : 0;
         return {
           date: r.declared_at, cashier: r.cashier_name || 'Unknown', bag: r.bag_reference || '',
-          declared: r2(n(r.declared_amount)), counted: hasCount ? r2(n(r.counted_amount)) : 0, variance,
+          declared: r2(n(r.declared_amount)), counted: hasCount ? r2(n(r.counted_amount)) : null, variance,
           status: r.status, acceptedBy: r.accepted_by_user_name || '', acceptedAt: r.accepted_at || '',
           account: r.destination_account_id ? accountName(data, r.destination_account_id) : '', notes: r.notes || '',
           _tone: r.status === 'Disputed' || r.status === 'Rejected' ? 'bad' : r.status === 'Pending' ? 'warn' : signedTone(variance),
