@@ -4,7 +4,7 @@
  * The zip uses the "stored" method, which every spreadsheet app reads.
  */
 
-export type XlsxCellStyle = 'text' | 'header' | 'money' | 'qty' | 'number' | 'percent' | 'strong' | 'strongMoney' | 'strongQty' | 'title' | 'muted';
+export type XlsxCellStyle = 'text' | 'header' | 'money' | 'qty' | 'number' | 'percent' | 'strong' | 'strongMoney' | 'strongQty' | 'title' | 'muted' | 'date' | 'datetime';
 
 export interface XlsxCell {
   value: string | number | null | undefined;
@@ -21,16 +21,20 @@ export interface XlsxSheet {
 
 const STYLE_INDEX: Record<XlsxCellStyle, number> = {
   text: 0, header: 1, money: 2, qty: 3, number: 4, percent: 5, strong: 6, strongMoney: 7, strongQty: 8, title: 9, muted: 10,
+  date: 11, datetime: 12,
 };
+
+/** Excel day serial of a calendar date/time given as UTC fields (1900 date system). */
+export const excelSerial = (utcMs: number) => (utcMs - Date.UTC(1899, 11, 30)) / 86400000;
 
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]-#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0.###"/><numFmt numFmtId="166" formatCode="0.0&quot;%&quot;"/></numFmts>
+<numFmts count="5"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]-#,##0.00"/><numFmt numFmtId="165" formatCode="#,##0.###"/><numFmt numFmtId="166" formatCode="0.0&quot;%&quot;"/><numFmt numFmtId="167" formatCode="d mmm yyyy"/><numFmt numFmtId="168" formatCode="d mmm yyyy h:mm AM/PM"/></numFmts>
 <fonts count="5"><font><sz val="10"/><name val="Calibri"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="10"/><name val="Calibri"/></font><font><b/><sz val="14"/><color rgb="FF365314"/><name val="Calibri"/></font><font><i/><sz val="9"/><color rgb="FF64748B"/><name val="Calibri"/></font></fonts>
 <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4D7C0F"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thin"><color rgb="FF94A3B8"/></top><bottom style="thin"><color rgb="FF94A3B8"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="11">
+<cellXfs count="13">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
 <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
@@ -42,6 +46,8 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="165" fontId="2" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"/>
 <xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="168" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 </cellXfs>
 </styleSheet>`;
 

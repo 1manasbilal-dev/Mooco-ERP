@@ -254,8 +254,6 @@ export const isVoidStatus = (status?: string) => /void|cancel|delete/i.test(Stri
 
 /** Purchases (milk or material) that no longer count: voided, cancelled, or fully returned to the supplier. */
 export const isPurchaseVoid = (status?: string) => /void|cancel|delete|returned/i.test(String(status || '')) && !/partial/i.test(String(status || ''));
-export const isMilkPurchaseVoid = isPurchaseVoid;
-
 /** Expenses that no longer count. Same rule as the dashboard: cancelled, returned, voided or deleted. */
 export const isVoidExpense = (e: ExpenseEntry) => {
   const status = String((e as any).status || (e as any).details?.status || '');
