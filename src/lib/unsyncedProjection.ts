@@ -156,14 +156,21 @@ function idsOf(rows: any[] | null | undefined): Set<string> {
   return new Set((rows || []).map(row => row?.id).filter(Boolean));
 }
 
-function hasRef(rows: any[] | null | undefined, ref: string): boolean {
-  return (rows || []).some(row =>
-    row?.id === ref ||
-    row?.reference_id === ref ||
-    row?.related_expense_id === ref ||
-    row?.details?.reference_id === ref ||
-    row?.details?.purchase_id === ref
-  );
+/**
+ * Every value a ledger row can be linked by. One pass over the rows, so each lookup is O(1):
+ * scanning the whole bank history per pending bill and per stock row made a projection with a
+ * few offline bills cost millions of comparisons.
+ */
+function refIndex(rows: any[] | null | undefined): Set<unknown> {
+  const refs = new Set<unknown>();
+  for (const row of rows || []) {
+    refs.add(row?.id);
+    refs.add(row?.reference_id);
+    refs.add(row?.related_expense_id);
+    refs.add(row?.details?.reference_id);
+    refs.add(row?.details?.purchase_id);
+  }
+  return refs;
 }
 
 function appendMissing(base: any[] | null, extras: any[]): any[] | null {
@@ -202,9 +209,13 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
   const expenseIds = idsOf(bases.expenses);
   const customerTxIds = idsOf(bases.customerTransactions);
   const supplierTxIds = idsOf(bases.supplierTransactions);
+  const customerIds = idsOf(bases.customers);
+  const closingIds = idsOf(bases.retailClosings);
+  const bankRefs = refIndex(bases.bankTransactions);
+  const hasBankRef = (ref: unknown) => bankRefs.has(ref);
 
   const localSales = work.orders.filter(order => !saleIds.has(order.id)).map(toPosBill);
-  const localCustomers = work.customers.filter(c => !idsOf(bases.customers).has(c.id)).map(toCustomer);
+  const localCustomers = work.customers.filter(c => !customerIds.has(c.id)).map(toCustomer);
 
   const milk = outboxOf(work, 'milk_purchase').filter(item => !purchaseIds.has(item.payload?.purchase_id));
   const supplierPays = outboxOf(work, 'supplier_payment').filter(item => !supplierTxIds.has(item.payload?.tx_id));
@@ -269,10 +280,14 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
     }))
   ];
 
+  const effectsSeen = new Map<string, boolean>();
   const effectsOnServer = (order: LocalOrder): boolean => {
-    if (customerTxIds.has(`ctx_${order.id}`)) return true;
-    if (hasRef(bases.bankTransactions, order.id)) return true;
-    return false;
+    let seen = effectsSeen.get(order.id);
+    if (seen === undefined) {
+      seen = customerTxIds.has(`ctx_${order.id}`) || hasBankRef(order.id);
+      effectsSeen.set(order.id, seen);
+    }
+    return seen;
   };
 
   const localExpenses = expenses.map(item => ({
@@ -315,7 +330,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       shift_session_id: order.shift_session_id
     })),
     ...work.customers
-      .filter(c => !idsOf(bases.customers).has(c.id) && c.balance !== 0 && !customerTxIds.has(`ctx_op_${c.id}`))
+      .filter(c => !customerIds.has(c.id) && c.balance !== 0 && !customerTxIds.has(`ctx_op_${c.id}`))
       .map(c => ({
         id: `ctx_op_${c.id}`,
         customer_id: c.id,
@@ -328,7 +343,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
   ];
 
   const localClosings = closings
-    .filter(item => !idsOf(bases.retailClosings).has(item.payload?.id))
+    .filter(item => !closingIds.has(item.payload?.id))
     .map(item => ({ ...(item.payload || {}), sync_status: item.sync_status }));
 
   const accountDelta: Record<string, number> = {};
@@ -399,7 +414,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       description: `Sale #${order.bill_number}`,
       reference_id: order.id
     })),
-    ...customerPays.filter(item => item.payload.p_account_id && (item.payload.p_type || 'Payment') === 'Payment' && !hasRef(bases.bankTransactions, item.payload.p_tx_id)).map(item => ({
+    ...customerPays.filter(item => item.payload.p_account_id && (item.payload.p_type || 'Payment') === 'Payment' && !hasBankRef(item.payload.p_tx_id)).map(item => ({
       id: `btx_${item.payload.p_tx_id}`,
       account_id: item.payload.p_account_id,
       amount: roundCurrency(Number(item.payload.p_amount) || 0),
@@ -409,7 +424,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       description: item.payload.p_details?.description || 'Customer Receipt',
       reference_id: item.payload.p_tx_id
     })),
-    ...supplierPays.filter(item => item.payload.account_id && !hasRef(bases.bankTransactions, item.payload.tx_id)).map(item => ({
+    ...supplierPays.filter(item => item.payload.account_id && !hasBankRef(item.payload.tx_id)).map(item => ({
       id: `btx_${item.payload.tx_id}`,
       account_id: item.payload.account_id,
       amount: roundCurrency(Number(item.payload.amount) || 0),
@@ -419,7 +434,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       description: `Supplier Payment: ${item.payload.supplier_name || ''}`.trim(),
       reference_id: item.payload.tx_id
     })),
-    ...expenses.filter(item => item.payload.account_id && Number(item.payload.paid_amount) > 0 && !hasRef(bases.bankTransactions, item.payload.expense_id)).map(item => ({
+    ...expenses.filter(item => item.payload.account_id && Number(item.payload.paid_amount) > 0 && !hasBankRef(item.payload.expense_id)).map(item => ({
       id: `btx_${item.payload.expense_id}`,
       account_id: item.payload.account_id,
       amount: roundCurrency(Number(item.payload.paid_amount) || 0),
@@ -430,7 +445,7 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       reference_id: item.payload.expense_id,
       related_expense_id: item.payload.expense_id
     })),
-    ...milk.filter(item => item.payload.account_id && Number(item.payload.paid_amount) > 0 && !hasRef(bases.bankTransactions, item.payload.purchase_id)).map(item => ({
+    ...milk.filter(item => item.payload.account_id && Number(item.payload.paid_amount) > 0 && !hasBankRef(item.payload.purchase_id)).map(item => ({
       id: `btx_pur_${item.payload.purchase_id}`,
       account_id: item.payload.account_id,
       amount: roundCurrency(Number(item.payload.paid_amount) || 0),
@@ -465,9 +480,18 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
       })
     : null;
 
+  // First stock row per item_id / row id, so each catalog item finds its row without a scan.
+  const firstRow = new Map<string, number>();
+  (inventory || []).forEach((row, index) => {
+    if (!firstRow.has(`item:${row.item_id}`)) firstRow.set(`item:${row.item_id}`, index);
+    if (!firstRow.has(`row:${row.id}`)) firstRow.set(`row:${row.id}`, index);
+  });
   const items = bases.items
     ? bases.items.map(item => {
-        const inv = inventory?.find(row => row.item_id === item.id || row.id === `inv_${item.id}`);
+        const byItem = firstRow.get(`item:${item.id}`);
+        const byRow = firstRow.get(`row:inv_${item.id}`);
+        const index = byItem === undefined ? byRow : byRow === undefined ? byItem : Math.min(byItem, byRow);
+        const inv = index === undefined ? undefined : inventory?.[index];
         if (!inv) return item;
         return { ...item, stock: inv.quantity, variant_stocks: inv.variant_stocks };
       })

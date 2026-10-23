@@ -28,6 +28,10 @@ class SyncService {
   private listeners: Set<SyncListener> = new Set();
   private syncTimer: any = null;
   private syncInFlight: boolean = false;
+  // Work queued while a pass was running: run one more pass as soon as it ends, instead of
+  // leaving the new bill for the 25 s timer.
+  private rerunRequested: boolean = false;
+  private lastNotified: SyncState | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -76,6 +80,21 @@ class SyncService {
 
   private notifyListeners(): void {
     const state = this.getState();
+    // Count refreshes run every few seconds and mostly change nothing; an identical state would
+    // only re-render the sync badge and the POS shift panel.
+    const last = this.lastNotified;
+    if (
+      last &&
+      last.isOnline === state.isOnline &&
+      last.isSyncing === state.isSyncing &&
+      last.pendingCount === state.pendingCount &&
+      last.failedCount === state.failedCount &&
+      last.lastError === state.lastError &&
+      (last.lastSyncTime?.getTime() ?? null) === (state.lastSyncTime?.getTime() ?? null)
+    ) {
+      return;
+    }
+    this.lastNotified = state;
     this.listeners.forEach((listener) => {
       try {
         listener(state);
@@ -87,13 +106,14 @@ class SyncService {
 
   public async updateCounts(): Promise<{ pending: number; failed: number }> {
     try {
-      const pendingOrders = await db.orders.where('sync_status').equals('pending').count();
-      const pendingCustomers = await db.customers.where('sync_status').equals('pending').count();
-      const pendingOutbox = await db.outbox.where('sync_status').equals('pending').count();
-
-      const failedOrders = await db.orders.where('sync_status').equals('failed').count();
-      const failedCustomers = await db.customers.where('sync_status').equals('failed').count();
-      const failedOutbox = await db.outbox.where('sync_status').equals('failed').count();
+      const [pendingOrders, pendingCustomers, pendingOutbox, failedOrders, failedCustomers, failedOutbox] = await Promise.all([
+        db.orders.where('sync_status').equals('pending').count(),
+        db.customers.where('sync_status').equals('pending').count(),
+        db.outbox.where('sync_status').equals('pending').count(),
+        db.orders.where('sync_status').equals('failed').count(),
+        db.customers.where('sync_status').equals('failed').count(),
+        db.outbox.where('sync_status').equals('failed').count()
+      ]);
 
       this.pendingCount = pendingOrders + pendingCustomers + pendingOutbox;
       this.failedCount = failedOrders + failedCustomers + failedOutbox;
@@ -192,10 +212,12 @@ class SyncService {
     // timer, a new sale) can never both reach executeSyncRoutine — Web Locks is not there to
     // stop them on plain-http LAN addresses or older browsers.
     if (this.isSyncing || this.syncInFlight || !this.isOnline) {
+      if (this.isOnline && (this.isSyncing || this.syncInFlight)) this.rerunRequested = true;
       await this.updateCounts();
       return { success: false, syncedOrders: 0, syncedCustomers: 0, syncedOutbox: 0 };
     }
     this.syncInFlight = true;
+    this.rerunRequested = false;
 
     try {
       // Without an operator session the database refuses every write; leave the queue untouched
@@ -220,6 +242,10 @@ class SyncService {
       return await this.executeSyncRoutine();
     } finally {
       this.syncInFlight = false;
+      if (this.rerunRequested) {
+        this.rerunRequested = false;
+        setTimeout(() => { void this.syncPending(); }, 0);
+      }
     }
   }
 
@@ -233,8 +259,9 @@ class SyncService {
     let syncedOutboxCount = 0;
 
     try {
-      // Customers first
-      const pendingCustomers = await db.customers.where('sync_status').equals('pending').toArray();
+      // Customers first. Every queue is replayed oldest first: the primary keys are random UUIDs,
+      // so the index order used to post a later payment before the purchase it settles.
+      const pendingCustomers = await db.customers.where('sync_status').equals('pending').sortBy('created_at');
 
       for (const cust of pendingCustomers) {
         if (!readyToRetry(cust)) continue;
@@ -307,7 +334,7 @@ class SyncService {
       }
 
       // Then orders and their items
-      const pendingOrders = await db.orders.where('sync_status').equals('pending').toArray();
+      const pendingOrders = await db.orders.where('sync_status').equals('pending').sortBy('created_at');
 
       for (const order of pendingOrders) {
         if (!readyToRetry(order)) continue;
@@ -447,7 +474,7 @@ class SyncService {
       }
 
       // Outbox items: milk purchases, supplier payments, expenses, customer payments
-      const pendingOutbox = await db.outbox.where('sync_status').equals('pending').toArray();
+      const pendingOutbox = await db.outbox.where('sync_status').equals('pending').sortBy('created_at');
 
       for (const item of pendingOutbox) {
         if (!readyToRetry(item)) continue;
@@ -556,16 +583,32 @@ class SyncService {
           updated_at: new Date().toISOString()
         }));
 
-        await db.catalog_cache.bulkPut(catalogItems);
+        // Under PostgREST's 1000-row cap the response is the whole catalog, so a product deleted on
+        // the server also leaves the offline POS instead of staying sellable there forever.
+        const complete = items.length < 1000;
+        await db.transaction('rw', db.catalog_cache, async () => {
+          if (complete) {
+            const keep = new Set(catalogItems.map((item: any) => item.id));
+            const cachedIds = await db.catalog_cache.toCollection().primaryKeys();
+            const removed = cachedIds.filter(id => !keep.has(id));
+            if (removed.length) await db.catalog_cache.bulkDelete(removed);
+          }
+          await db.catalog_cache.bulkPut(catalogItems);
+        });
       }
 
       if (customersRes.status === 'fulfilled' && customersRes.value.data) {
         const customers = customersRes.value.data;
-        for (const c of customers) {
-          const existing = await db.customers.get(c.id);
-          // Only update if not currently pending offline changes
-          if (!existing || existing.sync_status === 'synced') {
-            await db.customers.put({
+        // One transaction with one bulk read and one bulk write: two IndexedDB round trips per
+        // customer ran after every workspace load.
+        await db.transaction('rw', db.customers, async () => {
+          const existing = await db.customers.bulkGet(customers.map((c: any) => c.id));
+          const now = new Date().toISOString();
+          const rows = customers.flatMap((c: any, index: number) => {
+            const local = existing[index];
+            // Only update if not currently pending offline changes
+            if (local && local.sync_status !== 'synced') return [];
+            return [{
               id: c.id,
               name: c.name || 'Unknown',
               phone: c.phone || '',
@@ -575,12 +618,13 @@ class SyncService {
               balance: roundCurrency(c.balance || 0),
               is_active: c.is_active !== false,
               data: c.data || {},
-              sync_status: 'synced',
-              created_at: existing?.created_at || new Date().toISOString(),
-              synced_at: new Date().toISOString()
-            });
-          }
-        }
+              sync_status: 'synced' as const,
+              created_at: local?.created_at || now,
+              synced_at: now
+            }];
+          });
+          if (rows.length) await db.customers.bulkPut(rows);
+        });
       }
     } catch (e) {
       console.warn('[SyncService] Failed to cache catalog from Supabase:', e);
