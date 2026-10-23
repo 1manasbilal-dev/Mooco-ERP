@@ -12,14 +12,32 @@ const clockFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 });
 
-/** The dairy's reporting day follows Pakistan time, including timestamped POS bills. */
-export function businessDate(value: string | Date = new Date()): string {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
+const pktDay = (date: Date) => {
   const parts = dayFormatter.formatToParts(date);
   const part = (name: string) => parts.find(p => p.type === name)?.value;
   return `${part('year')}-${part('month')}-${part('day')}`;
+};
+// Dashboards and reports ask for the day of every record on each render.
+const dayCache = new Map<string, string>();
+
+/**
+ * The dairy's reporting day follows Pakistan time, including timestamped POS bills.
+ * Called with no argument it is today. A record passed without a date has no business day ('');
+ * it used to fall back to today and was counted in today's totals.
+ */
+export function businessDate(...args: [value?: string | Date | null]): string {
+  const value = args.length === 0 ? new Date() : args[0];
+  if (value === undefined || value === null || value === '') return '';
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? pktDay(value) : '';
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const cached = dayCache.get(text);
+  if (cached !== undefined) return cached;
+  const date = new Date(text);
+  const day = Number.isFinite(date.getTime()) ? pktDay(date) : '';
+  if (dayCache.size > 20000) dayCache.clear();
+  dayCache.set(text, day);
+  return day;
 }
 
 export function offsetDate(date: string, days: number): string {
