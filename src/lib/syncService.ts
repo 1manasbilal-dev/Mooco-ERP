@@ -170,30 +170,35 @@ class SyncService {
     idempotencyKey?: string
   ): Promise<string> {
     const key = idempotencyKey || generateUUID();
-    const existing = await db.outbox.where('idempotency_key').equals(key).first();
-    if (existing) {
-      if (existing.sync_status !== 'synced') {
+    // Look-up and insert in one transaction: two calls with the same key (a double tap, or two tabs)
+    // could otherwise both miss the row and queue the voucher twice.
+    const { id, queued } = await db.transaction('rw', db.outbox, async () => {
+      const existing = await db.outbox.where('idempotency_key').equals(key).first();
+      if (existing) {
+        if (existing.sync_status === 'synced') return { id: existing.id, queued: false };
         await db.outbox.update(existing.id, {
           payload,
           sync_status: 'pending',
           retry_count: 0,
           sync_error: undefined
         });
-        this.notifyPendingChange().catch(err => console.warn('[SyncService] queueAction background sync:', err));
+        return { id: existing.id, queued: true };
       }
-      return existing.id;
-    }
-    const id = generateUUID();
-    await db.outbox.put({
-      id,
-      action_type: actionType,
-      idempotency_key: key,
-      payload,
-      sync_status: 'pending',
-      retry_count: 0,
-      created_at: new Date().toISOString()
+      const newId = generateUUID();
+      await db.outbox.put({
+        id: newId,
+        action_type: actionType,
+        idempotency_key: key,
+        payload,
+        sync_status: 'pending',
+        retry_count: 0,
+        created_at: new Date().toISOString()
+      });
+      return { id: newId, queued: true };
     });
-    this.notifyPendingChange().catch(err => console.warn('[SyncService] queueAction background sync:', err));
+    if (queued) {
+      this.notifyPendingChange().catch(err => console.warn('[SyncService] queueAction background sync:', err));
+    }
     return id;
   }
 
