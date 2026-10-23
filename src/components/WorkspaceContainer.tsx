@@ -2,6 +2,7 @@ import React, { Suspense, lazy, memo, useCallback, useEffect, useRef, useState }
 import { useTabs, WorkspaceTab } from '../context/TabContext';
 import { DairyFreeze } from '../context/DairyContext';
 import ProtectedRoute from './ProtectedRoute';
+import ErrorBoundary from './ErrorBoundary';
 import { PageLoadingFallback } from './PageLoadingFallback';
 
 const loadDashboard = () => import('../pages/Dashboard');
@@ -92,11 +93,14 @@ const WorkspacePane = memo(({ isVisible, ...content }: ModuleContentProps & { is
       style={{ display: isVisible ? 'flex' : 'none' }}
       className={`workspace-pane w-full h-full flex-1 flex flex-col min-h-0 ${isContained ? 'overflow-hidden' : 'overflow-y-auto'}`}
     >
-      <div className={`workspace-page w-full ${isContained ? 'flex-1 flex flex-col min-h-0 h-full' : 'min-h-full'} ${isPos ? '' : `px-3 sm:px-4 md:px-8 ${isContained ? 'pb-4' : 'pb-8'} pt-4 max-w-[1600px] mx-auto`}`}>
+      <div className={`workspace-page w-full ${isContained ? 'flex-1 flex flex-col min-h-0 h-full' : 'min-h-full'} ${isPos ? '' : `px-3 sm:px-4 md:px-6 lg:px-8 ${isContained ? 'pb-4' : 'pb-10'} pt-4 md:pt-6 max-w-[1600px] mx-auto`}`}>
         <DairyFreeze frozen={!isVisible}>
-          <Suspense fallback={<PageLoadingFallback />}>
-            <ModuleContent {...content} />
-          </Suspense>
+          {/* A crash in one page stays in that page: the sidebar, header and other kept-alive pages keep working. */}
+          <ErrorBoundary variant="page">
+            <Suspense fallback={<PageLoadingFallback />}>
+              <ModuleContent {...content} />
+            </Suspense>
+          </ErrorBoundary>
         </DairyFreeze>
       </div>
     </div>

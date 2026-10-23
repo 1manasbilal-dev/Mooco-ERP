@@ -108,7 +108,7 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
   return (
     <div className={`relative flex items-center ${wrapperClassName}`}>
       {prefixText && (
-        <span className="absolute left-3 text-xs font-black text-slate-400 select-none pointer-events-none z-10">
+        <span className="pointer-events-none absolute left-3 z-10 select-none text-xs font-bold text-fg-faint">
           {prefixText}
         </span>
       )}
@@ -139,12 +139,13 @@ export const SmartNumberInput: React.FC<SmartNumberInputProps> = ({
             applyEvaluation();
             inputRef.current?.focus();
           }}
-          className="absolute right-2 px-2 py-0.5 rounded-lg bg-lime-500 hover:bg-lime-400 active:scale-95 text-slate-950 font-mono font-black text-[11px] flex items-center gap-1 shadow-xs transition-all cursor-pointer z-10 animate-in fade-in zoom-in-95 duration-100"
+          className="absolute right-2 z-10 flex cursor-pointer items-center gap-1 rounded-lg bg-brand px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-brand-on shadow-e1 transition-[background-color,transform] duration-100 hover:bg-brand-hover active:scale-95 animate-in fade-in zoom-in-95"
           title="Click or press Enter to calculate"
+          aria-label={`Calculate: ${evalResult.result.toLocaleString('en-PK')}`}
         >
-          <span className="text-[10px] text-slate-800 font-bold">=</span>
+          <span className="text-[10px] font-bold opacity-80" aria-hidden="true">=</span>
           <span>{evalResult.result.toLocaleString('en-PK')}</span>
-          <span className="text-[9px] opacity-75 font-sans font-bold">↵</span>
+          <span className="font-sans text-[9px] font-bold opacity-75" aria-hidden="true">↵</span>
         </button>
       )}
     </div>

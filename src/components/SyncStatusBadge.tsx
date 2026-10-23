@@ -1,22 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useEffect, useCallback, memo } from 'react';
 import { syncService, SyncState } from '../lib/syncService';
 import { db } from '../lib/db';
-import { 
-  Wifi, 
-  WifiOff, 
-  RefreshCw, 
-  CheckCircle2, 
-  AlertTriangle, 
-  X, 
-  ShoppingBag, 
-  User, 
-  FileText, 
-  RotateCcw, 
-  Clock 
+import {
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  CheckCircle2,
+  AlertTriangle,
+  ShoppingBag,
+  User,
+  FileText,
+  RotateCcw,
+  Clock,
+  CloudUpload,
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import { formatCurrency } from '../lib/formatters';
+import { cn } from '../lib/cn';
+import { Modal } from './ui/Modal';
+import { Button } from './ui/Button';
 
 interface SyncStatusBadgeProps {
   compact?: boolean;
@@ -34,6 +36,20 @@ interface OfflineQueueItem {
   retry_count?: number;
   created_at: string;
 }
+
+type SyncTone = 'ok' | 'syncing' | 'pending' | 'failed' | 'offline';
+
+// Rings, not borders, so the legacy dark layer in index.css never repaints the tone.
+const TONE_CLASS: Record<SyncTone, string> = {
+  ok: 'bg-surface-2 text-fg-muted ring-line hover:bg-surface-3',
+  syncing: 'bg-info-soft text-info-fg ring-info/20',
+  pending: 'bg-warning-soft text-warning-fg ring-warning/25 hover:bg-warning/15',
+  failed: 'bg-danger-soft text-danger-fg ring-danger/20 hover:bg-danger/15',
+  offline: 'bg-warning-soft text-warning-fg ring-warning/25 hover:bg-warning/15',
+};
+const DOT_CLASS: Record<SyncTone, string> = {
+  ok: 'bg-success', syncing: 'bg-info', pending: 'bg-warning', failed: 'bg-danger', offline: 'bg-warning',
+};
 
 const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = false, className = '' }) => {
   const [syncState, setSyncState] = useState<SyncState>(syncService.getState());
@@ -108,27 +124,6 @@ const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = false, clas
     }
   }, [isModalOpen, loadQueue, syncState.pendingCount, syncState.failedCount]);
 
-  useEffect(() => {
-    if (!isModalOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setIsModalOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isModalOpen]);
-
-  const handleBadgeClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (syncState.pendingCount > 0 || syncState.failedCount > 0) {
-      setIsModalOpen(true);
-    } else {
-      handleManualSync();
-    }
-  };
-
   const handleManualSync = async () => {
     if (!syncState.isOnline) {
       showToast('Device is offline. Changes are saved safely in local storage and will sync automatically once connected.', 'warning');
@@ -161,359 +156,169 @@ const SyncStatusBadge: React.FC<SyncStatusBadgeProps> = ({ compact = false, clas
     await loadQueue();
   };
 
+  const handleBadgeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (syncState.pendingCount > 0 || syncState.failedCount > 0) {
+      setIsModalOpen(true);
+    } else {
+      handleManualSync();
+    }
+  };
+
   const { isOnline, isSyncing, pendingCount, failedCount } = syncState;
+  const tone: SyncTone = !isOnline ? 'offline' : isSyncing ? 'syncing' : failedCount > 0 ? 'failed' : pendingCount > 0 ? 'pending' : 'ok';
+
+  const label = {
+    offline: `Offline${pendingCount > 0 ? ` (${pendingCount})` : ''}`,
+    syncing: 'Syncing…',
+    failed: `${failedCount} failed`,
+    pending: `${pendingCount} pending`,
+    ok: 'Synced',
+  }[tone];
+  const description = {
+    offline: `Offline - ${pendingCount} records stored locally. Changes sync automatically once connected.`,
+    syncing: 'Syncing with cloud...',
+    failed: `${failedCount} records failed sync - Click to view & retry`,
+    pending: `${pendingCount} pending records - Click to view queue`,
+    ok: 'Online - All records synced. Click to check the cloud connection.',
+  }[tone];
+  // Phones show only the dot and icon while all is well; offline and failures always say so in words.
+  const alwaysShowLabel = tone === 'offline' || tone === 'failed';
+  const Icon = tone === 'offline' ? WifiOff : tone === 'failed' ? AlertTriangle : tone === 'ok' ? CheckCircle2 : RefreshCw;
 
   return (
     <>
-      {compact ? (
-        <button
-          onClick={handleBadgeClick}
-          disabled={isSyncing}
-          title={
-            !isOnline
-              ? `Offline - ${pendingCount} records stored locally`
-              : isSyncing
-              ? 'Syncing with cloud...'
-              : failedCount > 0
-              ? `${failedCount} records failed sync - Click to view & retry`
-              : pendingCount > 0
-              ? `${pendingCount} pending records - Click to view queue`
-              : 'Online - All records synced'
-          }
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
-            !isOnline
-              ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-300 dark:border-rose-800'
-              : isSyncing
-              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
-              : failedCount > 0
-              ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300 border border-red-400 dark:border-red-800'
-              : pendingCount > 0
-              ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300 border border-orange-300 dark:border-orange-800'
-              : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
-          } ${className}`}
-        >
-          {!isOnline ? (
-            <>
-              <WifiOff size={13} className="text-rose-600 dark:text-rose-400" />
-              <span>Offline {pendingCount > 0 ? `(${pendingCount})` : ''}</span>
-            </>
-          ) : isSyncing ? (
-            <>
-              <RefreshCw size={13} className="animate-spin text-amber-600 dark:text-amber-400" />
-              <span>Syncing...</span>
-            </>
-          ) : failedCount > 0 ? (
-            <>
-              <AlertTriangle size={13} className="text-red-600 dark:text-red-400" />
-              <span>{failedCount} Failed</span>
-            </>
-          ) : pendingCount > 0 ? (
-            <>
-              <RefreshCw size={13} className="text-orange-600 dark:text-orange-400" />
-              <span>{pendingCount} Pending</span>
-            </>
-          ) : (
-            <>
-              <Wifi size={13} className="text-emerald-600 dark:text-emerald-400" />
-              <span>Online</span>
-            </>
-          )}
-        </button>
-      ) : (
-        <div
-          onClick={handleBadgeClick}
-          role="button"
-          title={
-            pendingCount > 0 || failedCount > 0
-              ? 'Click to inspect pending/failed offline records'
-              : 'Click to test cloud connection'
-          }
-          className={`inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-medium transition-all shadow-xs cursor-pointer select-none whitespace-nowrap shrink-0 active:scale-98 ${
-            !isOnline
-              ? 'bg-rose-50 hover:bg-rose-100/80 border-rose-200 text-rose-800 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-300'
-              : isSyncing
-              ? 'bg-amber-50 hover:bg-amber-100/80 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300'
-              : failedCount > 0
-              ? 'bg-red-50 hover:bg-red-100/80 border-red-300 text-red-800 dark:bg-red-950/30 dark:border-red-800 dark:text-red-300'
-              : pendingCount > 0
-              ? 'bg-orange-50 hover:bg-orange-100/80 border-orange-200 text-orange-800 dark:bg-orange-950/30 dark:border-orange-800 dark:text-orange-300'
-              : 'bg-emerald-50 hover:bg-emerald-100/80 border-emerald-200 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300'
-          } ${className}`}
-        >
-          <div className="flex items-center gap-1.5 shrink-0">
-            {!isOnline ? (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-              </span>
-            ) : isSyncing ? (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-              </span>
-            ) : failedCount > 0 ? (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-              </span>
-            ) : pendingCount > 0 ? (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
-              </span>
-            ) : (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-            )}
+      <button
+        type="button"
+        onClick={handleBadgeClick}
+        title={description}
+        aria-label={`Sync status: ${description}`}
+        aria-busy={isSyncing || undefined}
+        className={cn(
+          'inline-flex shrink-0 cursor-pointer select-none items-center gap-1.5 whitespace-nowrap rounded-full font-semibold ring-1 ring-inset transition-colors duration-150',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          compact ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-2.5 text-xs',
+          TONE_CLASS[tone],
+          className,
+        )}
+      >
+        <span className="relative flex size-2 shrink-0" aria-hidden="true">
+          {(tone === 'syncing' || tone === 'failed') && <span className={cn('absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:animate-none', DOT_CLASS[tone])} />}
+          <span className={cn('relative size-2 rounded-full', DOT_CLASS[tone])} />
+        </span>
+        <Icon size={13} className={cn('shrink-0', tone === 'syncing' && 'animate-spin motion-reduce:animate-none', !alwaysShowLabel && 'hidden sm:block')} aria-hidden="true" />
+        <span className={cn('tabular-nums', !alwaysShowLabel && 'hidden sm:inline')}>{label}</span>
+      </button>
 
-            <div className="flex items-center gap-1 font-semibold">
-              {!isOnline ? (
-                <>
-                  <WifiOff size={13} className="text-rose-600 dark:text-rose-400 shrink-0" />
-                  <span className="hidden xl:inline">Offline (Local Active)</span>
-                  <span className="xl:hidden hidden sm:inline text-xs">Offline</span>
-                  <span className="sm:hidden text-[11px]">Offline</span>
-                </>
-              ) : isSyncing ? (
-                <>
-                  <RefreshCw size={13} className="animate-spin text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span className="hidden xl:inline">Syncing with Cloud...</span>
-                  <span className="xl:hidden hidden sm:inline text-xs">Syncing...</span>
-                  <span className="sm:hidden text-[11px]">Syncing</span>
-                </>
-              ) : failedCount > 0 ? (
-                <>
-                  <AlertTriangle size={13} className="text-red-600 dark:text-red-400 shrink-0" />
-                  <span className="hidden xl:inline">{failedCount} Failed Sync</span>
-                  <span className="xl:hidden hidden sm:inline text-xs">{failedCount} Failed</span>
-                  <span className="sm:hidden text-[11px]">{failedCount} Fail</span>
-                </>
-              ) : pendingCount > 0 ? (
-                <>
-                  <RefreshCw size={13} className="text-orange-600 dark:text-orange-400 shrink-0" />
-                  <span className="hidden xl:inline">{pendingCount} Pending Sync</span>
-                  <span className="xl:hidden hidden sm:inline text-xs">{pendingCount} Pending</span>
-                  <span className="sm:hidden text-[11px]">{pendingCount} Pend</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 size={13} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span className="hidden xl:inline">Online (All Synced)</span>
-                  <span className="xl:hidden hidden sm:inline text-xs">Synced</span>
-                  <span className="sm:hidden text-[11px]">Online</span>
-                </>
-              )}
+      <Modal
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        size="lg"
+        title="Offline Data & Sync Queue"
+        description={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className={cn('inline-flex items-center gap-1 font-semibold', isOnline ? 'text-success-fg' : 'text-warning-fg')}>
+              {isOnline ? <Wifi size={13} aria-hidden="true" /> : <WifiOff size={13} aria-hidden="true" />}
+              {isOnline ? 'Cloud Reachable' : 'Offline Mode'}
+            </span>
+            <span className="text-fg-faint" aria-hidden="true">·</span>
+            <span className="tabular-nums">{pendingCount} Pending · {failedCount} Failed</span>
+          </span>
+        }
+        icon={
+          <span className={cn(
+            'flex size-10 items-center justify-center rounded-xl ring-1 ring-inset',
+            failedCount > 0 ? 'bg-danger-soft text-danger-fg ring-danger/20' : pendingCount > 0 ? 'bg-warning-soft text-warning-fg ring-warning/25' : 'bg-success-soft text-success-fg ring-success/20'
+          )}>
+            {failedCount > 0 ? <AlertTriangle size={19} /> : pendingCount > 0 ? <CloudUpload size={19} /> : <CheckCircle2 size={19} />}
+          </span>
+        }
+        footer={<>
+          <Button variant="ghost" onClick={() => setIsModalOpen(false)} className="sm:mr-auto">Close</Button>
+          <Button variant="secondary" leftIcon={<RefreshCw className={isLoadingQueue ? 'animate-spin' : ''} />} onClick={loadQueue} disabled={isLoadingQueue} title="Refresh queue status">
+            Refresh
+          </Button>
+          <Button
+            onClick={handleManualSync}
+            loading={isSyncing}
+            disabled={!isOnline || queueItems.length === 0}
+            leftIcon={failedCount > 0 ? <RotateCcw /> : <RefreshCw />}
+          >
+            {isSyncing ? 'Syncing...' : failedCount > 0 ? `Retry Failed (${failedCount})` : `Sync Now (${pendingCount})`}
+          </Button>
+        </>}
+      >
+        <div className="space-y-2.5 pb-2">
+          {isLoadingQueue && queueItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-12 text-fg-subtle">
+              <RefreshCw size={22} className="animate-spin text-brand-accent" aria-hidden="true" />
+              <span className="text-xs font-semibold">Reading local Dexie storage...</span>
             </div>
-          </div>
-
-          {failedCount > 0 && isOnline && !isSyncing && (
-            <span className="ml-0.5 sm:ml-1 px-1.5 py-0.5 rounded-md bg-red-200/70 dark:bg-red-900/60 text-[10px] font-bold text-red-900 dark:text-red-200 shrink-0">
-              View
-            </span>
-          )}
-
-          {failedCount === 0 && pendingCount > 0 && isOnline && !isSyncing && (
-            <span className="ml-0.5 sm:ml-1 px-1.5 py-0.5 rounded-md bg-orange-200/70 dark:bg-orange-900/60 text-[10px] font-bold text-orange-900 dark:text-orange-200 shrink-0">
-              Queue
-            </span>
+          ) : queueItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
+              <span className="mb-3 flex size-12 items-center justify-center rounded-2xl bg-success-soft text-success-fg ring-1 ring-inset ring-success/20">
+                <CheckCircle2 size={24} aria-hidden="true" />
+              </span>
+              <h4 className="text-sm font-bold text-fg">All Records Synchronized</h4>
+              <p className="mt-1 max-w-sm text-xs text-fg-subtle">
+                Every local order, customer, and outbox ledger transaction is completely synced with Supabase.
+              </p>
+            </div>
+          ) : (
+            queueItems.map(item => <QueueRow key={`${item.type}-${item.id}`} item={item} />)
           )}
         </div>
-      )}
-
-      {isModalOpen && typeof document !== 'undefined' && createPortal(
-        <div 
-          className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150"
-          onClick={() => setIsModalOpen(false)}
-        >
-          <div 
-            className="w-full max-w-xl max-h-[85vh] bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-850/60 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                  failedCount > 0
-                    ? 'bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400'
-                    : pendingCount > 0
-                    ? 'bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
-                    : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                }`}>
-                  {failedCount > 0 ? (
-                    <AlertTriangle size={18} />
-                  ) : pendingCount > 0 ? (
-                    <RefreshCw size={17} className={isSyncing ? 'animate-spin' : ''} />
-                  ) : (
-                    <CheckCircle2 size={18} />
-                  )}
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white leading-tight">
-                    Offline Data & Sync Queue
-                  </h3>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className={`inline-flex items-center gap-1 text-[11px] font-bold ${
-                      isOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-                    }`}>
-                      {isOnline ? <Wifi size={11} /> : <WifiOff size={11} />}
-                      {isOnline ? 'Cloud Reachable' : 'Offline Mode'}
-                    </span>
-                    <span className="text-slate-300 dark:text-slate-700">·</span>
-                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      {pendingCount} Pending · {failedCount} Failed
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <button aria-label="Close dialog (Escape)"
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-                title="Close dialog (Escape)"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 min-h-0">
-              {isLoadingQueue ? (
-                <div className="py-12 flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 gap-2">
-                  <RefreshCw size={24} className="animate-spin text-lime-600 dark:text-lime-400" />
-                  <span className="text-xs font-semibold">Reading local Dexie storage...</span>
-                </div>
-              ) : queueItems.length === 0 ? (
-                <div className="py-12 flex flex-col items-center justify-center text-center px-4">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
-                    <CheckCircle2 size={24} />
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">All Records Synchronized</h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mt-1">
-                    Every local order, customer, and outbox ledger transaction is completely synced with Supabase.
-                  </p>
-                </div>
-              ) : (
-                queueItems.map((item) => {
-                  const isFailed = item.sync_status === 'failed';
-                  const Icon = item.type === 'order' ? ShoppingBag : item.type === 'customer' ? User : FileText;
-
-                  return (
-                    <div 
-                      key={`${item.type}-${item.id}`}
-                      className={`p-3.5 rounded-2xl border transition-all ${
-                        isFailed
-                          ? 'bg-rose-50/60 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/60'
-                          : 'bg-white dark:bg-slate-850 border-slate-200 dark:border-slate-800 shadow-2xs'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-                            isFailed
-                              ? 'bg-rose-100 dark:bg-rose-900/50 text-rose-700 dark:text-rose-300'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                          }`}>
-                            <Icon size={15} />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                                {item.title}
-                              </span>
-                              <span className={`text-[9px] font-black uppercase px-1.5 py-0.2 rounded-md tracking-wider ${
-                                isFailed
-                                  ? 'bg-rose-200 dark:bg-rose-900 text-rose-900 dark:text-rose-200'
-                                  : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
-                              }`}>
-                                {item.sync_status}
-                              </span>
-                            </div>
-                            {item.subtitle && (
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                                {item.subtitle}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          {item.amount !== undefined && (
-                            <span className="text-xs font-mono font-black text-slate-900 dark:text-white block">
-                              {formatCurrency(item.amount)}
-                            </span>
-                          )}
-                          <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1 justify-end mt-0.5">
-                            <Clock size={10} />
-                            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Shown when failed, or still retrying after an error */}
-                      {item.sync_error && (isFailed || (item.retry_count || 0) > 0) && (
-                        <div className="mt-2.5 p-2 bg-rose-100/70 dark:bg-rose-950/60 rounded-xl border border-rose-200 dark:border-rose-900 text-[11px] font-mono text-rose-900 dark:text-rose-200 break-words flex items-start gap-1.5">
-                          <AlertTriangle size={13} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                          <span>{item.sync_error}</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-850/80 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                Close
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={loadQueue}
-                  disabled={isLoadingQueue}
-                  className="px-3 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-all cursor-pointer flex items-center gap-1.5"
-                  title="Refresh queue status"
-                >
-                  <RefreshCw size={13} className={isLoadingQueue ? 'animate-spin' : ''} />
-                  <span>Refresh</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleManualSync}
-                  disabled={isSyncing || !isOnline || queueItems.length === 0}
-                  className="px-4 py-2 rounded-xl text-xs font-black text-white bg-lime-600 hover:bg-lime-700 dark:bg-lime-500 dark:hover:bg-lime-400 dark:text-slate-950 transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 active:scale-95"
-                >
-                  {isSyncing ? (
-                    <>
-                      <RefreshCw size={13} className="animate-spin" />
-                      <span>Syncing...</span>
-                    </>
-                  ) : failedCount > 0 ? (
-                    <>
-                      <RotateCcw size={13} />
-                      <span>Retry Failed ({failedCount})</span>
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw size={13} />
-                      <span>Sync Now ({pendingCount})</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      </Modal>
     </>
   );
 };
 
-export default SyncStatusBadge;
+const QueueRow = memo(({ item }: { item: OfflineQueueItem }) => {
+  const isFailed = item.sync_status === 'failed';
+  const Icon = item.type === 'order' ? ShoppingBag : item.type === 'customer' ? User : FileText;
 
+  return (
+    <div className={cn('rounded-control p-3.5 ring-1 ring-inset', isFailed ? 'bg-danger-soft/50 ring-danger/20' : 'bg-surface ring-line')}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className={cn('mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg', isFailed ? 'bg-danger-soft text-danger-fg' : 'bg-surface-2 text-fg-subtle')}>
+            <Icon size={15} aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="truncate text-[13px] font-bold text-fg">{item.title}</span>
+              <span className={cn(
+                'rounded-md px-1.5 text-[10px] font-bold uppercase tracking-wider',
+                isFailed ? 'bg-danger text-white' : 'bg-warning-soft text-warning-fg'
+              )}>
+                {item.sync_status}
+              </span>
+            </div>
+            {item.subtitle && <p className="mt-0.5 truncate text-xs text-fg-subtle">{item.subtitle}</p>}
+          </div>
+        </div>
+
+        <div className="shrink-0 text-right">
+          {item.amount !== undefined && (
+            <span className="block text-[13px] font-bold tabular-nums text-fg">{formatCurrency(item.amount)}</span>
+          )}
+          <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] font-medium text-fg-faint">
+            <Clock size={10} aria-hidden="true" />
+            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+      </div>
+
+      {/* Shown when failed, or still retrying after an error */}
+      {item.sync_error && (isFailed || (item.retry_count || 0) > 0) && (
+        <div className="mt-2.5 flex items-start gap-1.5 break-words rounded-lg bg-danger-soft p-2 font-mono text-[11px] text-danger-fg ring-1 ring-inset ring-danger/20">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span>{item.sync_error}</span>
+        </div>
+      )}
+    </div>
+  );
+});
+QueueRow.displayName = 'QueueRow';
+
+export default memo(SyncStatusBadge);

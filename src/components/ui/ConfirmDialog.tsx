@@ -2,6 +2,7 @@ import React, { useRef, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, Info, Trash2 } from 'lucide-react';
 import { Modal } from './Modal';
+import { Button, type ButtonVariant } from './Button';
 
 export type ConfirmTone = 'danger' | 'warning' | 'info';
 
@@ -24,26 +25,30 @@ export interface ConfirmDialogProps extends ConfirmOptions {
   busy?: boolean;
 }
 
-const TONE = {
+const TONE: Record<ConfirmTone, { icon: React.ReactNode; iconClass: string; dotClass: string; variant: ButtonVariant; buttonClass?: string; defaultLabel: string }> = {
   danger: {
-    icon: <Trash2 size={20} />,
-    iconClass: 'bg-rose-100 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400',
-    buttonClass: 'bg-rose-600 hover:bg-rose-700 focus-visible:ring-rose-500 text-white',
+    icon: <Trash2 />,
+    iconClass: 'bg-danger-soft text-danger-fg ring-danger/20',
+    dotClass: 'bg-danger',
+    variant: 'danger',
     defaultLabel: 'Haan, delete karein',
   },
   warning: {
-    icon: <AlertTriangle size={20} />,
-    iconClass: 'bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400',
-    buttonClass: 'bg-amber-600 hover:bg-amber-700 focus-visible:ring-amber-500 text-white',
+    icon: <AlertTriangle />,
+    iconClass: 'bg-warning-soft text-warning-fg ring-warning/25',
+    dotClass: 'bg-warning',
+    variant: 'primary',
+    buttonClass: 'bg-warning text-white hover:bg-warning/90',
     defaultLabel: 'Haan, aage barhein',
   },
   info: {
-    icon: <Info size={20} />,
-    iconClass: 'bg-sky-100 text-sky-600 dark:bg-sky-950/60 dark:text-sky-400',
-    buttonClass: 'bg-slate-900 hover:bg-slate-800 focus-visible:ring-slate-500 text-white dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white',
+    icon: <Info />,
+    iconClass: 'bg-info-soft text-info-fg ring-info/20',
+    dotClass: 'bg-info',
+    variant: 'primary',
     defaultLabel: 'Theek hai',
   },
-} as const;
+};
 
 /** Confirmation dialog with a consequences list and a clearly marked danger button. */
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -60,40 +65,30 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       onClose={onCancel}
       role="alertdialog"
       size="sm"
+      // Always above the dialog it was opened from.
+      elevated
       title={title}
       description={message}
       dismissible={!busy}
       // Risky actions start on the safe button, so a stray Enter never deletes anything.
       initialFocusRef={hasCancel && tone !== 'info' ? cancelRef : confirmRef}
-      icon={<div className={`flex h-10 w-10 items-center justify-center rounded-xl ${style.iconClass}`}>{style.icon}</div>}
+      icon={<div className={`flex size-10 items-center justify-center rounded-xl ring-1 ring-inset [&_svg]:size-5 ${style.iconClass}`}>{style.icon}</div>}
       footer={<>
         {hasCancel && (
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-          >
+          <Button ref={cancelRef} variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
-          </button>
+          </Button>
         )}
-        <button
-          ref={confirmRef}
-          type="button"
-          onClick={onConfirm}
-          disabled={busy}
-          className={`rounded-xl px-4 py-2.5 text-sm font-bold shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-60 dark:focus-visible:ring-offset-slate-900 ${style.buttonClass}`}
-        >
+        <Button ref={confirmRef} variant={style.variant} onClick={onConfirm} loading={busy} className={style.buttonClass}>
           {busy ? 'Ho raha hai…' : (confirmLabel || style.defaultLabel)}
-        </button>
+        </Button>
       </>}
     >
       {consequences && consequences.length > 0 && (
-        <ul className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+        <ul className="space-y-1.5 rounded-control bg-surface-2 p-3 text-sm text-fg-muted ring-1 ring-inset ring-line">
           {consequences.map((line, index) => (
             <li key={index} className="flex gap-2">
-              <span aria-hidden="true" className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${tone === 'danger' ? 'bg-rose-500' : tone === 'warning' ? 'bg-amber-500' : 'bg-sky-500'}`} />
+              <span aria-hidden="true" className={`mt-2 size-1.5 shrink-0 rounded-full ${style.dotClass}`} />
               <span>{line}</span>
             </li>
           ))}

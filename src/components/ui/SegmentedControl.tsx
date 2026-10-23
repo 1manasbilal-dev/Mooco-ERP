@@ -30,13 +30,21 @@ export function SegmentedControl<T extends string>({
     if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
     const enabled = options.filter(o => !o.disabled);
     const index = enabled.findIndex(o => o.value === value);
-    const next = enabled[(index + (event.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length];
+    const step = event.key === 'ArrowRight' ? 1 : -1;
+    // No current value (e.g. a filter that is cleared): Right starts at the first option, Left at the last.
+    const next = index === -1
+      ? enabled[step === 1 ? 0 : enabled.length - 1]
+      : enabled[(index + step + enabled.length) % enabled.length];
     if (!next) return;
     event.preventDefault();
     onChange(next.value);
-    const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const buttons = (event.currentTarget as HTMLDivElement).querySelectorAll<HTMLButtonElement>('[role="tab"]');
     buttons[options.indexOf(next)]?.focus();
   };
+
+  // Exactly one option is in the tab order: the selected one, or the first enabled one when
+  // `value` matches none (or a disabled one), so the control can always be reached with Tab.
+  const tabStop = options.find(o => o.value === value && !o.disabled)?.value ?? options.find(o => !o.disabled)?.value;
 
   return (
     <div
@@ -58,7 +66,7 @@ export function SegmentedControl<T extends string>({
             type="button"
             role="tab"
             aria-selected={active}
-            tabIndex={active ? 0 : -1}
+            tabIndex={option.value === tabStop ? 0 : -1}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
             className={cn(

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Button } from './Button';
 
 interface LoadMoreRowProps {
   /** From useProgressiveList: loads the next page when it scrolls into view. */
@@ -15,24 +16,10 @@ export const LoadMoreRow: React.FC<LoadMoreRowProps> = ({ sentinelRef, hiddenCou
   if (hiddenCount <= 0) return null;
 
   const content = (
-    <div className="flex flex-wrap items-center justify-center gap-2 py-3 text-xs font-semibold text-slate-500 dark:text-slate-400 print:hidden">
-      <span>{hiddenCount} aur entries baqi hain</span>
-      <button
-        type="button"
-        onClick={onShowMore}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-      >
-        Aur dikhayein
-      </button>
-      {onShowAll && (
-        <button
-          type="button"
-          onClick={onShowAll}
-          className="rounded-lg px-3 py-1.5 font-bold text-lime-700 hover:bg-lime-50 dark:text-lime-400 dark:hover:bg-lime-950/40"
-        >
-          Sab dikhayein
-        </button>
-      )}
+    <div className="flex flex-wrap items-center justify-center gap-2 py-3 text-xs font-medium text-fg-subtle print:hidden">
+      <span className="tabular-nums">{hiddenCount} aur entries baqi hain</span>
+      <Button variant="secondary" size="sm" onClick={onShowMore}>Aur dikhayein</Button>
+      {onShowAll && <Button variant="ghost" size="sm" onClick={onShowAll} className="text-brand-fg hover:bg-brand-soft hover:text-brand-fg">Sab dikhayein</Button>}
     </div>
   );
 

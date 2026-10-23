@@ -5,8 +5,9 @@ import { cn } from '../../lib/cn';
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'soft' | 'danger' | 'danger-soft';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
+// `ds-button` opts out of the legacy `.dark button:disabled` repaint in index.css.
 const BASE =
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap font-semibold select-none cursor-pointer ' +
+  'ds-button inline-flex items-center justify-center gap-2 whitespace-nowrap font-semibold select-none cursor-pointer ' +
   'transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out-expo active:scale-[.98] ' +
   'disabled:pointer-events-none disabled:opacity-50 ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-canvas';

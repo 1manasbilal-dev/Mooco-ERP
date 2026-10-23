@@ -7,6 +7,8 @@ import {
   SearchInput, SegmentedControl, Select, Skeleton, SkeletonText, StatCard, TBody, TD, TH, THead, TR, Table, TableContainer,
   Textarea, Toolbar,
 } from '../components/ui';
+import { useThemeMode } from '../components/shell/preferences';
+import ShellGallery from './ShellGallery';
 
 /**
  * Dev-only design-system gallery at /__ui (no login, no data). Doubles as the reference
@@ -20,17 +22,14 @@ const CUSTOMERS = [
 ];
 
 export default function UiGallery() {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  // Same theme hook as the app, so the gallery and the shell preview stay in sync.
+  const { themeMode, toggleTheme } = useThemeMode();
+  const dark = themeMode === 'dark';
   const [period, setPeriod] = useState<'today' | 'week' | 'month'>('today');
   const [tab, setTab] = useState<'all' | 'due' | 'advance'>('all');
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(1);
-
-  const toggleTheme = () => {
-    document.documentElement.classList.toggle('dark', !dark);
-    setDark(!dark);
-  };
 
   return (
     <div className="h-[100dvh] overflow-y-auto bg-canvas text-fg">
@@ -205,6 +204,8 @@ export default function UiGallery() {
             <SkeletonText lines={4} />
           </Card>
         </section>
+
+        <ShellGallery themeMode={themeMode} toggleTheme={toggleTheme} />
       </div>
 
       <Modal
