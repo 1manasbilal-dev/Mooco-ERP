@@ -8,11 +8,15 @@ interface Props {
   onPrevious: () => void;
 }
 
-/** Horizontal gestures change views; vertical gestures belong to the page. */
+/**
+ * Horizontal gestures change views; vertical gestures belong to the page.
+ * Touches that start on a form control or inside `[data-no-swipe]` are ignored.
+ * Arrow keys are left to the controls inside (SegmentedControl handles its own).
+ */
 export default function SwipeRegion({ children, label, className = '', onNext, onPrevious }: Props) {
   const gesture = useRef<{ x: number; y: number; time: number; axis: 'x' | 'y' | null } | null>(null);
   const lastSwipe = useRef(-Infinity);
-  return <div className={`overview-swipe-region ${className}`} role="region" aria-label={label}
+  return <div className={`overview-swipe-region min-w-0 touch-pan-y touch-pinch-zoom ${className}`} role="region" aria-label={label}
     onTouchStart={event => {
       const target = event.target as HTMLElement;
       if (event.touches.length !== 1 || target.closest('input, select, textarea, a, [contenteditable="true"], [role="slider"], [data-no-swipe]')) {
@@ -51,13 +55,6 @@ export default function SwipeRegion({ children, label, className = '', onNext, o
     onTouchCancel={() => { gesture.current = null; }}
     onClickCapture={event => {
       if (event.detail !== 0 && performance.now() - lastSwipe.current < 450) { event.preventDefault(); event.stopPropagation(); }
-    }}
-    onKeyDown={event => {
-      const target = event.target as HTMLElement;
-      if (target.closest('input, select, textarea, [contenteditable="true"]')) return;
-      if (!target.closest('.overview-segments')) return;
-      if (event.key === 'ArrowRight') { event.preventDefault(); onNext(); }
-      if (event.key === 'ArrowLeft') { event.preventDefault(); onPrevious(); }
     }}>
     {children}
   </div>;
