@@ -1,107 +1,188 @@
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, LineChart, Pie, PieChart,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, LineChart, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts';
 import { BarChart3 } from 'lucide-react';
+import { Card, CardHeader, EmptyState } from '../ui';
 import { formatCompactValue } from '../../lib/formatters';
 import { formatValue } from '../../lib/reports/format';
-import { CHART_COLORS } from '../../lib/reports/helpers';
+import { CHART_COLORS, COLOR } from '../../lib/reports/helpers';
 import type { ReportChart as ChartSpec } from '../../lib/reports/types';
 
-const axisTick = { fontSize: 10, fill: '#94a3b8' };
+// Loaded on demand (Recharts is heavy). Colours come from the `--chart-*` tokens in
+// src/styles/reports.css, validated for colour-blind separation in light and dark mode:
+// a series keeps its business colour (sales, cash, online, ...) whatever chart it is in.
+type Role = keyof typeof COLOR;
+const CATEGORICAL: Role[] = ['sales', 'online', 'credit', 'profit', 'expense', 'purchase', 'returns'];
+const ROLE_BY_HEX = new Map<string, Role>(Object.entries(COLOR).map(([role, hex]) => [hex.toLowerCase(), role as Role]));
+CHART_COLORS.forEach((hex, i) => { if (!ROLE_BY_HEX.has(hex.toLowerCase())) ROLE_BY_HEX.set(hex.toLowerCase(), CATEGORICAL[i % CATEGORICAL.length]); });
+/** Pie slices named after a payment mode keep that mode's colour. */
+const ROLE_BY_NAME: Record<string, Role> = { cash: 'cash', online: 'online', credit: 'credit', others: 'neutral', other: 'neutral' };
+
+const token = (role: Role) => `rgb(var(--chart-${role}))`;
+const SURFACE = 'rgb(var(--surface))';
+const seriesColor = (own: string | undefined, index: number) => {
+  if (own) { const role = ROLE_BY_HEX.get(own.toLowerCase()); return role ? token(role) : own; }
+  return token(CATEGORICAL[index % CATEGORICAL.length]);
+};
+
+const reducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const axisTick = { fontSize: 11, fill: 'rgb(var(--fg-subtle))' };
 
 const ChartTooltip = ({ active, payload, label, format }: any) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
-      {label !== undefined && <div className="mb-1 font-bold text-slate-800 dark:text-slate-100">{label}</div>}
-      {payload.map((p: any) => (
-        <div key={p.dataKey ?? p.name} className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-            <span className="h-2 w-2 rounded-full" style={{ background: p.color || p.payload?.fill }} />{p.name}
-          </span>
-          <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-50">{formatValue(p.value, format || 'number')}</span>
-        </div>
-      ))}
+    <div className="min-w-[10rem] rounded-control border border-line bg-surface px-3 py-2 text-xs shadow-e2">
+      {label !== undefined && label !== '' && <div className="mb-1.5 font-bold text-fg">{label}</div>}
+      <div className="space-y-1">
+        {payload.map((p: any) => (
+          <div key={p.dataKey ?? p.name} className="flex items-center justify-between gap-4">
+            <span className="flex min-w-0 items-center gap-1.5 text-fg-muted">
+              <span className="size-2.5 shrink-0 rounded-sm" style={{ background: p.payload?.fill || p.color }} aria-hidden="true" />
+              <span className="truncate">{p.name}</span>
+            </span>
+            <span className="font-semibold tabular-nums text-fg">{formatValue(p.value, format || 'number')}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
 
+/** Identity never rests on colour alone: every series is named next to its swatch. */
+const LegendList = ({ items, vertical }: { items: { label: string; color: string; extra?: string }[]; vertical?: boolean }) => (
+  <ul className={vertical ? 'min-w-0 space-y-1.5' : 'flex flex-wrap gap-x-4 gap-y-1'} aria-label="Legend">
+    {items.map(item => (
+      <li key={item.label} className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
+        <span className="size-2.5 shrink-0 rounded-sm" style={{ background: item.color }} aria-hidden="true" />
+        <span className="truncate">{item.label}</span>
+        {item.extra && <span className="ml-auto pl-2 font-semibold tabular-nums text-fg">{item.extra}</span>}
+      </li>
+    ))}
+  </ul>
+);
+
 const hasValues = (spec: ChartSpec) => spec.data.some(row => spec.series.some(s => Number(row[s.key]) !== 0 && Number.isFinite(Number(row[s.key]))));
 
-export const ReportChart = memo(({ spec }: { spec: ChartSpec }) => {
-  const color = (i: number, own?: string) => own || CHART_COLORS[i % CHART_COLORS.length];
-  const tickFormatter = (v: number) => (spec.format === 'percent' ? `${v}%` : formatCompactValue(v));
-  const common = { data: spec.data, margin: { top: 8, right: 8, left: -12, bottom: 0 } };
-  const many = spec.data.length > 12;
-  // Tilt the labels when they would not fit side by side (long names, or many points).
-  const longest = spec.data.reduce((max, row) => Math.max(max, String(row[spec.xKey] ?? '').length), 0);
-  const tilt = many || spec.data.length * longest > (spec.wide ? 90 : 42);
-  const xAxis = <XAxis dataKey={spec.xKey} tick={axisTick} tickLine={false} axisLine={false} interval={many ? 'preserveStartEnd' : 0} angle={tilt ? -28 : 0} textAnchor={tilt ? 'end' : 'middle'} height={tilt ? Math.min(80, 24 + longest * 3.6) : 30} minTickGap={6}
-    tickFormatter={(v: unknown) => { const s = String(v ?? ''); return s.length > 18 ? `${s.slice(0, 17)}…` : s; }} />;
-  const yAxis = <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={tickFormatter} width={56} />;
-  const grid = <CartesianGrid vertical={false} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeDasharray="3 5" />;
-  const tooltip = <Tooltip content={<ChartTooltip format={spec.format} />} cursor={{ fill: 'rgba(148,163,184,0.12)' }} />;
-  const legend = spec.series.length > 1 ? <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, paddingTop: 4 }} /> : null;
+const ReportChart = memo(({ spec }: { spec: ChartSpec }) => {
+  const colors = useMemo(() => spec.series.map((s, i) => seriesColor(s.color, i)), [spec.series]);
+  const empty = !hasValues(spec);
+  const animate = !reducedMotion && spec.data.length <= 60;
 
-  let chart: React.ReactElement;
-  if (spec.type === 'pie') {
+  let chart: React.ReactElement | null = null;
+  let legend: React.ReactNode = spec.series.length > 1
+    ? <LegendList items={spec.series.map((s, i) => ({ label: s.label, color: colors[i] }))} />
+    : null;
+
+  if (!empty && spec.type === 'pie') {
     const valueKey = spec.series[0]?.key || 'value';
     const total = spec.data.reduce((s, row) => s + (Number(row[valueKey]) || 0), 0);
+    const names = spec.data.map(row => String(row[spec.xKey] ?? ''));
+    const semantic = names.every(n => ROLE_BY_NAME[n.toLowerCase()]);
+    let slot = 0;
+    const fills = names.map(n => {
+      const role = semantic || ROLE_BY_NAME[n.toLowerCase()] === 'neutral' ? ROLE_BY_NAME[n.toLowerCase()] : CATEGORICAL[slot++ % CATEGORICAL.length];
+      return token(role);
+    });
     chart = (
       <PieChart>
-        <Pie data={spec.data} dataKey={valueKey} nameKey={spec.xKey} innerRadius="55%" outerRadius="85%" paddingAngle={2} stroke="none">
-          {spec.data.map((_, i) => <Cell key={i} fill={color(i)} />)}
+        <Pie data={spec.data} dataKey={valueKey} nameKey={spec.xKey} innerRadius="58%" outerRadius="92%" stroke={SURFACE} strokeWidth={2}
+          isAnimationActive={animate} animationDuration={500}>
+          {spec.data.map((_, i) => <Cell key={i} fill={fills[i]} />)}
         </Pie>
         <Tooltip content={<ChartTooltip format={spec.format} />} />
-        <Legend layout="vertical" align="right" verticalAlign="middle" iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, maxWidth: '45%' }}
-          formatter={(value: string, entry: any) => {
-            const v = Number(entry?.payload?.[valueKey]) || 0;
-            return <span className="text-slate-600 dark:text-slate-300">{value} <b>{total ? Math.round((v / total) * 100) : 0}%</b></span>;
-          }} />
       </PieChart>
     );
-  } else if (spec.type === 'line') {
-    chart = <LineChart {...common}>{grid}{xAxis}{yAxis}{tooltip}{legend}{spec.series.map((s, i) => <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={color(i, s.color)} strokeWidth={2.2} dot={spec.data.length < 32 ? { r: 2.5 } : false} />)}</LineChart>;
-  } else if (spec.type === 'area') {
-    chart = (
-      <AreaChart {...common}>
-        <defs>{spec.series.map((s, i) => <linearGradient key={s.key} id={`rg-${spec.id}-${s.key}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color(i, s.color)} stopOpacity={0.35} /><stop offset="100%" stopColor={color(i, s.color)} stopOpacity={0.02} /></linearGradient>)}</defs>
-        {grid}{xAxis}{yAxis}{tooltip}{legend}
-        {spec.series.map((s, i) => <Area key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={color(i, s.color)} strokeWidth={2.2} fill={`url(#rg-${spec.id}-${s.key})`} />)}
-      </AreaChart>
+    legend = (
+      <LegendList vertical items={names.map((n, i) => {
+        const v = Number(spec.data[i]?.[valueKey]) || 0;
+        return { label: n, color: fills[i], extra: `${total ? Math.round((v / total) * 100) : 0}%` };
+      })} />
     );
-  } else if (spec.type === 'combo') {
-    chart = (
-      <ComposedChart {...common}>{grid}{xAxis}{yAxis}{tooltip}{legend}
-        {spec.series.map((s, i) => s.asLine
-          ? <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={color(i, s.color)} strokeWidth={2.4} dot={false} />
-          : <Bar key={s.key} dataKey={s.key} name={s.label} fill={color(i, s.color)} radius={[4, 4, 0, 0]} maxBarSize={28} />)}
-      </ComposedChart>
+  } else if (!empty) {
+    const tickFormatter = (v: number) => (spec.format === 'percent' ? `${v}%` : formatCompactValue(v));
+    const common = { data: spec.data, margin: { top: 8, right: 8, left: -8, bottom: 0 } };
+    const many = spec.data.length > 12;
+    // Tilt the labels when they would not fit side by side (long names, or many points).
+    const longest = spec.data.reduce((max, row) => Math.max(max, String(row[spec.xKey] ?? '').length), 0);
+    const tilt = many || spec.data.length * longest > (spec.wide ? 90 : 42);
+    const xAxis = (
+      <XAxis dataKey={spec.xKey} tick={axisTick} tickLine={false} axisLine={{ stroke: 'rgb(var(--line-strong))' }} interval={many ? 'preserveStartEnd' : 0}
+        angle={tilt ? -28 : 0} textAnchor={tilt ? 'end' : 'middle'} height={tilt ? Math.min(80, 24 + longest * 3.6) : 30} minTickGap={6}
+        tickFormatter={(v: unknown) => { const s = String(v ?? ''); return s.length > 18 ? `${s.slice(0, 17)}…` : s; }} />
     );
-  } else {
-    const stacked = spec.type === 'stacked';
-    chart = (
-      <BarChart {...common}>{grid}{xAxis}{yAxis}{tooltip}{legend}
-        {spec.series.map((s, i) => <Bar key={s.key} dataKey={s.key} name={s.label} stackId={stacked ? 'a' : undefined} fill={color(i, s.color)} radius={stacked ? (i === spec.series.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]) : [4, 4, 0, 0]} maxBarSize={stacked ? 34 : 26} />)}
-      </BarChart>
+    const yAxis = <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={tickFormatter} width={56} />;
+    const grid = <CartesianGrid vertical={false} stroke="rgb(var(--line))" />;
+    const lineLike = spec.type === 'line' || spec.type === 'area';
+    const tooltip = (
+      <Tooltip content={<ChartTooltip format={spec.format} />}
+        cursor={lineLike ? { stroke: 'rgb(var(--line-strong))', strokeWidth: 1 } : { fill: 'rgb(var(--fg-faint) / 0.12)' }} />
     );
+    const dot = (color: string) => (spec.data.length < 32 ? { r: 4, fill: color, stroke: SURFACE, strokeWidth: 2 } : false);
+    const activeDot = (color: string) => ({ r: 5, fill: color, stroke: SURFACE, strokeWidth: 2 });
+    const motion = { isAnimationActive: animate, animationDuration: 500 };
+
+    if (spec.type === 'line') {
+      chart = (
+        <LineChart {...common}>{grid}{xAxis}{yAxis}{tooltip}
+          {spec.series.map((s, i) => <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={colors[i]} strokeWidth={2} strokeLinecap="round" dot={dot(colors[i])} activeDot={activeDot(colors[i])} {...motion} />)}
+        </LineChart>
+      );
+    } else if (spec.type === 'area') {
+      chart = (
+        <AreaChart {...common}>{grid}{xAxis}{yAxis}{tooltip}
+          {spec.series.map((s, i) => <Area key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={colors[i]} strokeWidth={2} fill={colors[i]} fillOpacity={0.1} activeDot={activeDot(colors[i])} {...motion} />)}
+        </AreaChart>
+      );
+    } else if (spec.type === 'combo') {
+      chart = (
+        <ComposedChart {...common}>{grid}{xAxis}{yAxis}{tooltip}
+          {spec.series.map((s, i) => s.asLine
+            ? <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={colors[i]} strokeWidth={2} dot={false} activeDot={activeDot(colors[i])} {...motion} />
+            : <Bar key={s.key} dataKey={s.key} name={s.label} fill={colors[i]} radius={[4, 4, 0, 0]} maxBarSize={24} {...motion} />)}
+        </ComposedChart>
+      );
+    } else {
+      const stacked = spec.type === 'stacked';
+      chart = (
+        <BarChart {...common} barGap={2}>{grid}{xAxis}{yAxis}{tooltip}
+          {spec.series.map((s, i) => (
+            <Bar key={s.key} dataKey={s.key} name={s.label} stackId={stacked ? 'a' : undefined} fill={colors[i]} maxBarSize={24}
+              // A 2px surface-coloured edge keeps stacked segments apart without drawing borders.
+              stroke={stacked ? SURFACE : undefined} strokeWidth={stacked ? 2 : 0}
+              radius={stacked ? (i === spec.series.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]) : [4, 4, 0, 0]} {...motion} />
+          ))}
+        </BarChart>
+      );
+    }
   }
 
   return (
-    <div className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 ${spec.wide ? 'lg:col-span-2' : ''}`}>
-      <h3 className="mb-2 text-sm font-bold text-slate-800 dark:text-slate-100">{spec.title}</h3>
-      <div className="relative h-64 text-slate-500">
-        {hasValues(spec) ? (
-          <ResponsiveContainer width="100%" height="100%" minWidth={0}>{chart}</ResponsiveContainer>
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
-            <BarChart3 size={26} />
-            <span className="text-xs font-medium">No data to chart in this period</span>
+    <Card className={`report-chart break-inside-avoid ${spec.wide ? 'lg:col-span-2' : ''}`}>
+      <CardHeader title={spec.title} className="pb-2" />
+      <figure className="px-4 pb-4 sm:px-5" aria-label={spec.title}>
+        {empty ? (
+          <EmptyState size="compact" icon={<BarChart3 />} title="No data to chart in this period" className="h-64" />
+        ) : spec.type === 'pie' ? (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="h-56 min-w-0 sm:h-64 sm:flex-1">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>{chart!}</ResponsiveContainer>
+            </div>
+            <div className="sm:w-[45%]">{legend}</div>
           </div>
+        ) : (
+          <>
+            {legend && <div className="mb-2">{legend}</div>}
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>{chart!}</ResponsiveContainer>
+            </div>
+          </>
         )}
-      </div>
-    </div>
+      </figure>
+    </Card>
   );
 });
+
+export default ReportChart;
+export { ReportChart };
