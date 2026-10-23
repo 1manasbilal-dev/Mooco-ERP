@@ -1,0 +1,20 @@
+/*
+ * Owner dashboard (pages/Dashboard.tsx, components/dashboard). Layout and colour come
+ * from Tailwind token classes; this file only themes the Recharts SVG, which takes
+ * colours as attributes. Every value is a token from styles/tokens.css.
+ */
+
+/* Recessive chrome: solid hairline grid, muted tabular axis text. */
+.dash-chart .recharts-cartesian-grid-horizontal line { stroke: rgb(var(--line)); stroke-width: 1; }
+.dash-chart .recharts-cartesian-axis-tick-value { fill: rgb(var(--fg-subtle)); font-variant-numeric: tabular-nums; }
+.dash-chart .recharts-tooltip-cursor { stroke: rgb(var(--line-strong)); }
+.dash-chart .recharts-tooltip-wrapper { outline: none; }
+
+/* Previous period: neutral grey, validated against the light and dark surfaces. */
+.dash-prev-line .recharts-area-curve { stroke: rgb(var(--fg-subtle)); }
+.dash-prev-key { background: rgb(var(--fg-subtle)); }
+.dark .dash-prev-line .recharts-area-curve { stroke: rgb(var(--fg-faint)); }
+.dark .dash-prev-key { background: rgb(var(--fg-faint)); }
+
+/* Hover dot carries a ring in the surface colour so it stays legible on the line. */
+.dash-active-dot { stroke: rgb(var(--surface)); }

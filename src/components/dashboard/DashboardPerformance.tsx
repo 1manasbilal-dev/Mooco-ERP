@@ -1,88 +1,195 @@
-import React, { useId, useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowUpRight, BarChart3, ChevronDown, MoveHorizontal } from 'lucide-react';
+import { ArrowUpRight, BarChart3 } from 'lucide-react';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
-import { POSBill, PurchaseEntry, ExpenseEntry } from '../../types';
-import { getDashboardPeriod, DashboardRange } from '../../lib/dashboardAnalytics';
-import { buildPerformanceSeries, PerformanceMetric } from '../../lib/dashboardPerformanceData';
-import { formatCurrency, formatQty } from '../../lib/formatters';
-import { DASHBOARD_COLORS } from '../../theme';
+import type { POSBill, PurchaseEntry, ExpenseEntry } from '../../types';
+import { offsetDate, type DashboardRange } from '../../lib/dashboardAnalytics';
+import { buildPerformanceSeries, type PerformanceMetric } from '../../lib/dashboardPerformanceData';
+import { formatCompactValue, formatCurrency, formatQty } from '../../lib/formatters';
+import { Card, CardHeader, IconButton, SegmentedControl, Select } from '../ui';
+import { cn } from '../../lib/cn';
+import type { DashboardPeriod } from './dashboardData';
+import { shortDay } from './dashboardData';
 import SwipeRegion from './SwipeRegion';
+import '../../styles/dashboard.css';
 
-const METRICS = ['sales', 'milk', 'expenses', 'products'] as const;
-type Metric = PerformanceMetric;
+const METRICS: { value: PerformanceMetric; label: string }[] = [
+  { value: 'sales', label: 'Sales' },
+  { value: 'milk', label: 'Milk intake' },
+  { value: 'expenses', label: 'Expenses' },
+  { value: 'products', label: 'Products' },
+];
+
+/** One highlighted series per metric (validated against both surfaces); the previous period stays neutral grey. */
+const SERIES: Record<PerformanceMetric, { stroke: string; swatch: string }> = {
+  sales: { stroke: 'rgb(var(--brand-accent))', swatch: 'bg-brand-accent' },
+  milk: { stroke: 'rgb(var(--info))', swatch: 'bg-info' },
+  expenses: { stroke: 'var(--glass-rose)', swatch: 'bg-[color:var(--glass-rose)]' },
+  products: { stroke: 'var(--glass-violet)', swatch: 'bg-[color:var(--glass-violet)]' },
+};
+
+const METRIC_TITLE: Record<PerformanceMetric, string> = { sales: 'Total sales', milk: 'Milk collected', expenses: 'Operating expenses', products: 'Product revenue' };
+
 interface Props {
+  /** Already narrowed to the selected period plus its previous window. */
   sales: POSBill[];
   purchases: PurchaseEntry[];
   expenses: ExpenseEntry[];
   range: DashboardRange;
-  period: ReturnType<typeof getDashboardPeriod>;
-  onDetails: (metric: Metric) => void;
+  period: DashboardPeriod;
+  /** Delivery supply is part of the Sales KPI but not of this chart's series. */
+  supplyTotal: number;
+  /** Half-hour slot of "now" when the selected day is today; later slots have not happened yet. */
+  liveSlot: number | null;
+  onDetails: (metric: PerformanceMetric) => void;
 }
 
-export default function DashboardPerformance({ sales, purchases, expenses, range, period, onDetails }: Props) {
-  const [metric, setMetric] = useState<Metric>('sales');
-  const [direction, setDirection] = useState(1);
+type Row = ReturnType<typeof buildPerformanceSeries>[number];
+
+function ChartTooltip({ active, payload, label, intraday, display, currentName, previousName, stroke }: any) {
+  if (!active || !payload?.length) return null;
+  const point = payload[0].payload as Row;
+  return (
+    <div className="min-w-48 rounded-control border border-line bg-surface p-3 text-xs shadow-e2">
+      <p className="mb-2 font-bold text-fg">{label}<span className="ml-1 font-normal text-fg-subtle">{intraday ? '· 30 min' : ''}</span></p>
+      <div className="space-y-1">
+        <p className="flex items-center justify-between gap-4"><span className="flex items-center gap-2 text-fg-subtle"><i className="h-0.5 w-3 rounded-full" style={{ background: stroke }} />{currentName}</span><strong className="tabular-nums text-fg">{display(point.current)}</strong></p>
+        <p className="flex items-center justify-between gap-4"><span className="flex items-center gap-2 text-fg-subtle"><i className="dash-prev-key h-0.5 w-3 rounded-full" />{previousName}</span><strong className="tabular-nums text-fg-muted">{display(point.previous)}</strong></p>
+      </div>
+      <p className="mb-1 mt-2 border-t border-line pt-2 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">{intraday ? 'Until this time' : 'Through this day'}</p>
+      <div className="space-y-1">
+        <p className="flex justify-between gap-4"><span className="text-fg-subtle">{currentName}</span><span className="font-semibold tabular-nums text-fg">{display(point.currentTotal)}</span></p>
+        <p className="flex justify-between gap-4"><span className="text-fg-subtle">{previousName}</span><span className="font-semibold tabular-nums text-fg-muted">{display(point.previousTotal)}</span></p>
+      </div>
+    </div>
+  );
+}
+
+function DashboardPerformance({ sales, purchases, expenses, range, period, supplyTotal, liveSlot, onDetails }: Props) {
+  const [metric, setMetric] = useState<PerformanceMetric>('sales');
   const [product, setProduct] = useState('');
   const reducedMotion = useReducedMotion();
-  const changeMetric = (next: Metric, swipeDirection?: number) => {
-    setDirection(swipeDirection ?? (METRICS.indexOf(next) >= METRICS.indexOf(metric) ? 1 : -1));
-    setMetric(next);
-  };
-  const moveMetric = (direction: number) => changeMetric(METRICS[(METRICS.indexOf(metric) + direction + METRICS.length) % METRICS.length], direction);
-  const id = useId().replace(/:/g, '');
-  const products = useMemo(() => [...new Set(sales.filter(s => s.status !== 'Returned').flatMap(s => (s.items || []).map(i => i.name)))].sort(), [sales]);
-  const selectedProduct = products.includes(product) ? product : products[0] || '';
   const intraday = period.days === 1;
+
+  // Only products sold in these two periods can draw a line; best sellers first.
+  const products = useMemo(() => {
+    const revenue = new Map<string, number>();
+    for (const sale of sales) for (const line of sale.items || []) {
+      if (!line.name) continue;
+      revenue.set(line.name, (revenue.get(line.name) || 0) + (Number(line.total) || Number(line.qty) * Number(line.price) || 0));
+    }
+    return [...revenue.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+  }, [sales]);
+  const selectedProduct = products.includes(product) ? product : products[0] || '';
+
   const data = useMemo(() => buildPerformanceSeries({ sales, purchases, expenses, metric, selectedProduct, period, range }),
     [sales, purchases, expenses, metric, selectedProduct, period, range]);
-  const total = data.reduce((sum, row) => sum + row.current, 0);
-  const previousTotal = data.reduce((sum, row) => sum + row.previous, 0);
-  const display = (value: number) => metric === 'milk' ? `${formatQty(value)} L` : formatCurrency(value);
+  const total = data.length ? data[data.length - 1].currentTotal : 0;
+  const previousTotal = data.length ? data[data.length - 1].previousTotal : 0;
   const hasData = data.some(row => row.current !== 0 || row.previous !== 0);
-  return <section className="overview-panel performance-panel" data-metric={metric} aria-label="Business performance">
-    <div className="overview-panel-heading">
-      <div><span className="overview-eyebrow">THE BIG PICTURE</span><h2>Business performance</h2></div>
-      <button className="overview-icon-button" onClick={() => onDetails(metric)} aria-label={`View ${metric} details`}><ArrowUpRight size={18} /></button>
-    </div>
-    <SwipeRegion label="Performance chart navigation" onNext={() => moveMetric(1)} onPrevious={() => moveMetric(-1)}>
-    <div className="performance-controls">
-      <div className="overview-segments" role="group" aria-label="Performance metric">
-        {METRICS.map(key => <button key={key} aria-pressed={metric === key} onClick={() => changeMetric(key)}>{key === 'milk' ? 'Milk intake' : key.charAt(0).toUpperCase() + key.slice(1)}</button>)}
-      </div>
-      {metric === 'products' && <label className="overview-select"><span className="sr-only">Product to chart</span><select value={selectedProduct} onChange={e => setProduct(e.target.value)}><option value="" disabled>{products.length ? 'Choose product' : 'No products sold'}</option>{products.map(name => <option key={name}>{name}</option>)}</select><ChevronDown size={14} /></label>}
-    </div>
-    <div key={`${metric}-${range}-${metric === 'products' ? selectedProduct : ''}`} style={{ '--chart-direction': direction } as React.CSSProperties} className="performance-animated-view">
-    <div className="performance-totals"><div><strong>{display(total)}</strong><span>{metric === 'milk' ? 'Milk collected' : metric === 'expenses' ? 'Operating expenses' : metric === 'products' ? selectedProduct || 'Product revenue' : 'Total sales'}</span></div><div className="performance-previous"><span>Previous {period.days === 1 ? 'day' : `${period.days} days`}</span><b>{display(previousTotal)}</b></div></div>
-    <div className="performance-chart" role="img" aria-label={`${metric} chart. ${intraday ? '30-minute intervals' : 'Daily totals'}. Selected period ${display(total)}. Previous period ${display(previousTotal)}.`}>
-      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-        <AreaChart data={data} margin={{ top: 12, right: 5, left: -22, bottom: 0 }}>
-          <defs><linearGradient id={`performance-${id}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={DASHBOARD_COLORS[metric]} stopOpacity={0.32} /><stop offset="100%" stopColor={DASHBOARD_COLORS[metric]} stopOpacity={0.02} /></linearGradient></defs>
-          <CartesianGrid vertical={false} stroke="var(--border-color)" strokeDasharray="3 5" />
-          <XAxis dataKey="label" axisLine={false} tickLine={false} minTickGap={30} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} dy={9} />
-          <YAxis axisLine={false} tickLine={false} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} tickFormatter={v => Math.abs(v) >= 1000 ? `${formatQty(v / 1000, 1)}k` : formatQty(v)} />
-          <Tooltip content={({ active, payload, label }) => {
-            if (!active || !payload?.length) return null;
-            const point = payload[0].payload as { current: number; previous: number; currentTotal: number; previousTotal: number };
-            return <div className="overview-chart-tooltip">
-              <b>{label}</b>
-              <small>{intraday ? 'This interval' : 'This day'}</small>
-              <span>Selected period <strong>{display(point.current)}</strong></span>
-              <span>Previous period <strong>{display(point.previous)}</strong></span>
-              <small>{intraday ? 'Until this time' : 'Through this day'}</small>
-              <span>Selected period <strong>{display(point.currentTotal)}</strong></span>
-              <span>Previous period <strong>{display(point.previousTotal)}</strong></span>
-            </div>;
-          }} />
-          <Area type="monotone" dataKey="previous" stroke="var(--text-dimmed)" strokeWidth={1.6} strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />
-          <Area type="monotone" dataKey="current" stroke={DASHBOARD_COLORS[metric]} strokeWidth={3} fill={`url(#performance-${id})`} isAnimationActive={!reducedMotion} animationBegin={180} animationDuration={900} animationEasing="ease-out" />
-        </AreaChart>
-      </ResponsiveContainer>
-      {!hasData && <div className="performance-empty"><BarChart3 size={25} /><strong>No activity in these periods</strong><span>Choose another range or record your first transaction.</span></div>}
-    </div>
-    </div>
-    <div className="performance-legend"><span><i />Selected period</span><span><i />Previous period</span><span className="performance-note">{intraday ? 'Pakistan time · 30-minute intervals' : 'Daily totals · Pakistan time'}</span></div>
-    <div className="overview-chart-swipe-hint"><MoveHorizontal size={14} /><span>Swipe left or right to change the chart</span></div>
-    </SwipeRegion>
-  </section>;
+  const display = (value: number | null) => value === null ? '—' : metric === 'milk' ? `${formatQty(value)} L` : formatCurrency(Math.round(value));
+  const axisValue = (value: number) => Math.abs(value) >= 1000 ? formatCompactValue(value) : formatQty(value, 0);
+
+  const currentName = range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? 'Last 7 days' : 'This month';
+  const previousName = range === 'today' ? 'Yesterday' : range === 'yesterday' ? 'Day before' : `Previous ${period.days} days`;
+  const series = SERIES[metric];
+  const moveMetric = (step: number) => {
+    const index = METRICS.findIndex(option => option.value === metric);
+    setMetric(METRICS[(index + step + METRICS.length) % METRICS.length].value);
+  };
+  // Daily rows are labelled from the Pakistan business day itself ("17 Oct"), never the device clock.
+  // Today's line stops at the current half hour instead of drawing a fall to zero into the future.
+  const rows = useMemo(() => data.map((row, index) => {
+    const future = intraday && liveSlot !== null && index > liveSlot;
+    return {
+      ...row,
+      current: future ? null : row.current,
+      currentTotal: future ? null : row.currentTotal,
+      axis: intraday ? row.label : shortDay(offsetDate(period.start, index)),
+    };
+  }), [data, intraday, liveSlot, period.start]);
+
+  return (
+    <Card className="flex min-w-0 flex-col" aria-label="Business performance">
+      <CardHeader
+        eyebrow="The big picture"
+        title="Business performance"
+        description={intraday ? 'Pakistan time · 30-minute intervals' : 'Pakistan time · daily totals'}
+        actions={<IconButton size="sm" variant="soft" icon={<ArrowUpRight />} aria-label={`Open ${METRICS.find(m => m.value === metric)?.label.toLowerCase()} details`} onClick={() => onDetails(metric)} />}
+      />
+      <SwipeRegion label="Performance chart navigation" onNext={() => moveMetric(1)} onPrevious={() => moveMetric(-1)} className="flex flex-1 flex-col px-5 pb-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SegmentedControl aria-label="Performance metric" size="sm" value={metric} onChange={setMetric} options={METRICS} className="max-sm:w-full" />
+          {metric === 'products' && (
+            <Select aria-label="Product to chart" value={selectedProduct} onChange={event => setProduct(event.target.value)} className="h-8 w-full max-w-56 text-xs sm:w-56">
+              {!products.length && <option value="">No products sold</option>}
+              {products.map(name => <option key={name} value={name}>{name}</option>)}
+            </Select>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-fg-subtle">{metric === 'products' ? selectedProduct || METRIC_TITLE.products : METRIC_TITLE[metric]}</p>
+            <p className="text-[28px] font-bold leading-tight tracking-tight text-fg">{display(total)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-fg-subtle">{previousName} · full {period.days === 1 ? 'day' : 'period'}</p>
+            <p className="text-sm font-semibold tabular-nums text-fg-muted">{display(previousTotal)}</p>
+          </div>
+        </div>
+        {metric === 'sales' && supplyTotal > 0 && (
+          <p className="mt-1 text-[11px] text-fg-subtle">Counter bills only · {formatCurrency(supplyTotal)} delivery supply is in the Total sales card.</p>
+        )}
+
+        {/* data-no-swipe: scrubbing the tooltip sideways must not switch the metric. */}
+        <div
+          data-no-swipe
+          className="dash-chart relative mt-3 h-60 min-w-0 sm:h-72 2xl:h-80"
+          role="img"
+          aria-label={`${METRIC_TITLE[metric]} chart, ${intraday ? '30-minute intervals' : 'daily totals'}. ${currentName} ${display(total)}. ${previousName} ${display(previousTotal)}.`}
+        >
+          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+            <AreaChart data={rows} margin={{ top: 8, right: 4, left: -16, bottom: 0 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="axis" axisLine={false} tickLine={false} minTickGap={24} tickMargin={8} tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+              <YAxis axisLine={false} tickLine={false} width={48} tick={{ fontSize: 11 }} tickFormatter={axisValue} allowDecimals={false} />
+              <Tooltip
+                cursor={{ strokeWidth: 1 }}
+                isAnimationActive={false}
+                content={<ChartTooltip intraday={intraday} display={display} currentName={currentName} previousName={previousName} stroke={series.stroke} />}
+              />
+              <Area type="monotone" dataKey="previous" className="dash-prev-line" fill="transparent" strokeWidth={1.5} dot={false} activeDot={false} isAnimationActive={false} />
+              <Area
+                type="monotone" dataKey="current" stroke={series.stroke} strokeWidth={2} fill={series.stroke} fillOpacity={0.1}
+                dot={false} activeDot={{ r: 4, strokeWidth: 2, className: 'dash-active-dot' }}
+                isAnimationActive={!reducedMotion} animationDuration={500} animationEasing="ease-out"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+          {!hasData && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-fg-faint ring-1 ring-inset ring-line"><BarChart3 className="size-5" aria-hidden="true" /></span>
+              <p className="text-sm font-bold text-fg">No activity in these periods</p>
+              <p className="max-w-xs text-xs text-fg-subtle">Choose another range or record your first transaction.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-subtle">
+          <span className="flex items-center gap-2"><i className={cn('h-0.5 w-4 rounded-full', series.swatch)} aria-hidden="true" />{currentName}</span>
+          <span className="flex items-center gap-2"><i className="dash-prev-key h-0.5 w-4 rounded-full" aria-hidden="true" />{previousName}</span>
+        </div>
+
+        {/* The same numbers as a table for screen readers. */}
+        <table className="sr-only">
+          <caption>{METRIC_TITLE[metric]} by {intraday ? 'half hour' : 'day'}</caption>
+          <thead><tr><th scope="col">{intraday ? 'Time' : 'Day'}</th><th scope="col">{currentName}</th><th scope="col">{previousName}</th></tr></thead>
+          <tbody>{rows.filter(row => row.current || row.previous).map(row => <tr key={row.label}><th scope="row">{row.axis}</th><td>{display(row.current)}</td><td>{display(row.previous)}</td></tr>)}</tbody>
+        </table>
+      </SwipeRegion>
+    </Card>
+  );
 }
+
+export default memo(DashboardPerformance);
