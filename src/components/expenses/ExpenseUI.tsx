@@ -37,7 +37,8 @@ export const ExpensesHeader: React.FC<{
       variant="underline"
       aria-label="Expenses sections"
       value={active}
-      onChange={onChange}
+      // Re-clicking the open section must not reset its search and selection.
+      onChange={section => { if (section !== active) onChange(section); }}
       className="w-full"
       options={SECTIONS.map(({ id, label, short, Icon }) => ({
         value: id,
