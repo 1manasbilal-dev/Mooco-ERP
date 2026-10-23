@@ -988,8 +988,9 @@ const Expenses: React.FC = () => {
       showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
       return;
     }
-    if (!formData.amount || formData.amount <= 0 || !formData.description || isSubmitting || isSubmittingExpenseRef.current) {
-      if (!formData.amount || formData.amount <= 0 || !formData.description) {
+    const description = (formData.description || '').trim();
+    if (!formData.amount || formData.amount <= 0 || !description || isSubmitting || isSubmittingExpenseRef.current) {
+      if (!formData.amount || formData.amount <= 0 || !description) {
         showToast("Sahi amount aur tafseel likhein", "warning");
       }
       return;
@@ -1000,8 +1001,14 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    // A cleared date input sent '' and the entry was stamped with the current time instead.
+    if (!formData.date) {
+      showToast("Kharche ki tareekh chunein", "warning");
+      return;
+    }
+
     // The disabled Save button is not enough: Ctrl+Enter calls requestSubmit(), and addExpense only checks the books lock date.
-    if (formData.date && isDayLocked && isDayLocked(formData.date)) {
+    if (isDayLocked && isDayLocked(formData.date)) {
       showToast(`${formData.date} ka din lock hai — is tareekh par kharcha save nahi ho sakta.`, "error");
       return;
     }
@@ -1015,7 +1022,15 @@ const Expenses: React.FC = () => {
       actualPaid = 0;
     }
 
-    if ((formData.paymentStatus === 'Unpaid' || formData.paymentStatus === 'Partial') && !formData.vendor_id) {
+    // "Partial" with nothing paid used to be saved as Partial with no money moved; with the full
+    // amount paid it stayed Partial forever (the loader keeps a stored Partial), showing a bill that was settled.
+    if (formData.paymentStatus === 'Partial' && actualPaid <= 0) {
+      showToast("Partial mein abhi ada ki gayi raqam likhein, ya 'On credit' chunein", "warning");
+      return;
+    }
+    const paymentStatus: 'Paid' | 'Partial' | 'Unpaid' = actualPaid >= formData.amount ? 'Paid' : formData.paymentStatus;
+
+    if ((paymentStatus === 'Unpaid' || paymentStatus === 'Partial') && !formData.vendor_id) {
       showToast("Baqi raqam khata mein likhne ke liye vendor chunein", "warning");
       return;
     }
@@ -1040,11 +1055,13 @@ const Expenses: React.FC = () => {
     try {
       const expensePayload = {
         ...formData,
+        description,
         date: submitDate,
         amount: formData.amount,
         paidAmount: actualPaid,
-        paymentStatus: formData.paymentStatus,
-        dueDate: formData.dueDate,
+        paymentStatus,
+        // A "pay by" date only means something while part of the bill is still owed.
+        dueDate: paymentStatus === 'Paid' ? '' : formData.dueDate,
         category: formData.category,
         subcategory: formData.subcategory || '',
         account_id: actualPaid > 0 ? formData.account_id : undefined,
@@ -1063,13 +1080,13 @@ const Expenses: React.FC = () => {
 
         if (rememberExpense) {
           await upsertSavedExpense({
-            name: (rememberName || formData.description || '').trim(),
+            name: (rememberName || description).trim(),
             category: formData.category,
             subcategory: formData.subcategory || '',
-            description: formData.description,
+            description,
             amount: formData.amount,
             paidAmount: actualPaid,
-            paymentStatus: formData.paymentStatus,
+            paymentStatus,
             paymentMode: formData.paymentMode || 'Cash',
             account_id: formData.account_id,
             vendor_id: formData.vendor_id || undefined,
@@ -1107,7 +1124,8 @@ const Expenses: React.FC = () => {
       subcategory: expense.subcategory || '',
       description: expense.description,
       amount: expense.amount,
-      paidAmount: expense.paidAmount || (expense.paymentStatus === 'Unpaid' ? 0 : expense.amount),
+      // paidOf: a Partial bill with 0 paid used to be saved as fully paid (0 || amount).
+      paidAmount: paidOf(expense),
       paymentStatus: expense.paymentStatus || 'Paid',
       paymentMode: expense.paymentMode || 'Cash',
       account_id: expense.account_id,
