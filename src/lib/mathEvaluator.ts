@@ -2,6 +2,7 @@
  * Safely parses and calculates expressions with +, -, *, /, x, X, and parentheses.
  * Does not use eval().
  */
+import { cleanNumber } from './formatters';
 
 export interface MathEvalResult {
   result: number;
@@ -24,6 +25,8 @@ export function evaluateMathExpression(input: string | number | null | undefined
 
   const hasOperator = /[+\-*/]/.test(expr);
   if (!hasOperator) {
+    // Plain decimal digits only: Number() would also read "0b11" as 3, "0o7" as 7 and "1e5" as 100000.
+    if (!/^(\d+\.?\d*|\.\d+)$/.test(expr)) return null;
     const num = Number(expr);
     return !Number.isFinite(num) ? null : { result: num, isExpression: false };
   }
@@ -136,11 +139,10 @@ export function evaluateMathExpression(input: string | number | null | undefined
     }
   }
 
-  if (evalStack.length !== 1) return null;
-  
+  if (evalStack.length !== 1 || !isFinite(evalStack[0])) return null;
+
   // Clean IEEE 754 floating point precision issues (e.g. 0.1 + 0.2 = 0.30000000000000004)
-  const finalResult = Math.round((evalStack[0] + Number.EPSILON) * 10000) / 10000;
-  if (!isFinite(finalResult)) return null;
+  const finalResult = cleanNumber(evalStack[0], 4);
 
   return {
     result: finalResult,

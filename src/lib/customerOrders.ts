@@ -4,7 +4,8 @@ import { CustomerOrder, CustomerOrderLine } from '../types';
 import { roundCurrency, roundQuantity } from './db';
 
 export const orderIsOpen = (order: CustomerOrder) => !['Completed', 'Cancelled'].includes(order.status);
-export const localOrderDate = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+/** Pakistan calendar date of an instant, so due/overdue checks match the shop day on any device zone. */
+export const localOrderDate = (date = new Date()) => date.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
 export function orderAmounts(lines: CustomerOrderLine[], discount = 0, advancePaid = 0) {
   const subtotal = roundCurrency(lines.reduce((sum, line) => sum + roundCurrency(line.qty * line.price), 0));
   const total = roundCurrency(subtotal - roundCurrency(discount));

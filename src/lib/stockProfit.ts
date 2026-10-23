@@ -31,20 +31,28 @@ export interface StockProfitReport {
   movements: { date: string; description: string; amount: number; kind: string }[];
   validRange: boolean;
 }
+import { cleanNumber } from './formatters';
+
 const profitNumber = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0;
 const n = profitNumber;
-const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const money = (value: number) => cleanNumber(value, 2);
 const qty = (value: number) => Math.round(value * 1e6) / 1e6;
 const lower = (value: unknown) => String(value || '').trim().toLowerCase();
 const records = (value: unknown): ProfitRecord[] => Array.isArray(value) ? value : [];
 const EPS = 0.00001;
 const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' });
 /** Date-only business dates stay intact; timestamps use the shop's timezone. */
+const profitDayCache = new Map<string, string>();
 function profitDay(value?: string): string {
   if (!value) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const cached = profitDayCache.get(value);
+  if (cached !== undefined) return cached;
   const time = new Date(value);
-  return Number.isNaN(time.getTime()) ? '' : dateFormatter.format(time);
+  const day = Number.isNaN(time.getTime()) ? '' : dateFormatter.format(time);
+  if (profitDayCache.size > 50000) profitDayCache.clear();
+  profitDayCache.set(value, day);
+  return day;
 }
 function flattenProfitRecord(row: ProfitRecord): ProfitRecord {
   return { ...row.details, ...row, details: row.details || {} };
@@ -53,11 +61,13 @@ interface Bucket {
   id: string; name: string; location: string; unit: string; current: number; rate: number;
   quantity: number; value: number; initialRate: number;
 }
-interface Event {
+interface EventInput {
   id: string; date: string; order: number; description: string; kind: string;
   changes: { id: string; quantity: number; value?: number; returnOf?: string }[];
   amount?: number; source?: string; destinations?: { id: string; quantity: number; weight: number }[];
 }
+/** Business day and timestamp are worked out once per movement, not on every sort comparison. */
+interface Event extends EventInput { day: string; time: number }
 
 export function buildStockProfitReport(source: StockProfitSource, start: string, end: string): StockProfitReport {
   const issues = new Map<string, ProfitIssue>();
@@ -79,11 +89,19 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     if (!buckets.has(id)) buckets.set(id, { id, name, location, unit, current, rate, quantity: 0, value: 0, initialRate: rate });
     return id;
   };
-  const addEvent = (event: Event) => {
-    if (!profitDay(event.date)) { issue('missing_date', 'A stock movement has no valid business date.', event.description); return; }
-    events.push(event);
+  const addEvent = (event: EventInput) => {
+    const day = profitDay(event.date);
+    if (!day) { issue('missing_date', 'A stock movement has no valid business date.', event.description); return; }
+    events.push({ ...event, day, time: new Date(event.date).getTime() });
   };
-  const findItem = (id?: string, name?: string) => items.find(item => item.id === id) || items.find(item => lower(item.name) === lower(name));
+  // First item wins for a duplicate id or name, exactly like a linear find over the register.
+  const itemsById = new Map<unknown, ProfitRecord>();
+  const itemsByName = new Map<string, ProfitRecord>();
+  items.forEach(item => {
+    if (!itemsById.has(item.id)) itemsById.set(item.id, item);
+    if (!itemsByName.has(lower(item.name))) itemsByName.set(lower(item.name), item);
+  });
+  const findItem = (id?: string, name?: string) => itemsById.get(id) || itemsByName.get(lower(name));
   const milkItem = (type: string) => items.find(item => lower(item.name).includes(lower(type)) && lower(item.name).includes('milk'));
   const itemBucket = (item: ProfitRecord, variantId?: string) => {
     if (variantId && variantId !== 'loose') {
@@ -185,13 +203,17 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     });
   });
 
+  const purchasesById = new Map<unknown, ProfitRecord>();
+  purchases.forEach(p => { if (!purchasesById.has(p.id)) purchasesById.set(p.id, p); });
   const rawForAllocation = (allocation: ProfitRecord) => {
-    const purchase = purchases.find(p => p.id === allocation.purchase_id);
+    const purchase = purchasesById.get(allocation.purchase_id);
     return purchase ? rawBucket(purchase) : addBucket(`raw:${allocation.purchase_id || allocation.id}`, `${allocation.milk_type || 'Raw'} milk`, 'Unallocated milk', 'L', n(allocation.remaining_quantity ?? (n(allocation.original_quantity) - n(allocation.allocated_quantity))), n(allocation.average_rate));
   };
   const transfer = (id: string, date: string, from: string, to: string, quantity: number, description: string, order = 20) => addEvent({ id, date, order, description, kind: 'Transfer', changes: [{ id: from, quantity: -quantity }, { id: to, quantity }], source: from, destinations: [{ id: to, quantity, weight: 1 }] });
   // Separate delivery stock prevents an allocation being counted as a sale.
   const supplyBucket = (allocation: ProfitRecord) => {
+    // Only the first call creates the bucket; later calls would rescan every delivery for nothing.
+    if (buckets.has(`delivery:${allocation.id}`)) return `delivery:${allocation.id}`;
     const delivered = supplies.filter(s => !['pending', 'cancelled'].includes(lower(s.status)) && (s.allocation_id === allocation.id || s.allocation_id === allocation.purchase_id)).reduce((sum, s) => sum + n(s.net_qty ?? (s.delivered_qty != null ? n(s.delivered_qty) - n(s.returned_qty) : s.quantity)), 0);
     const histories = records(allocation.allocation_history || allocation.details?.allocation_history).filter(h => lower(h.destination) === 'home delivery');
     const sent = histories.reduce((sum, h) => sum + n(h.quantity), 0) || (lower(allocation.destination) === 'home delivery' ? n(allocation.allocated_quantity) : 0);
@@ -355,18 +377,41 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
       addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(line), quantity: lineStockQty(line), returnOf: `sale:${sale.id}` }] : [] });
     });
   });
+  // A delivery points at its allocation by id or by purchase id; the first allocation in list order wins.
+  const allocationByRef = new Map<unknown, ProfitRecord>();
+  allocations.forEach(a => {
+    if (!allocationByRef.has(a.id)) allocationByRef.set(a.id, a);
+    if (!allocationByRef.has(a.purchase_id)) allocationByRef.set(a.purchase_id, a);
+  });
   supplies.forEach(s => {
     if (['pending', 'cancelled'].includes(lower(s.status))) return;
-    const a = allocations.find(a => s.allocation_id === a.id || s.allocation_id === a.purchase_id);
+    const a = allocationByRef.get(s.allocation_id);
     const delivered = n(s.net_qty ?? (s.delivered_qty != null ? n(s.delivered_qty) - n(s.returned_qty) : s.quantity));
     if (!a) issue('supply_stock', 'A delivery sale has no linked milk allocation.', s.id);
     addEvent({ id: `supply:${s.id}`, date: s.date, order: 40, description: 'Home delivery sale', kind: 'Supply sale', amount: n(s.total_amount), changes: a ? [{ id: supplyBucket(a), quantity: -delivered }] : [] });
   });
+  // POS writes one 'Sale' log per bill line ('log_<billId>_<itemId>'). Scanning every bill for every
+  // such log grew with bills x lines; ids found between '_' separators are checked in a set first,
+  // and only a log that matches none falls back to the full substring scan.
+  const saleIds = new Set<unknown>(sales.map(sale => sale.id));
+  const saleLogHasInvoice = (log: ProfitRecord) => {
+    if (saleIds.has(log.sale_id) || saleIds.has(log.details?.sale_id)) return true;
+    const parts = String(log.id).split('_');
+    for (let first = 0; first < parts.length; first++) {
+      let joined = parts[first];
+      if (saleIds.has(joined)) return true;
+      for (let last = first + 1; last < parts.length; last++) {
+        joined = `${joined}_${parts[last]}`;
+        if (saleIds.has(joined)) return true;
+      }
+    }
+    return sales.some(sale => String(log.id).includes(sale.id));
+  };
   logs.forEach(log => {
     if (usedLogs.has(log.id)) return;
     const reason = lower(log.reason);
     if (['sale', 'pos sale'].includes(reason)) {
-      if (sales.some(sale => String(log.id).includes(sale.id) || log.sale_id === sale.id || log.details?.sale_id === sale.id)) return;
+      if (saleLogHasInvoice(log)) return;
       issue('orphan_sale_log', 'A stock sale log has no matching invoice.', log.item_name);
     }
     if (['purchase', 'production', 'sales return', 'supply return'].includes(reason)) return; // Document owns movement.
@@ -407,13 +452,12 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
   if (end > today) issue('future_range', 'The range includes future dates; closing stock is only available up to today.');
   const validRange = /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end) && start <= end;
   if (!validRange) issue('invalid_range', 'Select a valid start and end date.');
-  const daysWithoutTimes = new Set(events.filter(e => e.date.length === 10).map(e => profitDay(e.date)));
+  const daysWithoutTimes = new Set(events.filter(e => e.date.length === 10).map(e => e.day));
   events.sort((a, b) => {
-    const day = profitDay(a.date).localeCompare(profitDay(b.date));
-    if (day) return day;
+    if (a.day !== b.day) return a.day < b.day ? -1 : 1;
     // Date-only invoices have no time; use lifecycle order before timestamp ordering.
-    if (daysWithoutTimes.has(profitDay(a.date))) return a.order - b.order || a.id.localeCompare(b.id);
-    return new Date(a.date).getTime() - new Date(b.date).getTime() || a.order - b.order || a.id.localeCompare(b.id);
+    if (daysWithoutTimes.has(a.day)) return a.order - b.order || a.id.localeCompare(b.id);
+    return a.time - b.time || a.order - b.order || a.id.localeCompare(b.id);
   });
   // Recover the quantity before the earliest stored movement from today's stock.
   const deltas = new Map<string, number>();
@@ -434,15 +478,18 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     if (b.quantity > EPS && b.initialRate <= 0) issue('missing_cost', 'Stock has no purchase or saved cost rate.', b.name);
   });
   const snapshot = () => new Map([...buckets].map(([id, b]) => [id, { quantity: b.quantity, value: b.value }]));
-  let opening = snapshot();
-  let closing = snapshot();
+  // Opening is the stock just before the first in-period movement (or after every earlier one);
+  // closing is the stock after the last movement up to the end date. Taking each picture once
+  // replaces a full copy of every bucket after every pre-period movement.
+  let opening: ReturnType<typeof snapshot> | undefined;
   let grossPurchases = 0, purchaseReturns = 0, posSales = 0, supplySales = 0, salesReturns = 0, conversionCost = 0, stockAdjustments = 0, stockLoss = 0;
   const movements: StockProfitReport['movements'] = [];
   const soldCosts = new Map<string, { quantity: number; value: number }>();
   for (const event of events) {
-    const day = profitDay(event.date);
+    const day = event.day;
     if (day > end) break;
     const period = day >= start && validRange;
+    if (period && !opening) opening = snapshot();
     let transferred = 0;
     if (event.source) {
       const b = buckets.get(event.source)!;
@@ -482,8 +529,7 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
       if (event.kind === 'Adjustment') adjustmentValue += value;
       if (event.kind === 'Stock loss') lossValue -= value;
     });
-    if (!period) { opening = snapshot(); closing = opening; continue; }
-    closing = snapshot();
+    if (!period) continue;
     if (event.kind === 'Purchase') grossPurchases += n(event.amount);
     if (event.kind === 'Purchase return') purchaseReturns -= n(event.amount);
     if (event.kind === 'POS sale') posSales += n(event.amount);
@@ -494,8 +540,10 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     stockLoss += lossValue;
     if (event.kind !== 'Transfer') movements.push({ date: day, description: event.description, kind: event.kind, amount: money(event.amount ?? (event.kind === 'Stock loss' ? lossValue : adjustmentValue)) });
   }
+  const closing = snapshot();
+  const openingSnap = opening ?? closing;
   const rows = [...buckets.values()].map(b => {
-    const o = opening.get(b.id) || { quantity: 0, value: 0 };
+    const o = openingSnap.get(b.id) || { quantity: 0, value: 0 };
     const c = closing.get(b.id) || o;
     return { id: b.id, name: b.name, location: b.location, unit: b.unit, openingQty: qty(o.quantity), openingRate: money(o.quantity > EPS ? o.value / o.quantity : b.initialRate), openingValue: money(o.value), closingQty: qty(c.quantity), closingRate: money(c.quantity > EPS ? c.value / c.quantity : b.initialRate), closingValue: money(c.value) };
   }).filter(r => Math.abs(r.openingQty) > EPS || Math.abs(r.closingQty) > EPS || Math.abs(r.openingValue) > 0.01 || Math.abs(r.closingValue) > 0.01).sort((a, b) => a.location.localeCompare(b.location) || a.name.localeCompare(b.name));
@@ -582,8 +630,11 @@ export function returnedQtyForLine(sale: ProfitRecord, line: ProfitRecord, lineI
   if (index < 0) return returns.reduce((sum, r) => sum + n(r.qty), 0);
   // Returns that name their bill line belong to it; the rest fill same-item lines in bill order,
   // so two lines of the same product never both lose the same returned quantity.
-  const indexed = (i: number) => returns.filter(r => r.lineIndex !== undefined && Number(r.lineIndex) === i).reduce((sum, r) => sum + n(r.qty), 0);
-  let pool = returns.filter(r => r.lineIndex === undefined).reduce((sum, r) => sum + n(r.qty), 0);
+  // Same rule as the Sales History return screen: only a whole-number index of an existing line
+  // counts as named (a null index used to land on line 0 and vanish when line 0 was another item).
+  const namedLine = (r: ProfitRecord) => Number.isInteger(r.lineIndex) && r.lineIndex >= 0 && r.lineIndex < lines.length;
+  const indexed = (i: number) => returns.filter(r => namedLine(r) && r.lineIndex === i).reduce((sum, r) => sum + n(r.qty), 0);
+  let pool = returns.filter(r => !namedLine(r)).reduce((sum, r) => sum + n(r.qty), 0);
   for (let i = 0; i < lines.length; i++) {
     const other = lines[i];
     if (!sameItem(other) || lineVariantKey(other) !== variant) continue;

@@ -1,3 +1,5 @@
+import { cleanNumber } from './formatters';
+
 /** Product images and heavy catalog structures belong to the catalog, not every saved bill line. */
 export function saleItemSnapshot(items: any[]): any[] {
   if (!Array.isArray(items)) return [];
@@ -13,7 +15,8 @@ export function saleItemSnapshot(items: any[]): any[] {
       name: rest.name || 'Item',
       qty,
       price,
-      total: Number(rest.total) || (Number.isFinite(customTotal) && customTotal > 0 ? customTotal : qty * price),
+      // Rounded to the paisa: 1.1 x 3 is 3.3000000000000003 in floating point.
+      total: Number(rest.total) || (Number.isFinite(customTotal) && customTotal > 0 ? customTotal : cleanNumber(qty * price)),
       unit: rest.unit || (rest.variantId ? (rest.variantName || 'Pack') : 'Unit'),
       variantId: rest.variantId || undefined,
       variantName: rest.variantName || undefined,
