@@ -1,14 +1,12 @@
 import type { ReportData, ReportDefinition, ReportFilters, ReportRow } from '../types';
 import {
-  accountName, autoGroup, CHART_COLORS, COLOR, dayOf, groupSum, inRange, lower, n, pct, r2, sum, timeSeries, topSlices
+  accountName, autoGroup, CHART_COLORS, COLOR, dayOf, groupSum, inRange, isVoidExpense, lower, n, pct, r2, sum, timeSeries, topSlices
 } from '../helpers';
 import { expenseCashPaid } from '../../moneyFlow';
-import type { ExpenseEntry } from '../../../types';
+import type { ExpenseEntry, ExpenseVendorTransaction } from '../../../types';
 
 const categoryOf = (e: ExpenseEntry) => String(e.category || '').trim() || 'Uncategorised';
 const subcategoryOf = (e: ExpenseEntry) => String(e.subcategory || (e as any).details?.subcategory || '').trim() || 'General';
-
-const isVoidExpense = (e: ExpenseEntry) => /void|cancel|delete/i.test(String((e as any).status || (e as any).details?.status || ''));
 
 const expensesInRange = (data: ReportData, f: Pick<ReportFilters, 'from' | 'to' | 'category' | 'accountId'>) =>
   data.expenses.filter(e => !isVoidExpense(e) && inRange(e.date, f)
@@ -42,8 +40,26 @@ function lastMonths(to: string, count: number): string[] {
   return keys;
 }
 
-const vendorMatches = (e: ExpenseEntry, vendorId: string, vendorName: string) =>
-  e.vendor_id === vendorId || (!e.vendor_id && Boolean(e.vendor_name) && lower(e.vendor_name) === vendorName);
+/**
+ * Expense bills per vendor, built once: by vendor id, or by name for old bills saved without an id.
+ * (Each vendor used to scan every expense and every ledger row.)
+ */
+function vendorIndex(data: ReportData) {
+  const billsById = new Map<string, ExpenseEntry[]>();
+  const billsByName = new Map<string, ExpenseEntry[]>();
+  const txsById = new Map<string, ExpenseVendorTransaction[]>();
+  const push = <T,>(map: Map<string, T[]>, key: string, row: T) => { const list = map.get(key); if (list) list.push(row); else map.set(key, [row]); };
+  data.expenses.forEach(e => {
+    if (!e || isVoidExpense(e)) return;
+    if (e.vendor_id) push(billsById, e.vendor_id, e);
+    else if (e.vendor_name) push(billsByName, lower(e.vendor_name), e);
+  });
+  data.expenseVendorTransactions.forEach(t => { if (t?.vendor_id) push(txsById, t.vendor_id, t); });
+  return {
+    bills: (id: string, name: string) => [...(billsById.get(id) || []), ...(billsByName.get(name) || [])],
+    txs: (id: string) => txsById.get(id) || [],
+  };
+}
 
 export const expenseReports: ReportDefinition[] = [
   {
@@ -201,12 +217,12 @@ export const expenseReports: ReportDefinition[] = [
     snapshot: true,
     build: (data, f) => {
       const period = (date?: string) => Boolean(f.from && f.to) && inRange(date, f);
+      const index = vendorIndex(data);
       const rows: ReportRow[] = data.expenseVendors.filter(v => v.isActive !== false || n(v.pending_balance) !== 0).map(v => {
-        const name = lower(v.name);
-        const bills = data.expenses.filter(e => !isVoidExpense(e) && vendorMatches(e, v.id, name));
+        const bills = index.bills(v.id, lower(v.name));
         const billIds = new Set(bills.map(e => e.id));
         // Ledger rows tied to an expense are already counted from that expense.
-        const txs = data.expenseVendorTransactions.filter(t => t.vendor_id === v.id && !(t.expense_id && billIds.has(t.expense_id)));
+        const txs = index.txs(v.id).filter(t => !(t.expense_id && billIds.has(t.expense_id)));
         const billTx = txs.filter(t => t.type === 'Bill');
         const payTx = txs.filter(t => t.type === 'Payment');
         const refundTx = txs.filter(t => t.type === 'Refund');

@@ -1,32 +1,15 @@
 import type { ReportData, ReportDefinition, ReportRow, Tone } from '../types';
 import {
-  COLOR, dayOf, daysBetween, findItem, groupSum, inRange, itemCategory, lower, n, offsetDate, pct, r2, r3,
+  COLOR, dayOf, daysBetween, findItem, groupSum, inRange, isPurchaseVoid, itemCategory, itemStock, lower, n, offsetDate, pct, r2, r3,
   reportSales, saleLines, sum, topSlices
 } from '../helpers';
-import { itemStockValue } from '../../stockProfit';
 import { AdjustmentReason } from '../../../types';
 import type { InventoryLog, ItemDefinition } from '../../../types';
 
 const isActiveItem = (item: ItemDefinition) => item.isActive !== false;
 
-/**
- * Loose stock: the live inventory row, else the `stock` on the item. Returns, audits and purchases
- * update the inventory row first, so it matches Master Inventory and the balance sheet.
- */
-function looseOf(item: ItemDefinition, data: ReportData): number {
-  const inv = data.inventory.find(i => i.item_id === item.id || i.id === item.id);
-  if (inv && inv.quantity !== undefined && inv.quantity !== null) return n(inv.quantity);
-  return n((item as any).stock);
-}
-
-function variantStocksOf(item: ItemDefinition, data: ReportData): Record<string, number> {
-  const inv = data.inventory.find(i => i.item_id === item.id || i.id === item.id);
-  if (inv?.variant_stocks && Object.keys(inv.variant_stocks).length) return inv.variant_stocks;
-  return item.variant_stocks || inv?.variant_stocks || {};
-}
-
-const stockOf = (item: ItemDefinition, data: ReportData) =>
-  itemStockValue(item as any, looseOf(item, data), variantStocksOf(item, data));
+/** Stock from the live inventory row (shared with the Balance Sheet, so both value stock the same way). */
+const stockOf = (item: ItemDefinition, data: ReportData) => itemStock(data, item);
 
 const matchesCategory = (item: ItemDefinition, category?: string) => {
   if (!category) return true;
@@ -76,7 +59,21 @@ const REASON_TONES: Record<string, Tone> = {
   [AdjustmentReason.PRODUCTION_USAGE]: 'neutral',
 };
 
-const isVoidPurchase = (status?: string) => /void|cancel|delete/i.test(String(status || '')) || (/returned/i.test(String(status || '')) && !/partial/i.test(String(status || '')));
+const isVoidPurchase = isPurchaseVoid;
+
+/** Pack size of a log's pack, or 1 for loose stock. */
+const logPackSize = (log: InventoryLog, item?: ItemDefinition) => {
+  const raw = log as any;
+  const packId = raw.details?.variant_id ?? raw.variant_id;
+  const pack = packId ? (item?.variants || []).find(v => v.id === packId) : undefined;
+  return pack && n(pack.quantity_in_base_unit) > 0 ? n(pack.quantity_in_base_unit) : 1;
+};
+
+/** Base units of a customer return that was scrapped: it left stock at the sale and never came back. */
+const scrappedBaseQty = (log: InventoryLog, item?: ItemDefinition) => {
+  const scrapped = n((log as any).details?.scrapped_qty ?? (log as any).scrapped_qty);
+  return scrapped > 0 ? r3(scrapped * logPackSize(log, item)) : 0;
+};
 
 /** Base units received on a material purchase line (after partial returns). */
 function purchaseBaseQty(row: any): number {
@@ -121,16 +118,26 @@ export const inventoryReports: ReportDefinition[] = [
     financial: true,
     snapshot: true,
     filters: ['category'],
+    // Inactive items that still hold stock are included: the stock is still an asset, and the Balance
+    // Sheet counts it. Without them the two "Stock at cost" figures disagreed.
     build: (data, f) => {
       let missingCost = 0;
-      const rows: ReportRow[] = data.items.filter(isActiveItem).filter(item => matchesCategory(item, f.category)).map(item => {
-        const sv = stockOf(item, data);
+      let inactiveHeld = 0;
+      const valued = data.items.filter(item => matchesCategory(item, f.category))
+        .map(item => ({ item, sv: stockOf(item, data) }))
+        .filter(({ item, sv }) => {
+          if (isActiveItem(item)) return true;
+          const holds = Math.abs(sv.looseQty) > 0.0005 || sv.packs.some(p => Math.abs(p.count) > 0.0005);
+          if (holds) inactiveHeld++;
+          return holds;
+        });
+      const rows: ReportRow[] = valued.map(({ item, sv }) => {
         if (sv.costMissing) missingCost++;
         const packs = sv.packs.filter(p => p.count !== 0).map(p => `${fmtQty(p.count)} × ${p.name}`).join(', ');
         const profit = r2(sv.retailValue - sv.costValue);
         const negative = sv.looseQty < 0 || sv.packs.some(p => p.count < 0);
         return {
-          item: item.name, itemId: item.id, category: itemCategory(item), type: typeText(item), unit: item.unit || 'unit',
+          item: isActiveItem(item) ? item.name : `${item.name} (inactive)`, itemId: item.id, category: itemCategory(item), type: typeText(item), unit: item.unit || 'unit',
           loose: r3(sv.looseQty), packs: packs || '—', total: r3(sv.totalBaseQty), rate: r2(sv.costRate),
           cost: r2(sv.costValue), retail: r2(sv.retailValue), profit, margin: pct(profit, sv.retailValue),
           _tone: negative ? 'bad' : sv.costMissing ? 'warn' : undefined,
@@ -177,7 +184,8 @@ export const inventoryReports: ReportDefinition[] = [
         notes: [
           missingCost ? { tone: 'warn' as const, text: `${missingCost} item(s) have stock but no cost price, so they add nothing to stock value. Set cost prices in Product Catalog.` } : null,
           negative ? { tone: 'bad' as const, text: `${negative} item(s) show negative stock. Negative stock is valued at zero. Fix it with a stock count.` } : null,
-        ].filter((x): x is { tone: 'warn' | 'bad'; text: string } => Boolean(x)),
+          inactiveHeld ? { tone: 'info' as const, text: `${inactiveHeld} inactive item(s) still hold stock and are included.` } : null,
+        ].filter((x): x is { tone: 'warn' | 'bad' | 'info'; text: string } => Boolean(x)),
       };
     },
   },
@@ -267,10 +275,16 @@ export const inventoryReports: ReportDefinition[] = [
         const item = findItem(data.items, log.item_id, log.item_name);
         const diff = logBaseDelta(log, item);
         const value = r2(diff * n(item?.cost_price));
-        const isLoss = diff < 0 && !NOT_LOSS.includes(lower(log.reason));
+        // A scrapped customer return changes no stock today (it left at the sale), but the goods are lost.
+        const scrapped = scrappedBaseQty(log, item);
+        const scrappedLoss = r2(scrapped * n(item?.cost_price));
+        const lostStock = diff < 0 && !NOT_LOSS.includes(lower(log.reason));
+        const stockLoss = lostStock ? -value : 0;
+        const isLoss = lostStock || scrapped > 0;
         rows.push({
           date: log.date, item: item?.name || log.item_name || 'Item', unit: item?.unit || '', reason: log.reason || 'Not given',
-          old: r3(n(log.old_quantity)), new: r3(n(log.new_quantity)), diff, value, loss: isLoss ? r2(-value) : 0, notes: log.notes || '',
+          old: r3(n(log.old_quantity)), new: r3(n(log.new_quantity)), diff, value,
+          loss: isLoss ? r2(stockLoss + scrappedLoss) : 0, notes: log.notes || '',
           _tone: isLoss ? 'bad' : undefined,
         });
       });
@@ -307,7 +321,7 @@ export const inventoryReports: ReportDefinition[] = [
           rows,
           emptyText: 'No stock adjustments in this period.',
         }],
-        notes: [{ tone: 'info', text: 'Sales, purchases, production and milk allocation entries are left out (see Item Movement Summary). Value uses today\'s cost price. Supplier returns are not counted as loss.' }],
+        notes: [{ tone: 'info', text: 'Sales, purchases, production and milk allocation entries are left out (see Item Movement Summary). Value uses today\'s cost price. Supplier returns are not counted as loss. Scrapped customer returns count as loss at cost, though they do not change stock.' }],
       };
     },
   },
@@ -427,14 +441,8 @@ export const inventoryReports: ReportDefinition[] = [
         if (SALE_REASONS.includes(reason)) return;
         const manualAudit = /Loose Stock Audit|Variant Audit/.test(String(log.notes || ''));
         if (!manualAudit && (reason === lower(AdjustmentReason.SALES_RETURN) || reason === lower(AdjustmentReason.SUPPLY_RETURN))) return;
-        let delta = logBaseDelta(log, item);
         // A scrapped customer return is netted out of "sold" but never came back to the shelf.
-        const scrapped = n((log as any).details?.scrapped_qty);
-        if (scrapped > 0) {
-          const packId = (log as any).details?.variant_id;
-          const pack = packId ? (item!.variants || []).find(v => v.id === packId) : undefined;
-          delta = r3(delta - scrapped * (pack && n(pack.quantity_in_base_unit) > 0 ? n(pack.quantity_in_base_unit) : 1));
-        }
+        const delta = r3(logBaseDelta(log, item) - scrappedBaseQty(log, item));
         const row = get(item!.id);
         if (reason === 'allocation') row.allocated += delta;
         else if (reason === lower(AdjustmentReason.PRODUCTION_USAGE)) row.used += delta;
