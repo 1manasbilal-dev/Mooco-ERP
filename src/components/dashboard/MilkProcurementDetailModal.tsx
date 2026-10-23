@@ -1,12 +1,14 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  Droplets, X, Search, Users, ArrowUpRight, 
-  ChevronDown, ChevronUp, 
-  Sun, Moon, ExternalLink,
-  FileText
-} from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ArrowUpRight, ChevronDown, Droplets, ExternalLink, FileText, MapPin, Moon, Sun, Users, X } from 'lucide-react';
 import { formatCurrency, formatQty, cleanNumber } from '../../lib/formatters';
-import { PurchaseEntry, Supplier } from '../../types';
+import { useProgressiveList } from '../../hooks/useProgressiveList';
+import type { PurchaseEntry, Supplier } from '../../types';
+import {
+  Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, TBody, TD, TH, THead, TR, Table,
+} from '../ui';
+import { cn } from '../../lib/cn';
+import { milkVariety } from './dashboardData';
 
 interface MilkProcurementDetailModalProps {
   isOpen: boolean;
@@ -29,10 +31,8 @@ interface SupplierSummary {
   supplierId: string;
   supplierName: string;
   phone: string;
-  whatsapp?: string;
   village: string;
   city: string;
-  pendingBalance: number;
   totalLiters: number;
   totalAmount: number;
   avgRate: number;
@@ -43,6 +43,112 @@ interface SupplierSummary {
   sharePercent: number;
   entries: PurchaseEntry[];
 }
+
+type Slip = PurchaseEntry & { supplierName: string; supplierVillage: string };
+type Variety = 'all' | 'buffalo' | 'cow' | 'mixed';
+type ShiftFilter = 'all' | 'morning' | 'evening';
+type ViewMode = 'by_supplier' | 'all_slips';
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Slips are shown in Pakistan time whatever the device clock zone. Date-only slips have
+// no recorded time, so none is shown (they used to read "05:00 AM", UTC midnight in PKT).
+const slipDay = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', day: 'numeric', month: 'short', year: 'numeric' });
+const slipClock = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+function slipWhen(value: string): { day: string; time: string } {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value || '')) {
+    return { day: new Date(`${value}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }), time: '' };
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return { day: value || '', time: '' };
+  return { day: slipDay.format(date), time: slipClock.format(date) };
+}
+const slipTime = (slip: PurchaseEntry) => { const t = new Date(slip.date).getTime(); return Number.isFinite(t) ? t : 0; };
+const isMorning = (slip: PurchaseEntry) => (slip.shift || '').toLowerCase().includes('morning');
+const rateText = (rate: number) => `Rs ${cleanNumber(rate, 1).toFixed(1)}`;
+
+function ShiftBadge({ slip }: { slip: PurchaseEntry }) {
+  const morning = isMorning(slip);
+  return <Badge tone={morning ? 'warning' : 'info'} icon={morning ? <Sun /> : <Moon />}>{slip.shift || 'General'}</Badge>;
+}
+
+const SupplierRow: React.FC<{
+  sup: SupplierSummary; rank: number; expanded: boolean; onToggle: () => void; onOpenKhata?: () => void;
+}> = ({ sup, rank, expanded, onToggle, onOpenKhata }) => {
+  const panelId = useId();
+  return (
+    <li className="overflow-hidden rounded-card border border-line bg-surface shadow-e1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        className="flex w-full cursor-pointer flex-col gap-3 p-3.5 text-left transition-colors hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:flex-row sm:items-center sm:justify-between sm:p-4"
+      >
+        <span className="flex min-w-0 items-start gap-3 sm:items-center">
+          <span className={cn('flex size-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold tabular-nums', rank === 1 ? 'bg-brand-soft text-brand-fg' : 'bg-surface-2 text-fg-subtle')}>{rank}</span>
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-bold text-fg sm:text-[15px]">{sup.supplierName}</span>
+              {sup.sharePercent > 0 && <Badge tone="brand">{sup.sharePercent}% share</Badge>}
+            </span>
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-fg-subtle">
+              {sup.village && <span className="inline-flex items-center gap-1"><MapPin className="size-3" aria-hidden="true" />{sup.village}{sup.city ? `, ${sup.city}` : ''}</span>}
+              {sup.phone && <span className="tabular-nums">{sup.phone}</span>}
+              <span>{sup.entriesCount} delivery {sup.entriesCount === 1 ? 'slip' : 'slips'}</span>
+            </span>
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center justify-between gap-4 pl-10 sm:justify-end sm:pl-0">
+          <span className="hidden items-center gap-1.5 md:flex">
+            {sup.buffaloLiters > 0 && <Badge>Buffalo {formatQty(sup.buffaloLiters)} L</Badge>}
+            {sup.cowLiters > 0 && <Badge>Cow {formatQty(sup.cowLiters)} L</Badge>}
+            {sup.mixedLiters > 0 && <Badge>Mixed {formatQty(sup.mixedLiters)} L</Badge>}
+          </span>
+          <span className="text-right">
+            <span className="block text-base font-bold tabular-nums text-fg sm:text-lg">{formatQty(sup.totalLiters)} <span className="text-xs font-semibold text-fg-subtle">L</span></span>
+            <span className="block text-xs text-fg-subtle"><Money amount={sup.totalAmount} className="font-semibold text-fg-muted" /> · @ {rateText(sup.avgRate)}/L</span>
+          </span>
+          <ChevronDown className={cn('size-4 shrink-0 text-fg-faint transition-transform duration-150', expanded && 'rotate-180')} aria-hidden="true" />
+        </span>
+      </button>
+      <div className="h-1 bg-surface-2" aria-hidden="true"><div className="h-full bg-info" style={{ width: `${Math.min(100, sup.sharePercent)}%` }} /></div>
+      {expanded && (
+        <div id={panelId} className="border-t border-line bg-surface-2/50 p-3 sm:p-4">
+          <div className="flex items-center justify-between gap-3 border-b border-line pb-2 text-xs font-semibold text-fg-subtle">
+            <span>Delivery history ({sup.entries.length} inward {sup.entries.length === 1 ? 'slip' : 'slips'})</span>
+            {onOpenKhata && <Button variant="ghost" size="sm" rightIcon={<ExternalLink />} onClick={onOpenKhata}>Open supplier khata</Button>}
+          </div>
+          <ul className="divide-y divide-line">
+            {sup.entries.map((slip, index) => {
+              const when = slipWhen(slip.date);
+              return (
+                <li key={slip.id || index} className="flex items-center justify-between gap-3 py-2.5 text-xs">
+                  <span className="min-w-0">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-semibold text-fg">{when.day}</span>
+                      {when.time && <span className="tabular-nums text-fg-subtle">{when.time}</span>}
+                      <ShiftBadge slip={slip} />
+                    </span>
+                    <span className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-fg-subtle">
+                      <span className="font-semibold text-fg-muted">{slip.milk_type || 'Milk'}</span>
+                      {Number(slip.fat) > 0 && <span>Fat {slip.fat}%</span>}
+                      {Number(slip.snf) > 0 && <span>SNF {slip.snf}</span>}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-right tabular-nums">
+                    <span className="block font-bold text-fg">{formatQty(slip.quantity)} L @ {rateText(slip.rate)}</span>
+                    <Money amount={slip.total_amount} className="font-semibold text-fg-muted" />
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </li>
+  );
+};
 
 const MilkProcurementDetailModal: React.FC<MilkProcurementDetailModalProps> = ({
   isOpen,
@@ -58,764 +164,257 @@ const MilkProcurementDetailModal: React.FC<MilkProcurementDetailModalProps> = ({
   cowLiters,
   onOpenProcurement,
   onNavigateToSupplier,
-  layout = 'dialog'
+  layout = 'dialog',
 }) => {
   const isPage = layout === 'page';
+  const titleId = useId();
   const [searchQuery, setSearchQuery] = useState('');
-  const [varietyFilter, setVarietyFilter] = useState<'all' | 'buffalo' | 'cow' | 'mixed'>('all');
-  const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'evening'>('all');
-  const [viewMode, setViewMode] = useState<'by_supplier' | 'all_slips'>('by_supplier');
-  const [expandedSupplierIds, setExpandedSupplierIds] = useState<Set<string>>(new Set());
-  const dialogRef = React.useRef<HTMLDivElement>(null);
+  const [varietyFilter, setVarietyFilter] = useState<Variety>('all');
+  const [shiftFilter, setShiftFilter] = useState<ShiftFilter>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('by_supplier');
+  const [expandedSupplierIds, setExpandedSupplierIds] = useState<Set<string>>(() => new Set());
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
-  React.useEffect(() => {
-    if (!isOpen) return;
+  useEffect(() => {
+    if (isPage || !isOpen) return;
     const previousFocus = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key !== 'Tab') return;
-      const controls = Array.from<HTMLElement>(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') || []).filter(el => el.getClientRects().length > 0);
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (!first) { e.preventDefault(); return; }
-      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => { window.removeEventListener('keydown', handleKeyDown); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); };
-  }, [isOpen, onClose]);
+    return () => { if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); };
+  }, [isOpen, isPage]);
+
+  const supplierById = useMemo(() => new Map(suppliers.map(s => [s.id, s])), [suppliers]);
+  const livePurchases = useMemo(() => purchases.filter(p => p.date && p.status !== 'Cancelled' && p.status !== 'Returned'), [purchases]);
 
   const supplierSummaries = useMemo(() => {
     const map: Record<string, SupplierSummary> = {};
-
-    purchases.forEach(p => {
-      if (!p.date || p.status === 'Cancelled' || p.status === 'Returned') return;
-
+    for (const p of livePurchases) {
       const supId = p.supplier_id || 'unknown';
-      const supObj = suppliers.find(s => s.id === supId);
-      const supName = supObj?.name || p.supplier_name || 'Walk-in Farmer';
-
-      if (!map[supId]) {
-        map[supId] = {
-          supplierId: supId,
-          supplierName: supName,
-          phone: supObj?.phone || '',
-          whatsapp: supObj?.whatsapp,
-          village: supObj?.village || '',
-          city: supObj?.city || '',
-          pendingBalance: cleanNumber(supObj?.pending_balance ?? (supObj as any)?.total_due ?? supObj?.balance ?? 0),
-          totalLiters: 0,
-          totalAmount: 0,
-          avgRate: 0,
-          buffaloLiters: 0,
-          cowLiters: 0,
-          mixedLiters: 0,
-          entriesCount: 0,
-          sharePercent: 0,
-          entries: []
-        };
-      }
-
-      const qty = Number(p.quantity) || 0;
-      const amt = Number(p.total_amount) || 0;
-      const type = (p.milk_type || '').toLowerCase();
-
-      map[supId].totalLiters += qty;
-      map[supId].totalAmount += amt;
-      map[supId].entriesCount += 1;
-      map[supId].entries.push(p);
-
-      if (type.includes('buffalo')) map[supId].buffaloLiters += qty;
-      else if (type.includes('cow')) map[supId].cowLiters += qty;
-      else map[supId].mixedLiters += qty;
-    });
-
-    const list = Object.values(map).map(sup => {
-      sup.avgRate = sup.totalLiters > 0 ? (sup.totalAmount / sup.totalLiters) : 0;
-      sup.sharePercent = totalMilkLiters > 0 ? Math.round((sup.totalLiters / totalMilkLiters) * 100) : 0;
-      sup.entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      return sup;
-    });
-
-    list.sort((a, b) => b.totalLiters - a.totalLiters);
-    return list;
-  }, [purchases, suppliers, totalMilkLiters]);
-
-  const filteredSuppliers = useMemo(() => {
-    return supplierSummaries.filter(sup => {
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchesName = sup.supplierName.toLowerCase().includes(q);
-        const matchesPhone = sup.phone.toLowerCase().includes(q);
-        const matchesVillage = sup.village.toLowerCase().includes(q);
-        const matchesCity = sup.city.toLowerCase().includes(q);
-        if (!matchesName && !matchesPhone && !matchesVillage && !matchesCity) return false;
-      }
-
-      if (varietyFilter === 'buffalo' && sup.buffaloLiters <= 0) return false;
-      if (varietyFilter === 'cow' && sup.cowLiters <= 0) return false;
-      if (varietyFilter === 'mixed' && sup.mixedLiters <= 0) return false;
-
-      if (shiftFilter !== 'all') {
-        const hasShift = sup.entries.some(e => 
-          (e.shift || '').toLowerCase().includes(shiftFilter)
-        );
-        if (!hasShift) return false;
-      }
-
-      return true;
-    });
-  }, [supplierSummaries, searchQuery, varietyFilter, shiftFilter]);
-
-  const filteredSlips = useMemo(() => {
-    const list: (PurchaseEntry & { supplierName: string; supplierPhone: string; supplierVillage: string })[] = [];
-
-    purchases.forEach(p => {
-      if (!p.date || p.status === 'Cancelled' || p.status === 'Returned') return;
-      const sup = suppliers.find(s => s.id === p.supplier_id);
-      const supName = sup?.name || p.supplier_name || 'Walk-in Farmer';
-
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchesName = supName.toLowerCase().includes(q);
-        const matchesPhone = (sup?.phone || '').toLowerCase().includes(q);
-        const matchesVillage = (sup?.village || '').toLowerCase().includes(q);
-        if (!matchesName && !matchesPhone && !matchesVillage) return false;
-      }
-
-      const type = (p.milk_type || '').toLowerCase();
-      if (varietyFilter === 'buffalo' && !type.includes('buffalo')) return false;
-      if (varietyFilter === 'cow' && !type.includes('cow')) return false;
-      if (varietyFilter === 'mixed' && !type.includes('mixed')) return false;
-
-      if (shiftFilter !== 'all') {
-        const s = (p.shift || '').toLowerCase();
-        if (!s.includes(shiftFilter)) return false;
-      }
-
-      list.push({
-        ...p,
-        supplierName: supName,
-        supplierPhone: sup?.phone || '',
-        supplierVillage: sup?.village || ''
+      const sup = supplierById.get(supId);
+      const row = map[supId] || (map[supId] = {
+        supplierId: supId,
+        supplierName: sup?.name || p.supplier_name || 'Walk-in Farmer',
+        phone: sup?.phone || '',
+        village: sup?.village || '',
+        city: sup?.city || '',
+        totalLiters: 0, totalAmount: 0, avgRate: 0, buffaloLiters: 0, cowLiters: 0, mixedLiters: 0, entriesCount: 0, sharePercent: 0, entries: [],
       });
-    });
+      const qty = Number(p.quantity) || 0;
+      row.totalLiters += qty;
+      row.totalAmount += Number(p.total_amount) || 0;
+      row.entriesCount += 1;
+      row.entries.push(p);
+      const variety = milkVariety(p.milk_type);
+      if (variety === 'buffalo') row.buffaloLiters += qty;
+      else if (variety === 'cow') row.cowLiters += qty;
+      else row.mixedLiters += qty;
+    }
+    return Object.values(map).map(sup => {
+      sup.avgRate = sup.totalLiters > 0 ? sup.totalAmount / sup.totalLiters : 0;
+      sup.sharePercent = totalMilkLiters > 0 ? Math.round((sup.totalLiters / totalMilkLiters) * 100) : 0;
+      sup.entries.sort((a, b) => slipTime(b) - slipTime(a));
+      return sup;
+    }).sort((a, b) => b.totalLiters - a.totalLiters);
+  }, [livePurchases, supplierById, totalMilkLiters]);
 
-    list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    return list;
-  }, [purchases, suppliers, searchQuery, varietyFilter, shiftFilter]);
+  const query = searchQuery.toLowerCase().trim();
+  const filteredSuppliers = useMemo(() => supplierSummaries.filter(sup => {
+    if (query && ![sup.supplierName, sup.phone, sup.village, sup.city].some(field => field.toLowerCase().includes(query))) return false;
+    if (varietyFilter === 'buffalo' && sup.buffaloLiters <= 0) return false;
+    if (varietyFilter === 'cow' && sup.cowLiters <= 0) return false;
+    if (varietyFilter === 'mixed' && sup.mixedLiters <= 0) return false;
+    if (shiftFilter !== 'all' && !sup.entries.some(e => (e.shift || '').toLowerCase().includes(shiftFilter))) return false;
+    return true;
+  }), [supplierSummaries, query, varietyFilter, shiftFilter]);
 
-  const toggleSupplierExpand = (id: string) => {
-    setExpandedSupplierIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  // Same variety split as the supplier view: anything that is not buffalo or cow counts as mixed.
+  const filteredSlips: Slip[] = useMemo(() => livePurchases.flatMap((p: PurchaseEntry): Slip[] => {
+    const sup = supplierById.get(p.supplier_id);
+    const supplierName = sup?.name || p.supplier_name || 'Walk-in Farmer';
+    if (query && ![supplierName, sup?.phone || '', sup?.village || '', sup?.city || ''].some(field => field.toLowerCase().includes(query))) return [];
+    if (varietyFilter !== 'all' && milkVariety(p.milk_type) !== varietyFilter) return [];
+    if (shiftFilter !== 'all' && !(p.shift || '').toLowerCase().includes(shiftFilter)) return [];
+    return [{ ...p, supplierName, supplierVillage: sup?.village || '' }];
+  }).sort((a, b) => slipTime(b) - slipTime(a)), [livePurchases, supplierById, query, varietyFilter, shiftFilter]);
 
-  const expandAll = () => {
-    setExpandedSupplierIds(new Set(filteredSuppliers.map(s => s.supplierId)));
-  };
+  const filterKey = `${query}|${varietyFilter}|${shiftFilter}|${viewMode}`;
+  const supplierList = useProgressiveList<SupplierSummary>(filteredSuppliers, 40, filterKey);
+  const slipList = useProgressiveList<Slip>(filteredSlips, 60, filterKey);
 
-  const collapseAll = () => {
-    setExpandedSupplierIds(new Set());
-  };
+  const toggleSupplier = (id: string) => setExpandedSupplierIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   if (!isPage && !isOpen) return null;
 
-  return (
-    <div className={isPage ? 'w-full' : 'fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200'}>
-      <div 
-        ref={dialogRef}
-        role={isPage ? 'region' : 'dialog'}
-        aria-modal={isPage ? undefined : true}
-        aria-labelledby="milk-procurement-title"
-        tabIndex={-1}
-        className={isPage
-          ? 'relative bg-white dark:bg-slate-900 rounded-2xl shadow-sm w-full flex flex-col border border-slate-200/90 dark:border-slate-800 overflow-hidden'
-          : 'relative bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col border border-slate-200/90 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200'}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-850/60 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-lime-500/10 dark:bg-lime-500/20 text-lime-600 dark:text-lime-400 flex items-center justify-center shrink-0 border border-lime-500/20 shadow-xs">
-              <Droplets size={22} />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 id="milk-procurement-title" className="font-black text-base sm:text-lg text-slate-900 dark:text-white truncate">
-                  Milk Procurement Breakdown
-                </h3>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-lime-50 dark:bg-lime-950/60 text-lime-700 dark:text-lime-300 border border-lime-200 dark:border-lime-800">
-                  Milk Collection Summary
+  const openProcurement = onOpenProcurement ? () => { if (!isPage) onClose(); onOpenProcurement(); } : undefined;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isPage) return;
+    // Keys typed inside the dialog belong to it, never to page shortcuts behind it.
+    event.stopPropagation();
+    // The search box clears itself on the first Esc (and marks the event handled).
+    if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); onCloseRef.current(); return; }
+    if (event.key !== 'Tab' || !dialogRef.current) return;
+    const controls = (Array.from(dialogRef.current.querySelectorAll(FOCUSABLE)) as HTMLElement[]).filter(el => el.getClientRects().length > 0);
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (!first) { event.preventDefault(); return; }
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
+
+  const summary = [
+    { label: 'Total milk inward', value: <>{formatQty(totalMilkLiters)}<span className="ml-1 text-xs font-semibold text-fg-subtle">L</span></>, note: `Buffalo ${formatQty(buffaloLiters)} L · Cow ${formatQty(cowLiters)} L` },
+    { label: 'Procurement cost', value: <Money amount={totalMilkCost} />, note: 'Kul khareedari raqam' },
+    { label: 'Weighted avg rate', value: <>{rateText(avgMilkRate)}<span className="ml-1 text-xs font-semibold text-fg-subtle">/L</span></>, note: 'Average rate per litre' },
+    { label: 'Active suppliers', value: <>{supplierSummaries.length}<span className="ml-1 text-xs font-semibold text-fg-subtle">farmers</span></>, note: `${livePurchases.length} delivery slips` },
+  ];
+
+  const panel = (
+    <div
+      ref={dialogRef}
+      role={isPage ? 'region' : 'dialog'}
+      aria-modal={isPage ? undefined : true}
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className={isPage
+        ? 'relative flex w-full flex-col overflow-hidden rounded-card border border-line bg-surface shadow-e1'
+        : 'relative flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-card border border-line bg-surface shadow-e3 outline-none animate-in fade-in zoom-in-95 duration-150 motion-reduce:animate-none'}
+      onClick={event => event.stopPropagation()}
+    >
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-info-soft text-info-fg"><Droplets className="size-5" aria-hidden="true" /></span>
+          <div className="min-w-0">
+            <h2 id={titleId} className="truncate text-base font-bold tracking-tight text-fg sm:text-lg">Milk procurement breakdown</h2>
+            <p className="truncate text-xs text-fg-subtle">
+              <span className="font-semibold text-fg-muted">{periodLabel}</span>
+              {dateRangeText && <span> ({dateRangeText})</span>}
+              <span> · {supplierSummaries.length} farmers / suppliers contributed</span>
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {openProcurement && <Button variant="soft" size="sm" rightIcon={<ArrowUpRight />} onClick={openProcurement} className="hidden sm:inline-flex">Milk intake counter</Button>}
+          {!isPage && <IconButton icon={<X />} aria-label="Close (Esc)" onClick={onClose} />}
+        </div>
+      </div>
+
+      <div className="grid shrink-0 grid-cols-2 gap-2.5 border-b border-line bg-surface-2/60 px-4 py-4 sm:grid-cols-4 sm:px-6">
+        {summary.map(tile => (
+          <div key={tile.label} className="min-w-0 rounded-control border border-line bg-surface p-3 shadow-e1">
+            <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">{tile.label}</p>
+            <p className="mt-1 truncate text-lg font-bold tabular-nums text-fg sm:text-xl">{tile.value}</p>
+            <p className="mt-0.5 truncate text-[11px] text-fg-subtle">{tile.note}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex shrink-0 flex-col gap-2.5 border-b border-line px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search farmer name, village or phone..." className="w-full lg:max-w-xs" />
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl<Variety> aria-label="Milk variety" size="sm" value={varietyFilter} onChange={setVarietyFilter}
+            options={[{ value: 'all', label: 'All' }, { value: 'buffalo', label: 'Buffalo' }, { value: 'cow', label: 'Cow' }, { value: 'mixed', label: 'Mixed' }]} />
+          <SegmentedControl<ShiftFilter> aria-label="Shift" size="sm" value={shiftFilter} onChange={setShiftFilter}
+            options={[{ value: 'all', label: 'All shifts' }, { value: 'morning', label: 'Morning', icon: <Sun /> }, { value: 'evening', label: 'Evening', icon: <Moon /> }]} />
+          <SegmentedControl<ViewMode> aria-label="View" size="sm" value={viewMode} onChange={setViewMode}
+            options={[{ value: 'by_supplier', label: 'By farmer', icon: <Users /> }, { value: 'all_slips', label: 'All slips', icon: <FileText />, count: filteredSlips.length }]} />
+        </div>
+      </div>
+
+      <div className={cn('space-y-3 bg-canvas/60 px-4 py-4 sm:px-6', !isPage && 'min-h-0 flex-1 overflow-y-auto overscroll-contain')}>
+        {viewMode === 'by_supplier' ? (
+          <>
+            <div className="flex items-center justify-between gap-3 px-1 text-xs text-fg-subtle">
+              <span>Showing <strong className="text-fg">{filteredSuppliers.length}</strong> farmers in this period</span>
+              {filteredSuppliers.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => setExpandedSupplierIds(new Set(filteredSuppliers.map(s => s.supplierId)))}>Expand all</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExpandedSupplierIds(new Set())}>Collapse all</Button>
                 </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                <span className="font-semibold text-slate-700 dark:text-slate-200">{periodLabel}</span>
-                {dateRangeText && <span className="ml-1 text-slate-400">({dateRangeText})</span>}
-                <span className="mx-1.5">•</span>
-                <span>{supplierSummaries.length} Farmers / Suppliers contributed</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {onOpenProcurement && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!isPage) onClose();
-                  onOpenProcurement();
-                }}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-lime-50 dark:bg-lime-950/50 hover:bg-lime-100 dark:hover:bg-lime-900/60 text-lime-700 dark:text-lime-300 rounded-xl text-xs font-bold transition-colors cursor-pointer border border-lime-200/60 dark:border-lime-800/60"
-              >
-                <span>Milk Intake Counter</span>
-                <ArrowUpRight size={14} />
-              </button>
-            )}
-            {!isPage && (
-            <button aria-label="Close modal (Esc)"
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Close modal (Esc)"
-            >
-              <X size={20} />
-            </button>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-4 sm:px-6 bg-slate-50/50 dark:bg-slate-900/40 border-b border-slate-100 dark:border-slate-800 shrink-0">
-          <div className="p-3 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Total Milk Inward</span>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-white font-mono">
-                {formatQty(totalMilkLiters)}
-              </span>
-              <span className="text-xs font-bold text-slate-400">L</span>
-            </div>
-            <div className="flex items-center gap-2 mt-1 text-[11px] font-semibold text-slate-500">
-              <span className="text-lime-600 dark:text-lime-400">B: {formatQty(buffaloLiters)}L</span>
-              <span>•</span>
-              <span className="text-sky-600 dark:text-sky-400">C: {formatQty(cowLiters)}L</span>
-            </div>
-          </div>
-
-          <div className="p-3 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Procurement Cost</span>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-lg sm:text-xl font-black text-lime-600 dark:text-lime-400 font-mono">
-                {formatCurrency(totalMilkCost)}
-              </span>
-            </div>
-            <div className="text-[11px] text-slate-400 mt-1 font-medium">
-              Kul Khareedari Raqam
-            </div>
-          </div>
-
-          <div className="p-3 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Weighted Avg Rate</span>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                Rs {cleanNumber(avgMilkRate, 1).toFixed(1)}
-              </span>
-              <span className="text-xs font-bold text-slate-400">/L</span>
-            </div>
-            <div className="text-[11px] text-slate-400 mt-1 font-medium">
-              Average Rate per Liter
-            </div>
-          </div>
-
-          <div className="p-3 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Active Suppliers</span>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-lg sm:text-xl font-black text-amber-600 dark:text-amber-400 font-mono">
-                {supplierSummaries.length}
-              </span>
-              <span className="text-xs font-bold text-slate-400">Farmers</span>
-            </div>
-            <div className="text-[11px] text-slate-400 mt-1 font-medium">
-              {purchases.length} Delivery Slips
-            </div>
-          </div>
-        </div>
-
-        <div className="p-3 sm:px-6 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0 bg-white dark:bg-slate-900">
-          <div className="relative flex-1 min-w-[200px] max-w-md">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search farmer name, village, or phone..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-lime-500/20 focus:border-lime-500"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
-              >
-                ×
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200/80 dark:border-slate-700/60 text-xs font-semibold">
-              <button
-                onClick={() => setVarietyFilter('all')}
-                className={`px-2 py-1 rounded-lg transition-all ${
-                  varietyFilter === 'all'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setVarietyFilter('buffalo')}
-                className={`px-2 py-1 rounded-lg transition-all ${
-                  varietyFilter === 'buffalo'
-                    ? 'bg-lime-600 text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                Buffalo
-              </button>
-              <button
-                onClick={() => setVarietyFilter('cow')}
-                className={`px-2 py-1 rounded-lg transition-all ${
-                  varietyFilter === 'cow'
-                    ? 'bg-sky-500 text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                Cow
-              </button>
-              <button
-                onClick={() => setVarietyFilter('mixed')}
-                className={`px-2 py-1 rounded-lg transition-all ${
-                  varietyFilter === 'mixed'
-                    ? 'bg-emerald-600 text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                Mixed
-              </button>
-            </div>
-
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200/80 dark:border-slate-700/60 text-xs font-semibold">
-              <button
-                onClick={() => setShiftFilter('all')}
-                className={`px-2 py-1 rounded-lg transition-all ${
-                  shiftFilter === 'all'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                All Shifts
-              </button>
-              <button
-                onClick={() => setShiftFilter('morning')}
-                className={`px-2 py-1 rounded-lg transition-all flex items-center gap-1 ${
-                  shiftFilter === 'morning'
-                    ? 'bg-amber-500 text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Sun size={11} />
-                <span>Morning</span>
-              </button>
-              <button
-                onClick={() => setShiftFilter('evening')}
-                className={`px-2 py-1 rounded-lg transition-all flex items-center gap-1 ${
-                  shiftFilter === 'evening'
-                    ? 'bg-indigo-600 text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Moon size={11} />
-                <span>Evening</span>
-              </button>
-            </div>
-
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200/80 dark:border-slate-700/60 text-xs font-semibold">
-              <button
-                onClick={() => setViewMode('by_supplier')}
-                className={`px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
-                  viewMode === 'by_supplier'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Users size={12} />
-                <span>By Farmer</span>
-              </button>
-              <button
-                onClick={() => setViewMode('all_slips')}
-                className={`px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 ${
-                  viewMode === 'all_slips'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-bold'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <FileText size={12} />
-                <span>All Slips ({filteredSlips.length})</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className={`${isPage ? '' : 'flex-1 overflow-y-auto'} p-4 sm:p-6 space-y-3 bg-slate-50/40 dark:bg-slate-950/30`}>
-          {viewMode === 'by_supplier' ? (
-            <>
-              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
-                <span>
-                  Showing <strong>{filteredSuppliers.length}</strong> farmers contributing in this period
-                </span>
-                {filteredSuppliers.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={expandAll}
-                      className="text-lime-600 dark:text-lime-400 hover:underline font-bold text-[11px] cursor-pointer"
-                    >
-                      Expand All
-                    </button>
-                    <span>•</span>
-                    <button
-                      type="button"
-                      onClick={collapseAll}
-                      className="text-slate-500 hover:underline font-medium text-[11px] cursor-pointer"
-                    >
-                      Collapse All
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {filteredSuppliers.length === 0 ? (
-                <div className="py-16 text-center space-y-3">
-                  <div className="w-14 h-14 mx-auto rounded-3xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
-                    <Droplets size={26} />
-                  </div>
-                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                    No milk procurement records found
-                  </p>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    No farmers supplied milk matching the selected filters for this time window.
-                  </p>
-                </div>
-              ) : (
-                filteredSuppliers.map((sup, idx) => {
-                  const isExpanded = expandedSupplierIds.has(sup.supplierId);
-
-                  return (
-                    <div 
-                      key={sup.supplierId}
-                      className="bg-white dark:bg-slate-850 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-2xs hover:border-lime-500/40 transition-all overflow-hidden"
-                    >
-                      <div 
-                        onClick={() => toggleSupplierExpand(sup.supplierId)}
-                        className="p-3.5 sm:p-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors"
-                      >
-                        <div className="flex items-start sm:items-center gap-3 min-w-0">
-                          <span className={`w-7 h-7 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
-                            idx === 0 ? 'bg-amber-400 text-slate-950 shadow-2xs' :
-                            idx === 1 ? 'bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200' :
-                            idx === 2 ? 'bg-amber-700/20 text-amber-700 dark:text-amber-400' :
-                            'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                          }`}>
-                            {idx + 1}
-                          </span>
-
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white truncate">
-                                {sup.supplierName}
-                              </h4>
-                              {sup.sharePercent > 0 && (
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-lime-50 dark:bg-lime-950/50 text-lime-700 dark:text-lime-300 border border-lime-200/60 dark:border-lime-800/60">
-                                  {sup.sharePercent}% Share
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400 flex-wrap">
-                              {sup.village && (
-                                <span className="truncate">📍 {sup.village}{sup.city ? `, ${sup.city}` : ''}</span>
-                              )}
-                              {sup.phone && (
-                                <>
-                                  <span>•</span>
-                                  <span className="font-mono">{sup.phone}</span>
-                                </>
-                              )}
-                              <span>•</span>
-                              <span className="font-medium text-slate-500 dark:text-slate-400">
-                                {sup.entriesCount} delivery {sup.entriesCount === 1 ? 'slip' : 'slips'}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pl-10 sm:pl-0">
-                          <div className="hidden md:flex items-center gap-1.5 text-[11px] font-semibold">
-                            {sup.buffaloLiters > 0 && (
-                              <span className="px-2 py-0.5 rounded-lg bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 border border-lime-200/60 dark:border-lime-800/60">
-                                Buffalo: <strong>{formatQty(sup.buffaloLiters)}L</strong>
-                              </span>
-                            )}
-                            {sup.cowLiters > 0 && (
-                              <span className="px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200/60 dark:border-sky-800/60">
-                                Cow: <strong>{formatQty(sup.cowLiters)}L</strong>
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-right">
-                            <div className="flex items-baseline gap-1 justify-end">
-                              <span className="text-base sm:text-lg font-black text-slate-900 dark:text-white font-mono">
-                                {formatQty(sup.totalLiters)}
-                              </span>
-                              <span className="text-xs font-bold text-slate-400">L</span>
-                            </div>
-                            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                              <strong className="text-lime-600 dark:text-lime-400 font-bold">{formatCurrency(sup.totalAmount)}</strong>
-                              <span className="ml-1 text-[10px]">(@ Rs {cleanNumber(sup.avgRate, 1).toFixed(1)}/L)</span>
-                            </div>
-                          </div>
-
-                          <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 flex items-center justify-center shrink-0">
-                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="w-full h-1 bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                        <div 
-                          className="h-full bg-gradient-to-r from-lime-500 to-sky-400 transition-all duration-300"
-                          style={{ width: `${Math.min(100, sup.sharePercent)}%` }}
-                        />
-                      </div>
-
-                      {isExpanded && (
-                        <div className="p-3 sm:p-4 bg-slate-50/70 dark:bg-slate-900/60 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 pb-1 border-b border-slate-200/60 dark:border-slate-800">
-                            <span>Delivery History ({sup.entries.length} Inward Slips)</span>
-                            {onNavigateToSupplier && sup.supplierId !== 'unknown' && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onClose();
-                                  onNavigateToSupplier(sup.supplierId);
-                                }}
-                                className="text-lime-600 dark:text-lime-400 hover:underline flex items-center gap-1 font-bold cursor-pointer"
-                              >
-                                <span>Open Full Supplier Khata</span>
-                                <ExternalLink size={11} />
-                              </button>
-                            )}
-                          </div>
-
-                          <div className="divide-y divide-slate-200/60 dark:divide-slate-800">
-                            {sup.entries.map((slip, slipIdx) => {
-                              const slipDate = new Date(slip.date);
-                              const dateFormatted = slipDate.toLocaleDateString(undefined, { 
-                                month: 'short', 
-                                day: 'numeric', 
-                                year: 'numeric' 
-                              });
-                              const timeFormatted = slipDate.toLocaleTimeString(undefined, { 
-                                hour: '2-digit', 
-                                minute: '2-digit' 
-                              });
-                              const isMorning = (slip.shift || '').toLowerCase().includes('morning');
-
-                              return (
-                                <div 
-                                  key={slip.id || slipIdx}
-                                  className="py-2.5 flex items-center justify-between gap-3 text-xs"
-                                >
-                                  <div className="flex items-center gap-2.5 min-w-0">
-                                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] shrink-0 font-bold ${
-                                      isMorning ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' :
-                                      'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300'
-                                    }`}>
-                                      {isMorning ? <Sun size={12} /> : <Moon size={12} />}
-                                    </div>
-
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className="font-bold text-slate-800 dark:text-slate-200">
-                                          {dateFormatted}
-                                        </span>
-                                        <span className="text-[11px] text-slate-400 font-mono">
-                                          {timeFormatted}
-                                        </span>
-                                        <span className="text-[10px] uppercase font-bold text-slate-500">
-                                          ({slip.shift || 'General'})
-                                        </span>
-                                      </div>
-
-                                      <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
-                                        <span className="text-lime-600 dark:text-lime-400 font-bold">
-                                          {slip.milk_type || 'Milk'}
-                                        </span>
-                                        {slip.fat && Number(slip.fat) > 0 && (
-                                          <span>Fat: <strong className="text-slate-600 dark:text-slate-300">{slip.fat}%</strong></span>
-                                        )}
-                                        {slip.snf && Number(slip.snf) > 0 && (
-                                          <span>SNF: <strong className="text-slate-600 dark:text-slate-300">{slip.snf}</strong></span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-right shrink-0">
-                                    <div className="font-mono font-black text-slate-900 dark:text-white">
-                                      {formatQty(slip.quantity)} L @ Rs {cleanNumber(slip.rate, 1).toFixed(1)}
-                                    </div>
-                                    <div className="text-xs font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                                      Total: {formatCurrency(slip.total_amount)}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
               )}
-            </>
-          ) : (
-            <div className="bg-white dark:bg-slate-850 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-2xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-500 uppercase font-bold border-b border-slate-200/80 dark:border-slate-700/80 text-[10px] tracking-wider">
-                    <tr>
-                      <th className="py-3 px-3.5">Date & Time</th>
-                      <th className="py-3 px-3.5">Farmer / Supplier</th>
-                      <th className="py-3 px-3.5">Shift</th>
-                      <th className="py-3 px-3.5">Variety</th>
-                      <th className="py-3 px-3.5 text-right">Qty (L)</th>
-                      <th className="py-3 px-3.5 text-right">Fat / SNF</th>
-                      <th className="py-3 px-3.5 text-right">Rate (Rs)</th>
-                      <th className="py-3 px-3.5 text-right">Amount (Rs)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {filteredSlips.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className="py-12 text-center text-slate-400">
-                          No delivery slips found matching the current filters.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredSlips.map((slip, idx) => {
-                        const d = new Date(slip.date);
-                        const isMorning = (slip.shift || '').toLowerCase().includes('morning');
-
-                        return (
-                          <tr 
-                            key={slip.id || idx}
-                            className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors"
-                          >
-                            <td className="py-2.5 px-3.5 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
-                              <div>{d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
-                              <div className="text-[10px] text-slate-400 font-mono">{d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                            </td>
-
-                            <td className="py-2.5 px-3.5 font-bold text-slate-900 dark:text-white">
-                              <div>{slip.supplierName}</div>
-                              {slip.supplierVillage && (
-                                <div className="text-[10px] text-slate-400 font-normal">📍 {slip.supplierVillage}</div>
-                              )}
-                            </td>
-
-                            <td className="py-2.5 px-3.5 whitespace-nowrap">
-                              <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                isMorning ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' :
-                                'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300'
-                              }`}>
-                                {isMorning ? <Sun size={10} /> : <Moon size={10} />}
-                                {slip.shift || 'General'}
-                              </span>
-                            </td>
-
-                            <td className="py-2.5 px-3.5 whitespace-nowrap">
-                              <span className="font-semibold text-lime-600 dark:text-lime-400">
-                                {slip.milk_type || 'Milk'}
-                              </span>
-                            </td>
-
-                            <td className="py-2.5 px-3.5 text-right font-mono font-black text-slate-900 dark:text-white">
-                              {formatQty(slip.quantity)} L
-                            </td>
-
-                            <td className="py-2.5 px-3.5 text-right font-mono text-[11px] text-slate-500">
-                              {slip.fat ? `${slip.fat}%` : '—'}{slip.snf ? ` / ${slip.snf}` : ''}
-                            </td>
-
-                            <td className="py-2.5 px-3.5 text-right font-mono font-medium text-slate-700 dark:text-slate-300">
-                              Rs {cleanNumber(slip.rate, 1).toFixed(1)}
-                            </td>
-
-                            <td className="py-2.5 px-3.5 text-right font-mono font-black text-emerald-600 dark:text-emerald-400">
-                              {formatCurrency(slip.total_amount)}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
-          )}
-        </div>
-
-        <div className="p-3.5 sm:px-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-850/60 flex items-center justify-between gap-3 shrink-0">
-          <div className="text-xs text-slate-500 font-medium">
-            Total for selected period: <strong className="text-slate-900 dark:text-white font-mono">{formatQty(totalMilkLiters)} L</strong> ({formatCurrency(totalMilkCost)})
-          </div>
-
-          <div className="flex items-center gap-2">
-            {onOpenProcurement && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!isPage) onClose();
-                  onOpenProcurement();
-                }}
-                className="px-3.5 py-2 bg-lime-600 hover:bg-lime-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-lime-500/20 flex items-center gap-1.5 cursor-pointer"
-              >
-                <span>Record New Milk Intake</span>
-                <ArrowUpRight size={14} />
-              </button>
+            {filteredSuppliers.length === 0 ? (
+              <EmptyState icon={<Droplets />} title="No milk procurement records found" description="No farmers supplied milk matching the selected filters for this time window." />
+            ) : (
+              <>
+                <ul className="space-y-3">
+                  {supplierList.visibleItems.map((sup, index) => (
+                    <SupplierRow
+                      key={sup.supplierId}
+                      sup={sup}
+                      rank={index + 1}
+                      expanded={expandedSupplierIds.has(sup.supplierId)}
+                      onToggle={() => toggleSupplier(sup.supplierId)}
+                      onOpenKhata={onNavigateToSupplier && sup.supplierId !== 'unknown' ? () => { onClose(); onNavigateToSupplier(sup.supplierId); } : undefined}
+                    />
+                  ))}
+                </ul>
+                <LoadMoreRow sentinelRef={supplierList.sentinelRef} hiddenCount={supplierList.hiddenCount} onShowMore={supplierList.showMore} onShowAll={supplierList.showAll} />
+              </>
             )}
-            {!isPage && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-            >
-              Close
-            </button>
-            )}
+          </>
+        ) : (
+          <div className="overflow-hidden rounded-card border border-line bg-surface shadow-e1">
+            <Table className="text-xs">
+              <THead>
+                <tr>
+                  <TH>Date & time</TH>
+                  <TH>Farmer / supplier</TH>
+                  <TH>Shift</TH>
+                  <TH>Variety</TH>
+                  <TH numeric>Qty (L)</TH>
+                  <TH numeric>Fat / SNF</TH>
+                  <TH numeric>Rate (Rs)</TH>
+                  <TH numeric>Amount (Rs)</TH>
+                </tr>
+              </THead>
+              <TBody>
+                {filteredSlips.length === 0 ? (
+                  <tr><td colSpan={8}><EmptyState size="compact" icon={<FileText />} title="No delivery slips match these filters" /></td></tr>
+                ) : slipList.visibleItems.map((slip, index) => {
+                  const when = slipWhen(slip.date);
+                  return (
+                    <TR key={slip.id || index}>
+                      <TD className="whitespace-nowrap py-2.5"><span className="block font-semibold">{when.day}</span>{when.time && <span className="text-[11px] tabular-nums text-fg-subtle">{when.time}</span>}</TD>
+                      <TD className="py-2.5"><span className="block font-semibold">{slip.supplierName}</span>{slip.supplierVillage && <span className="text-[11px] text-fg-subtle">{slip.supplierVillage}</span>}</TD>
+                      <TD className="whitespace-nowrap py-2.5"><ShiftBadge slip={slip} /></TD>
+                      <TD className="whitespace-nowrap py-2.5 text-fg-muted">{slip.milk_type || 'Milk'}</TD>
+                      <TD numeric className="py-2.5">{formatQty(slip.quantity)}</TD>
+                      <TD numeric className="py-2.5 font-normal text-fg-subtle">{slip.fat ? `${slip.fat}%` : '—'}{slip.snf ? ` / ${slip.snf}` : ''}</TD>
+                      <TD numeric className="py-2.5 font-medium text-fg-muted">{cleanNumber(slip.rate, 1).toFixed(1)}</TD>
+                      <TD numeric className="py-2.5">{formatCurrency(slip.total_amount, '')}</TD>
+                    </TR>
+                  );
+                })}
+                <LoadMoreRow colSpan={8} sentinelRef={slipList.sentinelRef} hiddenCount={slipList.hiddenCount} onShowMore={slipList.showMore} onShowAll={slipList.showAll} />
+              </TBody>
+            </Table>
           </div>
-        </div>
+        )}
+      </div>
 
+      <div className="flex shrink-0 flex-col gap-3 border-t border-line bg-surface-2/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <p className="text-xs text-fg-subtle">Total for selected period: <strong className="tabular-nums text-fg">{formatQty(totalMilkLiters)} L</strong> ({formatCurrency(totalMilkCost)})</p>
+        <div className="flex items-center gap-2">
+          {openProcurement && <Button size="sm" rightIcon={<ArrowUpRight />} onClick={openProcurement}>Record new milk intake</Button>}
+          {!isPage && <Button variant="secondary" size="sm" onClick={onClose}>Close</Button>}
+        </div>
       </div>
     </div>
+  );
+
+  if (isPage) return panel;
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4" data-app-modal="true" onKeyDown={handleKeyDown}>
+      <div className="absolute inset-0 bg-slate-950/60 animate-in fade-in duration-150 motion-reduce:animate-none" aria-hidden="true" onClick={onClose} />
+      {panel}
+    </div>,
+    document.body,
   );
 };
 
