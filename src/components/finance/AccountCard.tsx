@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { Layers } from 'lucide-react';
 import type { FinancialAccount } from '../../types';
 import { Badge, Money, Skeleton } from '../ui';

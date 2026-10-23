@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { Check, Plus, Refrigerator, X } from 'lucide-react';
 import { Badge, IconButton, Input, Money } from '../ui';
 import { cn } from '../../lib/cn';

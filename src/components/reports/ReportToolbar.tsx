@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, GitCompareArrows, RotateCcw } from 'lucide-react';
 import { RichSelect, RichSelectOption } from '../RichSelect';
 import { Button, IconButton, SegmentedControl, Toolbar } from '../ui';

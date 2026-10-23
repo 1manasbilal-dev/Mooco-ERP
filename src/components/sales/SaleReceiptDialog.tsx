@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { Printer } from 'lucide-react';
 import type { POSBill } from '../../types';
 import { cleanQty, formatCurrency, formatMoneyRaw } from '../../lib/formatters';

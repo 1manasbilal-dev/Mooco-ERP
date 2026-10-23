@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import { memo, useState } from 'react';
 import { cn } from '../../lib/cn';
 
 interface ProductThumbProps {

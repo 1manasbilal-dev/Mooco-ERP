@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, Tag, X } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { Badge, Button, EmptyState, IconButton, Input, Modal } from '../ui';

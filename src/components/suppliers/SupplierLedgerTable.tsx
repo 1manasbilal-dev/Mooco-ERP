@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { FileText, Trash2 } from 'lucide-react';
 import { LedgerRow, formatLedgerDate } from '../../lib/supplierStatement';
 import { useProgressiveList } from '../../hooks/useProgressiveList';

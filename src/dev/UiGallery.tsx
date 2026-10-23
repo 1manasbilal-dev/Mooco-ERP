@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Banknote, Download, FileText, Milk, Moon, Pencil, Plus, ReceiptText, Sun, Trash2, Users, Wallet,
 } from 'lucide-react';

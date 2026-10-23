@@ -1,4 +1,3 @@
-import React from 'react';
 import { ArrowRight, CalendarDays, Clock, MapPin, Package, Pencil, Phone, Printer, ShoppingBag, Truck, Wallet, XCircle } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useTabs } from '../../context/TabContext';

@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { BookOpen, CalendarDays, ImageDown, Milk, Printer, Receipt, Trash2 } from 'lucide-react';
 import { CashDay, CashLine, DatePreset, formatLedgerDate } from '../../lib/supplierStatement';
 import { useProgressiveList } from '../../hooks/useProgressiveList';

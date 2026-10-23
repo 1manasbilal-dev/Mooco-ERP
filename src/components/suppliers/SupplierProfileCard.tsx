@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import { memo, useState } from 'react';
 import { Archive, ChevronDown, MessageCircle, Pencil, Phone, RotateCcw, Truck, Wallet } from 'lucide-react';
 import { Supplier } from '../../types';
 import { BREAKPOINTS, useMediaQuery } from '../../hooks/useMediaQuery';
