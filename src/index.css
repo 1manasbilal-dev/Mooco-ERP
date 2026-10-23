@@ -650,21 +650,25 @@ select option {
   stroke: var(--bg-card) !important;
 }
 
-/* Data tables (legacy only: components/ui tables carry .ds-table and use the tokens) */
-.dark table:where(:not(.ds-table)) thead {
+/* Data tables (legacy only). components/ui tables carry .ds-table; in hand-built tables, any
+   head, row or cell that sets a token class (bg-surface*, border-line*, text-fg*, text-danger-fg, ...)
+   keeps it. `:where()` keeps the original specificity so legacy screens look exactly as before. */
+.dark table:where(:not(.ds-table)) thead:where(:not([class*="bg-surface"], [class*="bg-canvas"], [class*="bg-brand"])) {
   background-color: var(--bg-app) !important;
 }
-.dark table:where(:not(.ds-table)) thead th {
+.dark table:where(:not(.ds-table)) thead th:where(:not([class*="text-fg"], [class*="text-brand"], [class*="text-danger"], [class*="text-success"], [class*="text-warning"], [class*="text-info"])) {
   color: var(--text-muted) !important;
+}
+.dark table:where(:not(.ds-table)) thead th:where(:not([class*="border-line"])) {
   border-bottom: 1px solid var(--border-color) !important;
 }
-.dark table:where(:not(.ds-table)) tbody tr {
+.dark table:where(:not(.ds-table)) tbody tr:where(:not([class*="border-line"])) {
   border-bottom: 1px solid var(--border-light) !important;
 }
-.dark table:where(:not(.ds-table)) tbody tr:hover {
+.dark table:where(:not(.ds-table)) tbody tr:where(:not([class*="bg-surface"], [class*="bg-brand"], [class*="bg-danger"], [class*="bg-success"], [class*="bg-warning"], [class*="bg-info"])):hover {
   background-color: rgba(27, 38, 64, 0.35) !important;
 }
-.dark table:where(:not(.ds-table)) tbody td {
+.dark table:where(:not(.ds-table)) tbody td:where(:not([class*="text-fg"], [class*="text-brand"], [class*="text-danger"], [class*="text-success"], [class*="text-warning"], [class*="text-info"])) {
   color: var(--text-secondary) !important;
 }
 
@@ -686,9 +690,67 @@ select option {
     margin: 10mm 12mm;
   }
 
+  /* Paper is always light: the light token values (src/styles/tokens.css) even when the screen is in
+     dark mode, and no shadows. `:root.dark` outranks the `.dark` block in tokens.css. The shell also
+     drops the `dark` class while printing (beforeprint), which switches the legacy dark layer off. */
+  :root,
+  :root.dark,
+  .dark {
+    color-scheme: light;
+    --canvas: 255 255 255;
+    --surface: 255 255 255;
+    --surface-2: 243 245 248;
+    --surface-3: 232 236 242;
+    --fg: 15 23 42;
+    --fg-muted: 51 65 85;
+    --fg-subtle: 100 116 139;
+    --fg-faint: 148 163 184;
+    --line: 226 232 240;
+    --line-strong: 203 213 225;
+    --brand: 77 124 15;
+    --brand-hover: 63 98 18;
+    --brand-on: 255 255 255;
+    --brand-soft: 240 250 220;
+    --brand-fg: 63 98 18;
+    --brand-accent: 101 163 13;
+    --ring: 132 204 22;
+    --success: 5 150 105;
+    --success-soft: 236 253 245;
+    --success-fg: 4 120 87;
+    --danger: 220 38 38;
+    --danger-soft: 254 242 242;
+    --danger-fg: 185 28 28;
+    --warning: 217 119 6;
+    --warning-soft: 255 251 235;
+    --warning-fg: 180 83 9;
+    --info: 37 99 235;
+    --info-soft: 239 246 255;
+    --info-fg: 29 78 216;
+    --shadow-e1: none;
+    --shadow-e2: none;
+    --shadow-e3: none;
+    --border-light: #f1f5f9;
+    --shadow-color: transparent;
+    --overview-accent-soft: #f7fee7;
+    --overview-accent-ink: #365314;
+    --overview-danger: #dc2626;
+    --overview-success: #15803d;
+    --glass-cyan: #0891b2;
+    --glass-violet: #7c3aed;
+    --glass-rose: #e11d48;
+    --glass-amber: #d97706;
+    --glass-surface: #ffffff;
+    --glass-border: #e2e8f0;
+    --glass-inset: #f1f5f9;
+    --glass-shadow: none;
+    --glass-slate: #f8fafc;
+  }
+
   *, *::before, *::after {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
   }
 
   html, body {

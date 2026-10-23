@@ -58,11 +58,23 @@ export function useThemeMode() {
     const onSystemChange = () => { if (!readStorage(THEME_KEY)) setThemeMode(systemTheme()); };
     // Another window of the app changed the theme.
     const onStorage = (event: StorageEvent) => { if (event.key === THEME_KEY) setThemeMode(readTheme()); };
+    // Paper is always light: drop the dark class while printing (the legacy dark layer keys off it)
+    // and put it back afterwards. index.css also resets the tokens under @media print.
+    const onBeforePrint = () => {
+      if (themeRef.current !== 'dark') return;
+      document.documentElement.classList.add('theme-switching');
+      document.documentElement.classList.remove('dark');
+    };
+    const onAfterPrint = () => { if (themeRef.current === 'dark') applyTheme('dark'); };
     query.addEventListener('change', onSystemChange);
     window.addEventListener('storage', onStorage);
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
     return () => {
       query.removeEventListener('change', onSystemChange);
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
     };
   }, []);
 
