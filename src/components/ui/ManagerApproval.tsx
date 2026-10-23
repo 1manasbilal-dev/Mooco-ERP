@@ -1,6 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Crown, KeyRound, ShieldCheck } from 'lucide-react';
 import { Modal } from './Modal';
+import { Button } from './Button';
+import { controlClass } from './Field';
+import { cn } from '../../lib/cn';
 import { useDairy } from '../../context/DairyContext';
 import { AppRole, AppUser } from '../../types';
 
@@ -85,35 +88,38 @@ export function useManagerApproval() {
       title={pending.title}
       description={pending.reason}
       initialFocusRef={approvers.length === 1 ? pinRef : undefined}
-      icon={<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400"><ShieldCheck size={20} /></div>}
+      icon={<div className="flex size-10 items-center justify-center rounded-xl bg-warning-soft text-warning-fg ring-1 ring-inset ring-warning/25"><ShieldCheck size={20} /></div>}
       footer={<>
-        <button type="button" onClick={() => close(null)} disabled={busy} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+        <Button variant="secondary" onClick={() => close(null)} disabled={busy}>
           Wapas jayen
-        </button>
-        <button type="submit" form="manager-approval-form" disabled={busy || approvers.length === 0} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50 dark:bg-lime-500 dark:text-slate-950 dark:hover:bg-lime-400">
+        </Button>
+        <Button type="submit" form="manager-approval-form" loading={busy} disabled={approvers.length === 0}>
           {busy ? 'Check ho raha hai…' : 'Approve karein'}
-        </button>
+        </Button>
       </>}
     >
       {approvers.length === 0 ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+        <p className="rounded-control bg-warning-soft p-3 text-sm text-warning-fg ring-1 ring-inset ring-warning/25">
           Koi manager mojood nahi jo ye approval de sake. Owner Settings → Users & Access mein kisi role ko "Manager Approvals" ki ijazat de.
         </p>
       ) : (
         <form id="manager-approval-form" onSubmit={submit} className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label="Manager">
             {approvers.map(user => {
               const active = selected === user.id;
               return (
                 <button
                   key={user.id}
                   type="button"
+                  aria-pressed={active}
                   onClick={() => { setApproverId(user.id); setError(''); window.setTimeout(() => pinRef.current?.focus(), 0); }}
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm font-bold transition-colors ${active
-                    ? 'border-lime-500 bg-lime-50 text-lime-900 dark:border-lime-600 dark:bg-lime-950/40 dark:text-lime-200'
-                    : 'border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800'}`}
+                  className={cn(
+                    'flex h-11 cursor-pointer items-center gap-2 rounded-control px-3 text-left text-sm font-semibold ring-1 ring-inset transition-colors duration-150',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    active ? 'bg-brand-soft text-brand-fg ring-brand-accent' : 'bg-surface text-fg-muted ring-line hover:bg-surface-2 hover:text-fg',
+                  )}
                 >
-                  {user.role_id === 'role_super_admin' ? <Crown size={14} className="shrink-0 text-amber-500" /> : <KeyRound size={14} className="shrink-0 text-slate-400" />}
+                  {user.role_id === 'role_super_admin' ? <Crown size={14} className="shrink-0 text-warning" /> : <KeyRound size={14} className="shrink-0 text-fg-faint" />}
                   <span className="truncate">{user.name}</span>
                 </button>
               );
@@ -126,12 +132,13 @@ export function useManagerApproval() {
             autoComplete="off"
             maxLength={4}
             aria-label="Manager PIN"
+            aria-invalid={error ? true : undefined}
             placeholder="Manager PIN"
             value={pin}
             onChange={event => { setPin(event.target.value.replace(/\D/g, '')); setError(''); }}
-            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-center font-mono text-lg font-black tracking-[0.5em] text-slate-900 outline-none focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            className={cn(controlClass, 'h-12 px-4 text-center font-mono text-lg font-bold tracking-[0.5em] placeholder:tracking-normal')}
           />
-          {error && <p role="alert" className="text-sm font-semibold text-rose-600 dark:text-rose-400">{error}</p>}
+          {error && <p role="alert" className="text-sm font-semibold text-danger-fg">{error}</p>}
         </form>
       )}
     </Modal>

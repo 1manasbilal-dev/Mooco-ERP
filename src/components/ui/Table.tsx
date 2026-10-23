@@ -12,14 +12,14 @@ export function TableContainer({ className, ...props }: React.ComponentProps<'di
 export function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
     <div className="overflow-x-auto">
-      <table className={cn('w-full border-collapse text-sm', className)} {...props} />
+      <table className={cn('ds-table w-full border-collapse text-sm', className)} {...props} />
     </div>
   );
 }
 
-/** Sticky header; give the scrolling parent a max height to keep it visible. */
+/** Sticky header; give the scrolling parent a max height to keep it visible. Solid, not blurred, so long tables scroll smoothly. */
 export function THead({ className, ...props }: React.ComponentProps<'thead'>) {
-  return <thead className={cn('sticky top-0 z-[1] bg-surface-2/95 backdrop-blur-sm', className)} {...props} />;
+  return <thead className={cn('sticky top-0 z-[1] bg-surface-2', className)} {...props} />;
 }
 
 export function TBody({ className, ...props }: React.ComponentProps<'tbody'>) {
