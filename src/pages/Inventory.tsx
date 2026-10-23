@@ -171,7 +171,10 @@ const Inventory: React.FC = () => {
   const typeCounts = useMemo(() => {
     const counts: Record<TypeFilter, number> = { All: allRows.length, 'Sale product': 0, 'Raw material': 0, 'Packaging material': 0 };
     for (const row of allRows) {
-      for (const type of row.item.item_type || []) if (type in counts && type !== 'All') counts[type as TypeFilter] += 1;
+      for (const type of row.item.item_type || []) {
+        const key = type as TypeFilter;
+        if (key in counts && key !== 'All') counts[key] += 1;
+      }
     }
     return counts;
   }, [allRows]);
