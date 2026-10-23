@@ -428,6 +428,93 @@ const findUsableShift = (
     || null;
 };
 
+/**
+ * Server tables the workspace holds. fetchData(keys) reloads only those tables after a write;
+ * fetchData() with no keys reloads everything (startup, Retry, the reconcile after a sync).
+ * 'recentBank' reads only the bank rows created since the newest one already held: enough after a
+ * move that only adds rows (receipt, transfer, shift close), where a full read is ~2.7 MB.
+ */
+type LoadKey =
+  | 'suppliers' | 'customers' | 'items' | 'sales' | 'purchases' | 'materialPurchases' | 'allocations'
+  | 'productionBatches' | 'dailySupply' | 'retailClosings' | 'expenses' | 'recurringExpenses'
+  | 'expenseVendors' | 'expenseVendorTransactions' | 'accounts' | 'bankTransactions' | 'recentBank'
+  | 'manualAccounts' | 'journalEntries' | 'inventoryLogs' | 'customerTransactions' | 'supplierTransactions'
+  | 'settings' | 'businessDays' | 'cashDrawers' | 'cashShifts' | 'handovers' | 'remittances' | 'variances'
+  | 'cashEvents' | 'dayClosings';
+/** null = every table. */
+type LoadScope = ReadonlySet<LoadKey> | null;
+
+// The slices reapplyLedger projects unsynced work onto (items covers items and inventory).
+const LEDGER_KEYS: LoadKey[] = [
+  'sales', 'customers', 'items', 'accounts', 'suppliers', 'expenses', 'expenseVendors', 'purchases',
+  'allocations', 'customerTransactions', 'supplierTransactions', 'bankTransactions', 'retailClosings'
+];
+/** A money move that only inserts bank rows. */
+const MONEY_ADDED: LoadKey[] = ['accounts', 'recentBank', 'cashEvents'];
+/** A move that edits or deletes existing bank rows, so the whole bank history is read again. */
+const MONEY_CHANGED: LoadKey[] = ['accounts', 'bankTransactions', 'cashEvents'];
+const STOCK: LoadKey[] = ['items', 'inventoryLogs'];
+const CASH_CONTROL: LoadKey[] = ['businessDays', 'cashDrawers', 'cashShifts', 'handovers', 'remittances', 'variances', ...MONEY_ADDED];
+// What each offline voucher touches, to take back an optimistic update the server refused.
+const OUTBOX_TABLES: Record<OutboxActionType, LoadKey[]> = {
+  order: ['sales', ...STOCK, 'customers', 'customerTransactions', ...MONEY_ADDED],
+  milk_purchase: ['purchases', 'allocations', 'suppliers', 'supplierTransactions', ...MONEY_ADDED],
+  supplier_payment: ['suppliers', 'supplierTransactions', ...MONEY_ADDED],
+  expense: ['expenses', 'expenseVendors', ...MONEY_ADDED],
+  customer_payment: ['customers', 'customerTransactions', ...MONEY_ADDED],
+  retail_closing: ['retailClosings']
+};
+
+// 100 pages of 1,000 rows. The old cap of 20 would have cut bill and stock-log history silently
+// within a year at the current rate; a capped read now logs a warning.
+const MAX_HISTORY_PAGES = 100;
+// Bank rows created up to ten minutes before the newest one held are read again: a row committed
+// late by a slow transaction can carry an older created_at.
+const BANK_WINDOW_MARGIN_MS = 10 * 60 * 1000;
+
+const newestCreatedAt = (rows: any[]): number => rows.reduce((newest: number, row: any) => {
+  const time = Date.parse(row?.created_at);
+  return Number.isFinite(time) && time > newest ? time : newest;
+}, -Infinity);
+
+// Rows created since sinceMs come from the server; older ones stay as held. Newest first by date,
+// like a full read (the sort is stable, so ties keep their order).
+const mergeRecentRows = (held: any[], recent: any[], sinceMs: number): any[] => {
+  const recentIds = new Set(recent.map(row => row?.id));
+  const older = held.filter(row => !(Date.parse(row?.created_at) >= sinceMs) && !recentIds.has(row?.id));
+  return [...recent, ...older].sort((a, b) => (Date.parse(b?.date) || 0) - (Date.parse(a?.date) || 0));
+};
+
+// A newest-first page followed by the older rows it does not already hold.
+const withOlderRows = <T extends { id?: any }>(firstPage: T[], older: T[]): T[] => {
+  const ids = new Set(firstPage.map(row => row?.id));
+  return [...firstPage, ...older.filter(row => !ids.has(row?.id))];
+};
+
+const mapCashShiftRow = (row: any, accounts: FinancialAccount[], drawers: CashDrawer[]): ShiftSession => {
+  const drawer = drawers.find(d => d.id === row.drawer_id);
+  const acc = accounts.find(a => a.id === row.drawer_id)
+    || accounts.find(a => a.id === drawer?.account_id);
+  const drawerName = acc?.name || drawer?.name || row.drawer_name || 'Cash Drawer';
+  return {
+    ...row,
+    account_id: acc?.id || row.account_id || row.drawer_id,
+    account_name: acc?.name || row.account_name,
+    drawer_name: drawerName,
+    date: row.business_date,
+    shift_name: row.shift_name || `Shift ${new Date(row.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    opening_float: Number(row.opening_counted || 0),
+    start_time: row.started_at,
+    end_time: row.closed_at,
+    expected_drawer_cash: Number(row.expected_closing_cash || 0),
+    actual_physical_cash: row.closing_counted_cash === null ? undefined : Number(row.closing_counted_cash),
+    cash_difference: row.closing_variance === null ? undefined : Number(row.closing_variance),
+    khata_cash_recovered: Number(row.cash_collections || 0),
+    drawer_expenses_paid: Number(row.cash_expenses || 0),
+    spot_purchases_paid: Number(row.cash_purchases || 0)
+  };
+};
+
 export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { showToast } = useToast(); 
 
@@ -555,7 +642,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const initialFetchStarted = useRef(false);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const ledgerBases = useRef(emptyBases());
-  const refreshAgain = useRef(false);
+  // The newest render's state and functions, for loads, listeners and timers that outlive the
+  // render they were started from (assigned just before the context value is built).
+  const latest = useRef<any>(null);
 
   const restoreOperator = async () => {
     setSessionError(null);
@@ -699,34 +788,75 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const lastWorkCountRef = useRef<number>(-1);
   // Local work that was still unsynced when the current server snapshot was requested. A bill that
   // syncs while the snapshot is in flight is no longer "unsynced", yet parts of the snapshot can
-  // predate its effects; reapplyLedger spots that and asks fetchData for one more load
-  // (refreshAgain) instead of showing pre-sale stock/cash/khata until the next reload.
+  // predate its effects; reapplyLedger spots that and queues one more load of the same tables
+  // instead of showing pre-sale stock/cash/khata until the next reload.
   // Only set while loadData runs.
   const preLoadWork = useRef<Awaited<ReturnType<typeof readUnsyncedWork>> | null>(null);
 
-  const reapplyLedger = async () => {
-    const seen = currentEpoch();
-    let work;
-    try {
-      work = await readUnsyncedWork();
-    } catch (err) {
-      console.warn('[Ledger] Could not read the local journal', err);
-      return;
+  // Loads waiting to run: undefined = none, null = everything, a set = just those tables.
+  const queuedLoad = useRef<LoadScope | undefined>(undefined);
+  const queueLoad = (scope: LoadScope) => {
+    const queued = queuedLoad.current;
+    queuedLoad.current = scope === null || queued === null ? null : new Set([...(queued || []), ...scope]);
+  };
+
+  // scope: the tables this load asked for (queued again when the snapshot turns out stale).
+  // reloaded: the slices it actually replaced, null for all of them.
+  const reapplyLedger = async (scope: LoadScope = null, reloaded: LoadScope = null) => {
+    let seen = currentEpoch();
+    let work: Awaited<ReturnType<typeof readUnsyncedWork>> | undefined;
+    // A sale or payment saved while the journal is read may be missing from it: read it once more
+    // (local only) instead of skipping the projection and leaving its effects off the screen.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      seen = currentEpoch();
+      try {
+        work = await readUnsyncedWork();
+      } catch (err) {
+        console.warn('[Ledger] Could not read the local journal', err);
+        return;
+      }
+      if (currentEpoch() === seen) break;
     }
+    if (!work || currentEpoch() !== seen) return;
     const early = preLoadWork.current;
     if (early) {
       // Something synced while this snapshot was loading. Its effects may be in some tables and not
       // others, so neither projecting it nor dropping it is reliably right: project only what is still
-      // unsynced and load once more, so the next snapshot is read entirely after that sync.
-      const syncedMidLoad = <T extends { id: any }>(current: T[], before: T[]) => {
-        const ids = new Set(current.map(row => row.id));
-        return before.some(row => !ids.has(row.id));
-      };
-      if (syncedMidLoad(work.orders, early.orders) || syncedMidLoad(work.customers, early.customers) || syncedMidLoad(work.outbox, early.outbox)) {
-        refreshAgain.current = true;
+      // unsynced and read the tables it touches once more, after that sync.
+      const ids = <T extends { id: any }>(rows: T[]) => new Set(rows.map(row => row.id));
+      const workOrderIds = ids(work.orders);
+      const workCustomerIds = ids(work.customers);
+      const workOutboxIds = ids(work.outbox);
+      const syncedOrderIds = early.orders.filter(order => !workOrderIds.has(order.id)).map(order => order.id);
+      const customerSynced = early.customers.some(customer => !workCustomerIds.has(customer.id));
+      const syncedVouchers = early.outbox.filter(item => !workOutboxIds.has(item.id));
+      if (syncedOrderIds.length || customerSynced || syncedVouchers.length) {
+        const again = new Set<LoadKey>();
+        // Not the bill list (~8 MB): a synced bill missing from it keeps its local copy below.
+        if (syncedOrderIds.length) OUTBOX_TABLES.order.forEach(key => { if (key !== 'sales') again.add(key); });
+        if (customerSynced) ['customers', 'customerTransactions'].forEach(key => again.add(key as LoadKey));
+        syncedVouchers.forEach(item => (OUTBOX_TABLES[item.action_type] || []).forEach(key => again.add(key)));
+        // Only tables this load read can hold a half-old snapshot; the rest keep their own state.
+        const readNow = (key: LoadKey) => !scope || scope.has(key) || (key === 'recentBank' && scope.has('bankTransactions'));
+        const reread = [...again].filter(readNow);
+        if (reread.length) queueLoad(new Set(reread));
+
+        if (syncedOrderIds.length && ledgerBases.current.sales) {
+          const held = ids(ledgerBases.current.sales);
+          const missingIds = syncedOrderIds.filter(id => !held.has(id));
+          if (missingIds.length) {
+            // The bill list was read before these bills synced: show their local copies until the
+            // next read of the list includes them, rather than drop them from the screen.
+            try {
+              const local = (await db.orders.bulkGet(missingIds)).filter(Boolean).map(order => toPosBill(order!));
+              ledgerBases.current.sales = [...local, ...ledgerBases.current.sales];
+            } catch (err) {
+              console.warn('[Ledger] Could not read synced bills', err);
+            }
+          }
+        }
       }
     }
-    if (currentEpoch() !== seen) return;
     const workTotal = work.orders.length + work.customers.length + work.outbox.length;
     if (workTotal === 0 && lastWorkCountRef.current === 0) {
       return;
@@ -734,8 +864,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     lastWorkCountRef.current = workTotal;
 
     const view = projectLedger(ledgerBases.current, work);
-    const publish = (setter: (value: any) => void, next: any[] | null) => {
-      if (!next) return;
+    const publish = (setter: (value: any) => void, next: any[] | null, key: LoadKey) => {
+      // A partial reload republishes only what it read again. Every other slice still carries the
+      // optimistic updates made since its own load, which its older base does not have.
+      if (!next || (reloaded && !reloaded.has(key))) return;
       setter((prev: any[]) => {
         if (currentEpoch() !== seen) return prev;
         const ids = new Set(next.map(row => row?.id).filter(Boolean));
@@ -748,67 +880,81 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return nextCombined;
       });
     };
-    publish(setSales, view.sales);
-    publish(setCustomers, view.customers);
-    publish(setInventory, view.inventory);
-    publish(setItems, view.items);
-    publish(setAccounts, view.accounts);
-    publish(setSuppliers, view.suppliers);
-    publish(setExpenses, view.expenses);
-    publish(setExpenseVendors, view.expenseVendors);
-    publish(setPurchases, view.purchases);
-    publish(setAllocations, view.allocations);
-    publish(setCustomerTransactions, view.customerTransactions);
-    publish(setSupplierTransactions, view.supplierTransactions);
-    publish(setBankTransactions, view.bankTransactions);
-    publish(setRetailClosings, view.retailClosings);
+    publish(setSales, view.sales, 'sales');
+    publish(setCustomers, view.customers, 'customers');
+    publish(setInventory, view.inventory, 'items');
+    publish(setItems, view.items, 'items');
+    publish(setAccounts, view.accounts, 'accounts');
+    publish(setSuppliers, view.suppliers, 'suppliers');
+    publish(setExpenses, view.expenses, 'expenses');
+    publish(setExpenseVendors, view.expenseVendors, 'expenseVendors');
+    publish(setPurchases, view.purchases, 'purchases');
+    publish(setAllocations, view.allocations, 'allocations');
+    publish(setCustomerTransactions, view.customerTransactions, 'customerTransactions');
+    publish(setSupplierTransactions, view.supplierTransactions, 'supplierTransactions');
+    publish(setBankTransactions, view.bankTransactions, 'bankTransactions');
+    publish(setRetailClosings, view.retailClosings, 'retailClosings');
   };
 
   // ascending: name-ordered masters (customers, suppliers) list A->Z; dated history stays newest first.
-  const fetchFullTable = async (tableName: string, orderCol = 'date', maxPages = 20, ascending = false): Promise<{ data: any[]; error: any }> => {
+  // startPage skips pages already held; since limits the read to rows at or after a value.
+  const fetchFullTable = async (
+    tableName: string,
+    orderCol = 'date',
+    maxPages = MAX_HISTORY_PAGES,
+    ascending = false,
+    options: { startPage?: number; since?: { column: string; value: string } } = {}
+  ): Promise<{ data: any[] | null; error: any }> => {
     try {
       const pageSize = 1000;
-      const firstPage = await loadRead(
-        // id breaks ties: rows sharing a timestamp (one sale's stock logs) could repeat or vanish across pages.
-        supabase.from(tableName).select('*').order(orderCol, { ascending }).order('id', { ascending }).range(0, pageSize - 1),
-        35000
-      );
-      // null, not []: callers treat [] as "the table is empty" and would wipe the loaded records.
-      if (firstPage.error) return { data: null, error: firstPage.error };
-      const rows: any[] = [...(firstPage.data || [])];
-      
-      if (firstPage.data && firstPage.data.length === pageSize) {
-        let pageOffset = 1;
-        while (pageOffset < maxPages) {
-          const chunkPages: number[] = [];
-          for (let p = pageOffset; p < Math.min(pageOffset + 5, maxPages); p++) {
-            chunkPages.push(p);
+      const readPage = (page: number) => {
+        let query = supabase.from(tableName).select('*');
+        if (options.since) query = query.gte(options.since.column, options.since.value);
+        return loadRead(
+          // id breaks ties: rows sharing a timestamp (one sale's stock logs) could repeat or vanish across pages.
+          query.order(orderCol, { ascending }).order('id', { ascending }).range(page * pageSize, (page + 1) * pageSize - 1),
+          35000
+        );
+      };
+      const rows: any[] = [];
+      const seenIds = new Set<unknown>();
+      // A row inserted while the pages load shifts the offsets by one; never keep the same row twice.
+      const keep = (data: any[] | null) => {
+        for (const row of data || []) {
+          const id = row?.id;
+          if (id != null) {
+            if (seenIds.has(id)) continue;
+            seenIds.add(id);
           }
-          const chunkResults = await Promise.all(
-            chunkPages.map(p =>
-              loadRead(
-                supabase.from(tableName).select('*').order(orderCol, { ascending }).order('id', { ascending }).range(p * pageSize, (p + 1) * pageSize - 1),
-                35000
-              )
-            )
-          );
-          // A failed page must not pass as the end of the table: that silently dropped older history.
-          const failedPage = chunkResults.find(res => res.error);
-          if (failedPage) return { data: null, error: failedPage.error };
-          let hasMore = true;
-          for (const res of chunkResults) {
-            if (res.data && res.data.length > 0) {
-              rows.push(...res.data);
-            }
-            if (!res.data || res.data.length < pageSize) {
-              hasMore = false;
-              break;
-            }
-          }
-          if (!hasMore) break;
-          pageOffset += 5;
+          rows.push(row);
         }
+      };
+
+      let page = options.startPage || 0;
+      if (page === 0) {
+        const firstPage = await readPage(0);
+        // null, not []: callers treat [] as "the table is empty" and would wipe the loaded records.
+        if (firstPage.error) return { data: null, error: firstPage.error };
+        keep(firstPage.data);
+        if (!firstPage.data || firstPage.data.length < pageSize || maxPages <= 1) return { data: rows, error: null };
+        page = 1;
       }
+      while (page < maxPages) {
+        const chunkPages: number[] = [];
+        for (let p = page; p < Math.min(page + 5, maxPages); p++) {
+          chunkPages.push(p);
+        }
+        const chunkResults = await Promise.all(chunkPages.map(readPage));
+        // A failed page must not pass as the end of the table: that silently dropped older history.
+        const failedPage = chunkResults.find(res => res.error);
+        if (failedPage) return { data: null, error: failedPage.error };
+        for (const res of chunkResults) {
+          keep(res.data);
+          if (!res.data || res.data.length < pageSize) return { data: rows, error: null };
+        }
+        page += 5;
+      }
+      console.warn(`[Workspace load] ${tableName}: stopped at ${maxPages * pageSize} rows; older history was not loaded.`);
       return { data: rows, error: null };
     } catch (err) {
       console.warn(`[Workspace load] fetchFullTable for ${tableName} error:`, err);
@@ -816,20 +962,48 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const loadData = async () => {
-      setIsDataLoading(true);
-      setDataLoadError(null);
+  const loadData = async (scope: LoadScope = null) => {
+      const full = scope === null;
+      const want = (key: LoadKey) => full || scope.has(key);
+      // A partial reload follows a write: no banner, no operator re-check, no first-paint shortcuts.
+      if (full) {
+        setIsDataLoading(true);
+        setDataLoadError(null);
+      }
       // Start access checks immediately, independently of business history/cache reads.
-      const operatorRequest = restoreOperator();
+      const operatorRequest = full ? restoreOperator() : null;
       // Signed out (and no saved session to resume offline): the database would refuse every read,
       // so keep the cached figures and load once the operator logs in.
       if (!hasStoredOperatorSession()) {
-        awaitingLogin.current = true;
-        await operatorRequest;
-        setIsDataLoading(false);
+        if (full) {
+          awaitingLogin.current = true;
+          await operatorRequest;
+          setIsDataLoading(false);
+        }
         return;
       }
-      awaitingLogin.current = false;
+      if (full) awaitingLogin.current = false;
+
+      // Bank history: everything on a full load or after an edit/delete of bank rows; after a move that
+      // only adds rows, just the rows created since the newest one already held.
+      const bankBase = ledgerBases.current.bankTransactions;
+      const newestBankRow = bankBase?.length ? newestCreatedAt(bankBase) : -Infinity;
+      const bankMode: 'full' | 'recent' | null = want('bankTransactions')
+        ? 'full'
+        : (scope?.has('recentBank') ? (Number.isFinite(newestBankRow) ? 'recent' : 'full') : null);
+      const bankSince = bankMode === 'recent' ? new Date(newestBankRow - BANK_WINDOW_MARGIN_MS).toISOString() : '';
+      const reloaded: LoadScope = full ? null : new Set<LoadKey>([...scope, ...(bankMode ? ['bankTransactions' as LoadKey] : [])]);
+      // First load only: today's bills paint the counter while the full bill list downloads.
+      const quickSales = full && !ledgerBases.current.sales;
+      // The full bill list arrives in the second stage. Until then the bills on screen stay as they
+      // are: republishing the previous base would hide every bill synced since it was read.
+      const coreReloaded: LoadScope = full
+        ? (quickSales ? null : new Set(LEDGER_KEYS.filter(key => key !== 'sales')))
+        : new Set([...reloaded].filter(key => key !== 'sales'));
+      // A full load reads the newest 1,000 bank and stock-log rows with the core tables and the older
+      // pages (and every bill) after the workspace opens, so history never competes with them.
+      const firstPageOnly = full ? 1 : MAX_HISTORY_PAGES;
+
       try {
         const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
         // Taken BEFORE the server reads start (see preLoadWork).
@@ -838,41 +1012,44 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         } catch {
           preLoadWork.current = null;
         }
-        const fullSalesPromise = fetchFullTable('sales', 'date');
-        const fullBankPromise = fetchFullTable('bank_transactions', 'date');
+        const SKIP = Promise.resolve({ data: null, error: null });
         const results = await Promise.allSettled([
-          fetchFullTable('suppliers', 'name', 20, true),
-          fetchFullTable('customers', 'name', 20, true),
-          supabase.from('items').select('*').order('sort_order', { ascending: true, nullsFirst: false }).order('name', { ascending: true }),
+          want('suppliers') ? fetchFullTable('suppliers', 'name', MAX_HISTORY_PAGES, true) : SKIP,
+          want('customers') ? fetchFullTable('customers', 'name', MAX_HISTORY_PAGES, true) : SKIP,
+          want('items') ? supabase.from('items').select('*').order('sort_order', { ascending: true, nullsFirst: false }).order('name', { ascending: true }) : SKIP,
           // Midnight in Pakistan, not UTC: a bare date meant 05:00 PKT and dropped the early-morning bills.
-          supabase.from('sales').select('*').gte('date', `${businessDate}T00:00:00+05:00`).order('date', { ascending: false }).limit(300),
-          fetchFullTable('purchases', 'date'),
-          fetchFullTable('material_purchases', 'date'),
-          fetchFullTable('allocations', 'date'),
-          fetchFullTable('production_batches', 'start_date'),
-          fetchFullTable('daily_supply', 'date'),
-          fetchFullTable('retail_closings', 'date'),
-          fetchFullTable('expenses', 'date'),
-          supabase.from('recurring_expenses').select('*'),
-          supabase.from('expense_vendors').select('*'),
-          supabase.from('financial_accounts').select('*'),
-          supabase.from('bank_transactions').select('*').order('date', { ascending: false }),
-          supabase.from('manual_accounts').select('*'),
+          quickSales ? supabase.from('sales').select('*').gte('date', `${businessDate}T00:00:00+05:00`).order('date', { ascending: false }).limit(300) : SKIP,
+          want('purchases') ? fetchFullTable('purchases', 'date') : SKIP,
+          want('materialPurchases') ? fetchFullTable('material_purchases', 'date') : SKIP,
+          want('allocations') ? fetchFullTable('allocations', 'date') : SKIP,
+          want('productionBatches') ? fetchFullTable('production_batches', 'start_date') : SKIP,
+          want('dailySupply') ? fetchFullTable('daily_supply', 'date') : SKIP,
+          want('retailClosings') ? fetchFullTable('retail_closings', 'date') : SKIP,
+          want('expenses') ? fetchFullTable('expenses', 'date') : SKIP,
+          want('recurringExpenses') ? supabase.from('recurring_expenses').select('*') : SKIP,
+          want('expenseVendors') ? supabase.from('expense_vendors').select('*') : SKIP,
+          want('accounts') ? supabase.from('financial_accounts').select('*') : SKIP,
+          bankMode === 'full'
+            ? fetchFullTable('bank_transactions', 'date', firstPageOnly)
+            : bankMode === 'recent'
+              ? fetchFullTable('bank_transactions', 'date', MAX_HISTORY_PAGES, false, { since: { column: 'created_at', value: bankSince } })
+              : SKIP,
+          want('manualAccounts') ? supabase.from('manual_accounts').select('*') : SKIP,
           // Paged: PostgREST returns at most 1000 rows per request, which silently cut long histories.
-          fetchFullTable('journal_entries', 'date'),
-          fetchFullTable('inventory_logs', 'date'),
-          fetchFullTable('customer_transactions', 'date'),
-          fetchFullTable('supplier_transactions', 'date'),
-          supabase.from('app_settings').select('*').eq('id', 'global_settings').single(),
-          fetchFullTable('expense_vendor_transactions', 'date'),
-          fetchFullTable('business_days', 'business_date'),
-          supabase.from('cash_drawers').select('*').order('name'),
-          fetchFullTable('cash_shifts', 'started_at'),
-          fetchFullTable('drawer_handovers', 'declared_at'),
-          fetchFullTable('cash_remittances', 'declared_at'),
-          fetchFullTable('cash_variances', 'created_at'),
-          fetchFullTable('shift_cash_events', 'occurred_at'),
-          supabase.from('day_closings').select('*').order('date', { ascending: false }),
+          want('journalEntries') ? fetchFullTable('journal_entries', 'date') : SKIP,
+          want('inventoryLogs') ? fetchFullTable('inventory_logs', 'date', firstPageOnly) : SKIP,
+          want('customerTransactions') ? fetchFullTable('customer_transactions', 'date') : SKIP,
+          want('supplierTransactions') ? fetchFullTable('supplier_transactions', 'date') : SKIP,
+          want('settings') ? supabase.from('app_settings').select('*').eq('id', 'global_settings').single() : SKIP,
+          want('expenseVendorTransactions') ? fetchFullTable('expense_vendor_transactions', 'date') : SKIP,
+          want('businessDays') ? fetchFullTable('business_days', 'business_date') : SKIP,
+          want('cashDrawers') ? supabase.from('cash_drawers').select('*').order('name') : SKIP,
+          want('cashShifts') ? fetchFullTable('cash_shifts', 'started_at') : SKIP,
+          want('handovers') ? fetchFullTable('drawer_handovers', 'declared_at') : SKIP,
+          want('remittances') ? fetchFullTable('cash_remittances', 'declared_at') : SKIP,
+          want('variances') ? fetchFullTable('cash_variances', 'created_at') : SKIP,
+          want('cashEvents') ? fetchFullTable('shift_cash_events', 'occurred_at') : SKIP,
+          want('dayClosings') ? supabase.from('day_closings').select('*').order('date', { ascending: false }) : SKIP,
         ].map(query => loadRead<any>(query as any, 35000)));
         const failedReads = results.filter(result => result.status === 'rejected' || result.value.error);
         if (failedReads.length) {
@@ -884,8 +1061,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
 
         const [
-          sRes, cRes, iRes, saleRes, purRes, mpRes, alRes, pbRes, dsRes, rcRes, 
-          exRes, reRes, evRes, faRes, btRes, maRes, jeRes, 
+          sRes, cRes, iRes, saleRes, purRes, mpRes, alRes, pbRes, dsRes, rcRes,
+          exRes, reRes, evRes, faRes, btRes, maRes, jeRes,
           ilRes, ctRes, stRes, setRes, evtRes,
           bdRes, drawersRes, shiftsRes, handoversRes, remittancesRes, variancesRes, cashEventsRes, dcRes
         ] = results;
@@ -906,7 +1083,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ledgerBases.current.suppliers = serverSuppliers;
           setSuppliers(serverSuppliers);
         }
-        
+
         if (setRes.status === 'fulfilled' && setRes.value.data) {
            const dbSettings = setRes.value.data;
            setSettings(prev => ({
@@ -918,7 +1095,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               security: { ...prev.security, ...(dbSettings.security || {}) },
            }));
         }
-        
+
         // Pending local Dexie records, so unsynced work is not lost on re-fetch.
         let pendingOrders: POSBill[] = [];
         let pendingCustomers: Customer[] = [];
@@ -1022,22 +1199,24 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
 
         if (cRes.status === 'fulfilled' && cRes.value.data) {
-          const serverCustomers = cRes.value.data.map((c: any) => ({ 
-            id: c.id, 
-            name: c.name || 'Unknown', 
-            phone: c.phone || '', 
-            address: c.address || '', 
-            route: c.route || '', 
-            type: c.type || 'Regular', 
-            balance: roundCurrency(c.balance || 0), 
-            isActive: c.is_active, 
-            ...c.data 
+          const serverCustomers = cRes.value.data.map((c: any) => ({
+            id: c.id,
+            name: c.name || 'Unknown',
+            phone: c.phone || '',
+            address: c.address || '',
+            route: c.route || '',
+            type: c.type || 'Regular',
+            balance: roundCurrency(c.balance || 0),
+            isActive: c.is_active,
+            ...c.data
           }));
           const serverCustIds = new Set(serverCustomers.map((c: any) => c.id));
           const unmergedPending = pendingCustomers.filter(p => !serverCustIds.has(p.id));
           ledgerBases.current.customers = serverCustomers;
           setCustomers([...unmergedPending, ...serverCustomers]);
-        } else {
+        } else if (want('customers') && !ledgerBases.current.customers) {
+          // The offline copy only stands in when nothing was loaded yet: after a failed refresh the
+          // figures on screen are newer than that copy.
           try {
             const cachedCustomers = await db.customers.toArray();
             const mapped = cachedCustomers.map(toCustomer);
@@ -1053,11 +1232,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (iRes.status === 'fulfilled' && iRes.value.data) {
           const mappedItems: ItemDefinition[] = iRes.value.data.map((i: any) => {
             const parsedTypes = parsePostgresArray(i.type);
-            return { 
-              id: i.id, name: i.name || 'Unknown', category: Array.isArray(i.category) ? i.category : [i.category || 'Uncategorized'], 
-              item_type: (parsedTypes.length > 0 ? parsedTypes : ['Sale product']) as any, 
+            return {
+              id: i.id, name: i.name || 'Unknown', category: Array.isArray(i.category) ? i.category : [i.category || 'Uncategorized'],
+              item_type: (parsedTypes.length > 0 ? parsedTypes : ['Sale product']) as any,
               unit: i.unit || 'units', cost_price: Math.round((Number(i.cost_price) || 0) * 10000) / 10000, // per-g / per-ml costs need more than 2 decimals
-              selling_price: roundCurrency(i.selling_price || 0), 
+              selling_price: roundCurrency(i.selling_price || 0),
               isActive: i.is_active, isSystem: i.is_system, source: i.source || 'Both', reorder_level: i.reorder_level || 10,
               description: i.description || '',
               recipe: i.recipe || [], variants: i.variants || [],
@@ -1079,16 +1258,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const mappedInventory: InventoryItem[] = iRes.value.data.map((i: any) => {
             const parsedTypes = parsePostgresArray(i.type);
             const isRaw = parsedTypes.includes('Raw material') || parsedTypes.includes('Packaging material');
-            return { 
-              id: `inv_${i.id}`, 
-              item_id: i.id, 
-              name: i.name || 'Unknown', 
-              category: Array.isArray(i.category) ? i.category[0] : i.category, 
-              stock_type: isRaw ? StockType.RAW_MATERIAL : StockType.RETAIL_STOCK, 
-              quantity: roundQuantity(i.stock || 0), 
-              unit: i.unit || 'units', 
-              price: roundCurrency(i.selling_price || i.cost_price || 0), 
-              variant_stocks: i.variant_stocks || {} 
+            return {
+              id: `inv_${i.id}`,
+              item_id: i.id,
+              name: i.name || 'Unknown',
+              category: Array.isArray(i.category) ? i.category[0] : i.category,
+              stock_type: isRaw ? StockType.RAW_MATERIAL : StockType.RETAIL_STOCK,
+              quantity: roundQuantity(i.stock || 0),
+              unit: i.unit || 'units',
+              price: roundCurrency(i.selling_price || i.cost_price || 0),
+              variant_stocks: i.variant_stocks || {}
             };
           });
 
@@ -1096,7 +1275,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ledgerBases.current.inventory = mappedInventory;
           setItems(mappedItems);
           setInventory(mappedInventory);
-        } else {
+        } else if (want('items') && !ledgerBases.current.items) {
           try {
             const cached = mapCatalogCache(await db.catalog_cache.toArray());
             if (cached.items.length) {
@@ -1110,22 +1289,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         }
 
-        let saleDataRows = (saleRes.status === 'fulfilled' && saleRes.value?.data) ? saleRes.value.data : null;
-        if (!saleDataRows) {
-          try {
-            console.warn('[Workspace load] Retrying sales fetch individually...');
-            const directSaleRes = await fetchFullTable('sales', 'date');
-            if (directSaleRes.data && directSaleRes.data.length > 0) {
-              saleDataRows = directSaleRes.data;
-            }
-          } catch (retryErr) {
-            console.warn('[Workspace load] Targeted sales retry failed:', retryErr);
-          }
-        }
-
         const applyServerSales = (rows: any[]) => {
-          const serverSales = rows.map((s: any) => ({ 
-            ...s, 
+          const serverSales = rows.map((s: any) => ({
+            ...s,
             paid_amount: s.paid_amount !== undefined ? roundCurrency(s.paid_amount) : (s.details?.paid_amount !== undefined ? roundCurrency(s.details.paid_amount) : roundCurrency(s.total)),
             due_amount: s.due_amount !== undefined ? roundCurrency(s.due_amount) : roundCurrency(s.details?.due_amount || 0),
             // Returns are stored inside details; screens read them from the bill itself.
@@ -1143,16 +1309,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ledgerBases.current.sales = serverSales;
           setSales([...unmergedOrders, ...serverSales]);
         };
-        if (saleDataRows) applyServerSales(saleDataRows);
-        else {
-          try {
-            const cachedOrders = await db.orders.toArray();
-            if (cachedOrders.length) {
-              ledgerBases.current.sales = cachedOrders.map(toPosBill);
-              setSales(ledgerBases.current.sales);
+        if (quickSales) {
+          const quickRows = saleRes.status === 'fulfilled' ? saleRes.value?.data : null;
+          if (quickRows) applyServerSales(quickRows);
+          else {
+            // The full bill list still loads below; until then the counter shows this device's bills.
+            try {
+              const cachedOrders = await db.orders.toArray();
+              if (cachedOrders.length) {
+                ledgerBases.current.sales = cachedOrders.map(toPosBill);
+                setSales(ledgerBases.current.sales);
+              }
+            } catch (err) {
+              console.warn('[Sales cache]', err);
             }
-          } catch (err) {
-            console.warn('[Sales cache]', err);
           }
         }
         if (purRes.status === 'fulfilled' && purRes.value.data) {
@@ -1187,8 +1357,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             ...a,
             original_quantity: roundQuantity(a.original_quantity || 0),
             allocated_quantity: roundQuantity(a.allocated_quantity || 0),
-            remaining_quantity: a.remaining_quantity !== null && a.remaining_quantity !== undefined 
-              ? roundQuantity(a.remaining_quantity) 
+            remaining_quantity: a.remaining_quantity !== null && a.remaining_quantity !== undefined
+              ? roundQuantity(a.remaining_quantity)
               : roundQuantity(a.original_quantity || 0)
           }));
           ledgerBases.current.allocations = serverAllocations;
@@ -1205,7 +1375,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const serverExpenses = exRes.value.data.map((ex: any) => {
             const d = ex.details || {};
             const totalAmt = Number(ex.amount ?? d.amount ?? 0);
-            
+
             const rawStatus = (ex.payment_status || d.payment_status || d.paymentStatus || '').toString();
             const isUnpaid = rawStatus.toLowerCase() === 'unpaid';
 
@@ -1252,23 +1422,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         if (reRes.status === 'fulfilled' && reRes.value.data) setRecurringExpenses(reRes.value.data.map((re: any) => ({ id: re.id, name: re.name, amount: re.amount || 0, ...re.details })));
         if (evRes.status === 'fulfilled' && evRes.value.data) {
-          const serverVendors = evRes.value.data.map((ev: any) => ({ 
-          id: ev.id, 
-          name: ev.name || 'Unknown', 
-          service_type: ev.service_type || ev.details?.service_type || 'Other', 
-          phone: ev.phone || ev.details?.phone || '', 
+          const serverVendors = evRes.value.data.map((ev: any) => ({
+          id: ev.id,
+          name: ev.name || 'Unknown',
+          service_type: ev.service_type || ev.details?.service_type || 'Other',
+          phone: ev.phone || ev.details?.phone || '',
           contact_person: ev.contact_person || ev.details?.contact_person || '',
-          address: ev.address || ev.details?.address || '', 
-          notes: ev.notes || ev.details?.notes || '', 
-          total_paid: ev.total_paid !== undefined ? ev.total_paid : (ev.details?.total_paid || 0), 
+          address: ev.address || ev.details?.address || '',
+          notes: ev.notes || ev.details?.notes || '',
+          total_paid: ev.total_paid !== undefined ? ev.total_paid : (ev.details?.total_paid || 0),
           total_billed: ev.total_billed !== undefined ? ev.total_billed : (ev.details?.total_billed || 0),
           pending_balance: ev.pending_balance !== undefined ? ev.pending_balance : (ev.balance !== undefined ? ev.balance : (ev.details?.pending_balance || 0)),
           opening_balance: ev.opening_balance !== undefined ? ev.opening_balance : (ev.details?.opening_balance || 0),
           bank_name: ev.bank_name || ev.details?.bank_name || '',
           account_number: ev.account_number || ev.details?.account_number || '',
           iban: ev.iban || ev.details?.iban || '',
-          isActive: ev.is_active !== undefined ? ev.is_active : (ev.details?.isActive !== undefined ? ev.details.isActive : true), 
-          ...ev.details 
+          isActive: ev.is_active !== undefined ? ev.is_active : (ev.details?.isActive !== undefined ? ev.details.isActive : true),
+          ...ev.details
         }));
           ledgerBases.current.expenseVendors = serverVendors;
           setExpenseVendors(serverVendors);
@@ -1290,12 +1460,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             ...evt.details
           })));
         }
+        let loadedAccounts: FinancialAccount[] | null = null;
         if (faRes.status === 'fulfilled' && faRes.value.data && !faRes.value.error) {
           const serverAccounts = faRes.value.data.map((a: any) => ({ id: a.id, name: a.name, type: a.type, balance: a.balance || 0, isActive: a.is_active, ...a.details }));
+          loadedAccounts = serverAccounts;
           ledgerBases.current.accounts = serverAccounts;
           setAccounts(serverAccounts);
           try { localStorage.setItem('mooco_accounts_snapshot', JSON.stringify(serverAccounts)); } catch { /* ignore quota */ }
-        } else {
+        } else if (want('accounts') && !ledgerBases.current.accounts) {
           try {
             const saved = localStorage.getItem('mooco_accounts_snapshot');
             const cachedAccounts = saved ? JSON.parse(saved) : [];
@@ -1307,9 +1479,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             console.warn('[Account cache]', err);
           }
         }
+        let bankFirstPage: any[] | null = null;
         if (btRes.status === 'fulfilled' && btRes.value.data) {
-          ledgerBases.current.bankTransactions = btRes.value.data;
-          setBankTransactions(btRes.value.data);
+          let rows = btRes.value.data;
+          if (bankMode === 'recent' && bankBase) {
+            rows = mergeRecentRows(bankBase, rows, newestBankRow - BANK_WINDOW_MARGIN_MS);
+          } else if (full) {
+            bankFirstPage = rows;
+            // Older pages follow in the second stage; until then keep the older rows already held,
+            // so a statement on screen does not lose its history for a few seconds.
+            if (rows.length >= 1000 && bankBase) rows = withOlderRows(rows, bankBase);
+          }
+          ledgerBases.current.bankTransactions = rows;
+          setBankTransactions(rows);
         }
         if (maRes.status === 'fulfilled' && maRes.value.data) {
           const rawAccounts = maRes.value.data;
@@ -1330,7 +1512,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           })));
         }
         if (jeRes.status === 'fulfilled' && jeRes.value.data) setJournalEntries(jeRes.value.data.map((j: any) => ({ id: j.id, date: j.date, totalAmount: j.total_amount, createdAt: j.created_at, ...j.details })));
-        if (ilRes.status === 'fulfilled' && ilRes.value.data) setInventoryLogs(ilRes.value.data);
+        let logsFirstPage: any[] | null = null;
+        if (ilRes.status === 'fulfilled' && ilRes.value.data) {
+          const rows = ilRes.value.data;
+          if (full) logsFirstPage = rows;
+          const previousLogs: InventoryLog[] = latest.current.inventoryLogs;
+          setInventoryLogs(full && rows.length >= 1000 && previousLogs?.length ? withOlderRows(rows, previousLogs) : rows);
+        }
         if (ctRes.status === 'fulfilled' && ctRes.value.data) {
           // Keep `details` itself too: statements read details.account_id / details.source.
           const serverCustomerTx = ctRes.value.data.map((ct: any) => ({ id: ct.id, customer_id: ct.customer_id, date: ct.date, type: ct.type, amount: ct.amount || 0, mode: ct.mode || ct.details?.mode, note: ct.note || ct.details?.note, ...ct.details, details: ct.details || {}, shift_session_id: ct.shift_session_id ?? ct.details?.shift_session_id, business_day_id: ct.business_day_id ?? ct.details?.business_day_id }));
@@ -1348,22 +1536,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
 
         if (bdRes.status === 'fulfilled' && bdRes.value.data) setBusinessDays(bdRes.value.data as BusinessDay[]);
-        if (drawersRes.status === 'fulfilled' && drawersRes.value.data) setCashDrawers(drawersRes.value.data as CashDrawer[]);
+        const loadedDrawers = drawersRes.status === 'fulfilled' && drawersRes.value.data ? drawersRes.value.data as CashDrawer[] : null;
+        if (loadedDrawers) setCashDrawers(loadedDrawers);
         if (shiftsRes.status === 'fulfilled' && shiftsRes.value.data) {
-          setShiftSessions(shiftsRes.value.data.map((row: any) => ({
-            ...row,
-            date: row.business_date,
-            shift_name: row.shift_name || `Shift ${new Date(row.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-            opening_float: Number(row.opening_counted || 0),
-            start_time: row.started_at,
-            end_time: row.closed_at,
-            expected_drawer_cash: Number(row.expected_closing_cash || 0),
-            actual_physical_cash: row.closing_counted_cash === null ? undefined : Number(row.closing_counted_cash),
-            cash_difference: row.closing_variance === null ? undefined : Number(row.closing_variance),
-            khata_cash_recovered: Number(row.cash_collections || 0),
-            drawer_expenses_paid: Number(row.cash_expenses || 0),
-            spot_purchases_paid: Number(row.cash_purchases || 0)
-          })));
+          // Same mapping as a shift started or closed here (drawer account and name included), so the
+          // receipt account of a bill does not depend on which refresh ran last.
+          const shiftAccounts = loadedAccounts || latest.current.accounts;
+          const shiftDrawers = loadedDrawers || latest.current.cashDrawers;
+          setShiftSessions(shiftsRes.value.data.map((row: any) => mapCashShiftRow(row, shiftAccounts, shiftDrawers)));
         }
         if (handoversRes.status === 'fulfilled' && handoversRes.value.data) setCashHandovers(handoversRes.value.data as CashHandover[]);
         if (remittancesRes.status === 'fulfilled' && remittancesRes.value.data) setCashRemittances(remittancesRes.value.data as CashRemittance[]);
@@ -1391,155 +1571,110 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           console.warn('[Day Closings Fetch] operating offline:', dcErr);
         }
 
-        await reapplyLedger();
+        await reapplyLedger(scope, coreReloaded);
 
-        syncService.cacheCatalogFromSupabase({
-          items: iRes.status === 'fulfilled' ? iRes.value.data : undefined,
-          customers: cRes.status === 'fulfilled' ? cRes.value.data : undefined
-        });
-
-        // Allow workspace to render as long as core tables (suppliers, customers, items, accounts) loaded
-        const coreFailed = [results[0], results[1], results[2], results[13]].some(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error));
-        if (!coreFailed) {
-          setHasLoadedData(true);
-        } else if (!failedReads.length) {
-          setHasLoadedData(true);
+        if (want('items') || want('customers')) {
+          syncService.cacheCatalogFromSupabase({
+            items: iRes.status === 'fulfilled' ? iRes.value.data : undefined,
+            customers: cRes.status === 'fulfilled' ? cRes.value.data : undefined
+          });
         }
 
-        try {
-          const fullSaleRes = await fullSalesPromise;
-          if (fullSaleRes?.data && fullSaleRes.data.length > 0) {
-            applyServerSales(fullSaleRes.data);
-            await reapplyLedger();
+        if (full) {
+          // Allow workspace to render as long as core tables (suppliers, customers, items, accounts) loaded
+          const coreFailed = [results[0], results[1], results[2], results[13]].some(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error));
+          if (!coreFailed) {
+            setHasLoadedData(true);
+          } else if (!failedReads.length) {
+            setHasLoadedData(true);
           }
-        } catch (fullSalesErr) {
-          console.warn('[Workspace load] Full sales history failed:', fullSalesErr);
         }
 
-        try {
-          const fullBankRes = await fullBankPromise;
-          if (fullBankRes?.data && fullBankRes.data.length > 0) {
-            ledgerBases.current.bankTransactions = fullBankRes.data;
-            setBankTransactions(fullBankRes.data);
-          }
-        } catch (fullBankErr) {
-          console.warn('[Workspace load] Full bank transactions history failed:', fullBankErr);
+        // History, read after the workspace is open: every bill, plus the bank and stock-log pages
+        // older than the newest 1,000 (a full first page means there may be more).
+        const [salesHistory, bankHistory, logsHistory] = await Promise.all([
+          want('sales') ? fetchFullTable('sales', 'date') : null,
+          bankFirstPage && bankFirstPage.length >= 1000 ? fetchFullTable('bank_transactions', 'date', MAX_HISTORY_PAGES, false, { startPage: 1 }) : null,
+          logsFirstPage && logsFirstPage.length >= 1000 ? fetchFullTable('inventory_logs', 'date', MAX_HISTORY_PAGES, false, { startPage: 1 }) : null
+        ]);
+        if (salesHistory?.data) applyServerSales(salesHistory.data);
+        if (bankHistory?.data && bankFirstPage) {
+          const rows = withOlderRows(bankFirstPage, bankHistory.data);
+          ledgerBases.current.bankTransactions = rows;
+          setBankTransactions(rows);
+        }
+        if (logsHistory?.data && logsFirstPage) setInventoryLogs(withOlderRows(logsFirstPage, logsHistory.data));
+        if (salesHistory?.data || bankHistory?.data) await reapplyLedger(scope, salesHistory?.data ? reloaded : coreReloaded);
+        if ((salesHistory && !salesHistory.data) || (bankHistory && !bankHistory.data) || (logsHistory && !logsHistory.data)) {
+          console.warn('[Workspace load] History pages failed:', salesHistory?.error || bankHistory?.error || logsHistory?.error);
+          setDataLoadError('Some records could not be loaded. Figures may be incomplete; retry before making changes.');
         }
 
       } catch (error) {
         console.warn("Supabase fetch notice (operating offline):", error);
         setDataLoadError(error instanceof Error ? error.message : 'Records could not be loaded. Please retry.');
+        // Offline copies stand in only for what was never loaded; anything already on screen is newer.
         try {
-          const cachedItems = await withDeadline(() => db.catalog_cache.toArray(), 3000);
-          if (cachedItems && cachedItems.length > 0) {
-            setItems(cachedItems.map((i: any) => ({
-              id: i.id,
-              name: i.name,
-              category: i.category,
-              item_type: i.item_type,
-              unit: i.unit,
-              cost_price: i.cost_price,
-              selling_price: i.selling_price,
-              isActive: i.is_active,
-              isSystem: false,
-              source: 'Both',
-              reorder_level: 10,
-              description: '',
-              variants: i.variants || [],
-              variant_stocks: i.variant_stocks || {},
-              quick_amounts: i.quick_amounts || [],
-              pos_primary_mode: i.pos_primary_mode || 'amount',
-              allow_loose_sale: i.allow_loose_sale,
-              image_url: i.image_url
-            })));
-            setInventory(cachedItems.map((i: any) => ({
-              id: `inv_${i.id}`,
-              item_id: i.id,
-              name: i.name,
-              category: i.category[0] || 'Dairy products',
-              stock_type: StockType.RETAIL_STOCK,
-              quantity: i.stock,
-              unit: i.unit,
-              price: i.selling_price,
-              variant_stocks: i.variant_stocks || {}
-            })));
-          }
-
-          const cachedCustomers = await withDeadline(() => db.customers.toArray(), 3000);
-          if (cachedCustomers && cachedCustomers.length > 0) {
-            setCustomers(cachedCustomers.map((c: any) => ({
-              id: c.id,
-              name: c.name,
-              phone: c.phone || '',
-              address: c.address || '',
-              route: c.route || '',
-              type: c.type || 'Retail Counter',
-              balance: c.balance || 0,
-              isActive: c.is_active,
-              ...(c.data || {})
-            })));
-          }
-
-          const cachedOrders = await withDeadline(() => db.orders.toArray(), 3000);
-          if (cachedOrders && cachedOrders.length > 0) {
-            setSales(cachedOrders.map((o: any) => ({
-              id: o.id,
-              bill_number: o.bill_number,
-              date: o.date,
-              customer_id: o.customer_id,
-              customer_name: o.customer_name,
-              subtotal: o.subtotal,
-              discount: o.discount,
-              total: o.total,
-              payment_mode: o.payment_mode,
-              status: o.status,
-              items: o.items,
-              // A credit bill with nothing paid has paid_amount 0, which must not fall back to the total.
-              paid_amount: o.paid_amount ?? o.details?.paid_amount ?? (String(o.payment_mode || '').toLowerCase() === 'credit' ? 0 : o.total),
-              due_amount: o.due_amount ?? o.details?.due_amount ?? 0,
-              details: o.details,
-              business_day_id: o.business_day_id,
-              shift_session_id: o.shift_session_id,
-              drawer_id: o.drawer_id
-            })));
-          }
           if (!ledgerBases.current.items) {
-            const cached = mapCatalogCache(await db.catalog_cache.toArray());
+            const cached = mapCatalogCache(await withDeadline(() => db.catalog_cache.toArray(), 3000));
             if (cached.items.length) {
               ledgerBases.current.items = cached.items;
               ledgerBases.current.inventory = cached.inventory;
+              setItems(cached.items);
+              setInventory(cached.inventory);
             }
           }
           if (!ledgerBases.current.customers) {
-            const cachedCustomers = await db.customers.toArray();
-            if (cachedCustomers.length) ledgerBases.current.customers = cachedCustomers.map(toCustomer);
+            const cachedCustomers = await withDeadline(() => db.customers.toArray(), 3000);
+            if (cachedCustomers.length) {
+              ledgerBases.current.customers = cachedCustomers.map(toCustomer);
+              setCustomers(ledgerBases.current.customers);
+            }
           }
           if (!ledgerBases.current.sales) {
-            const cachedOrders = await db.orders.toArray();
-            if (cachedOrders.length) ledgerBases.current.sales = cachedOrders.map(toPosBill);
+            const cachedOrders = await withDeadline(() => db.orders.toArray(), 3000);
+            if (cachedOrders.length) {
+              ledgerBases.current.sales = cachedOrders.map(toPosBill);
+              setSales(ledgerBases.current.sales);
+            }
           }
-          await reapplyLedger();
+          await reapplyLedger(scope, coreReloaded);
         } catch (dexieErr) {
           console.error("Dexie offline fallback error:", dexieErr);
         }
       } finally {
         preLoadWork.current = null;
-        setIsDataLoading(false);
-        await operatorRequest;
+        if (full) {
+          setIsDataLoading(false);
+          await operatorRequest;
+        }
       }
     };
 
-  const fetchData = (): Promise<void> => {
-    if (refreshInFlight.current) {
-      refreshAgain.current = true;
-      return refreshInFlight.current;
-    }
+  /**
+   * Reloads records from the server. tables: just those tables (see LoadKey); none = everything.
+   * Requests made while a load runs are merged into one more load that starts when it ends, and the
+   * promise resolves once every requested table has been read.
+   */
+  const fetchData = (tables?: readonly LoadKey[]): Promise<void> => {
+    queueLoad(tables ? new Set(tables) : null);
+    if (refreshInFlight.current) return refreshInFlight.current;
     const request = (async () => {
-      do {
-        refreshAgain.current = false;
-        await loadData();
-      } while (refreshAgain.current);
-    })().finally(() => { refreshInFlight.current = null; });
+      try {
+        while (queuedLoad.current !== undefined) {
+          const scope = queuedLoad.current;
+          queuedLoad.current = undefined;
+          try {
+            await latest.current.loadData(scope);
+          } catch (err) {
+            console.warn('[Workspace load]', err);
+          }
+        }
+      } finally {
+        // Cleared in the same turn as the last queue check, so a request can never land in between.
+        refreshInFlight.current = null;
+      }
+    })();
     refreshInFlight.current = request;
     return request;
   };
@@ -1574,7 +1709,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (err) {
       if (isPermanentSyncError(err)) {
         noteLocalWrite();
-        void fetchData();
+        // Nothing was saved: reload the tables the optimistic update touched, so it is taken back.
+        void fetchData(OUTBOX_TABLES[action]);
         throw err;
       }
       await queue();
@@ -2271,7 +2407,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('items').insert([dbItem]);
       if (error) throw error;
       showToast("Item added successfully", "success");
-      fetchData();
+      fetchData(['items']);
       return true;
     } catch(e: any) {
       console.error("Error adding item:", e);
@@ -2319,7 +2455,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('items').update(dbUpdates).eq('id', id);
       if (error) throw error;
       showToast("Item updated successfully", "success");
-      fetchData();
+      fetchData(['items']);
       return true;
     } catch(e: any) {
       console.error("Error updating item:", e);
@@ -2337,7 +2473,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('items').delete().eq('id', id);
       if (error) throw error;
       showToast("Product deleted successfully", "success");
-      fetchData();
+      fetchData(['items']);
       return true;
     } catch(e: any) {
       showToast(`Failed to delete product: ${e.message || 'Error'}`, "error");
@@ -2366,7 +2502,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (err: any) {
       console.error("Error reordering items:", err);
       showToast("Failed to save product order", "error");
-      fetchData();
+      fetchData(['items']);
       return false;
     }
   };
@@ -2492,7 +2628,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         
         setAllocations(updatedAllocations);
-        fetchData();
+        fetchData(['allocations', ...STOCK]);
         return true;
       } catch (e) {
         console.error(e);
@@ -2573,7 +2709,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
           
           showToast(`Production batch ${dbBatch.batch_number} for ${safeProductName} created!`, "success");
-          fetchData();
+          fetchData(['productionBatches']);
           return id;
       } catch (e: any) {
           console.error(e);
@@ -2596,7 +2732,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
     setProductionBatches(prev => prev.filter(b => b.id !== batchId));
     // createBatch's own refresh may still be in flight with the batch in it: load again after the delete.
-    fetchData();
+    fetchData(['productionBatches']);
     return true;
   };
 
@@ -2631,7 +2767,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return false;
     }
     setProductionBatches(prev => prev.map(b => b.id === batchId ? { ...b, ...update } as any : b));
-    fetchData();
+    fetchData(['productionBatches']);
     return true;
   };
 
@@ -2706,7 +2842,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
           setInventory(updatedInventory);
           setItems(updatedItems);
-          fetchData();
+          fetchData(['allocations', ...STOCK]);
           return true;
       } catch (e) { 
         console.error("allocateFromRetailStock error:", e); 
@@ -3073,12 +3209,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (newStage !== ProductionStage.CANCELLED) {
             showToast("Batch Updated & Inventory Synced", "success");
         }
-        fetchData();
+        fetchData(['productionBatches', 'allocations', ...STOCK]);
         return true;
       } catch (e) {
         console.error(e);
         showToast('Batch update nahi hua: ' + getErrorMessage(e), 'error');
-        fetchData();
+        fetchData(['productionBatches', 'allocations', ...STOCK]);
         return false;
       }
     });
@@ -3317,7 +3453,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         "success"
       );
 
-      fetchData();
+      fetchData(['purchases', 'allocations', 'suppliers', 'supplierTransactions', 'inventoryLogs', ...MONEY_ADDED]);
       return true;
     } catch (err: any) {
       console.error("returnPurchase error:", err);
@@ -3540,7 +3676,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         "success"
       );
 
-      fetchData();
+      fetchData(['materialPurchases', 'suppliers', 'supplierTransactions', ...STOCK, ...MONEY_ADDED]);
       return true;
     } catch (err: any) {
       console.error("returnMaterialPurchase error:", err);
@@ -3768,7 +3904,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             setSupplierTransactions(prev => [{ id: stxId, supplier_id, date: normalizedMpDate, type: 'Payment', amount: effectivePaid, ...stxDetails, details: stxDetails } as any, ...prev]);
           }
 
-          fetchData();
+          fetchData(['materialPurchases', 'suppliers', 'supplierTransactions', ...STOCK, ...MONEY_ADDED]);
           return true;
       } catch (e: any) { 
         console.error(e); 
@@ -3901,7 +4037,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
          return false;
       }
       showToast("Supplier added successfully", 'success');
-      fetchData();
+      fetchData(['suppliers']);
       return true;
     } catch(e: any) {
       showToast("Failed to save supplier", "error");
@@ -3928,15 +4064,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('suppliers').update(dbUpdates).eq('id', id);
       if (error) {
          showToast("Failed to update supplier: " + error.message, 'error');
-         fetchData();
+         fetchData(['suppliers']);
          return false;
       }
-      fetchData();
+      fetchData(['suppliers']);
       return true;
     } catch(e: any) {
       console.error("updateSupplier error:", e);
       showToast("Failed to update supplier: " + (e?.message || "Error"), 'error');
-      fetchData();
+      fetchData(['suppliers']);
       return false;
     }
   };
@@ -3959,13 +4095,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             : "Failed to delete supplier: " + supplierErr.message,
           'error'
         );
-        fetchData();
+        fetchData(['suppliers']);
         return false;
       }
 
       setSuppliers(prev => prev.filter(s => s.id !== id));
       showToast("Supplier deleted successfully", "success");
-      fetchData();
+      fetchData(['suppliers']);
       return true;
     } catch (error: any) {
       console.error("Error deleting supplier:", error);
@@ -4000,12 +4136,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
       setBankTransactions(prev => prev.filter(b => b.reference_id !== id && b.id !== `btx_${id}`));
       setSupplierTransactions(prev => prev.filter(t => t.id !== id));
-      fetchData();
+      fetchData(['suppliers', 'supplierTransactions', 'purchases', 'materialPurchases', ...MONEY_CHANGED]);
       return true;
     } catch (e) {
       console.error("deleteSupplierTransaction error:", e);
       showToast('Entry delete nahi hui: ' + getErrorMessage(e), 'error');
-      fetchData();
+      fetchData(['suppliers', 'supplierTransactions', 'purchases', 'materialPurchases', ...MONEY_CHANGED]);
       return false;
     }
   };
@@ -4053,7 +4189,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             details: isPack ? { variant_id: variantId, variant_delta: diff, loose_delta: 0 } : { loose_delta: diff }
         }]);
         
-        fetchData();
+        fetchData(STOCK);
         return true;
      } catch(err) { console.error(err); return false; }
   };
@@ -4359,7 +4495,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         "success"
       );
 
-      fetchData();
+      fetchData(['sales', 'customers', 'customerTransactions', ...STOCK, ...MONEY_CHANGED]);
       return true;
     } catch (err: any) {
       console.error("processSalesReturn error:", err);
@@ -4511,7 +4647,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         } : s));
 
         showToast(`Invoice #${sale.bill_number} payment mode updated to ${newPaymentMode}!`, "success");
-        fetchData();
+        fetchData(['sales', ...MONEY_CHANGED]);
         return true;
       } catch (err: any) {
         console.error("updateSalePaymentMode error:", err);
@@ -4581,7 +4717,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               }
           }
 
-          fetchData();
+          fetchData(['dailySupply', 'customers', 'customerTransactions', ...MONEY_ADDED]);
           return true;
       } catch (e) { console.error(e); return false; }
   };
@@ -4739,7 +4875,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               details: closingDetails
           }, ...prev]);
 
-          fetchData();
+          fetchData(['retailClosings', ...STOCK]);
           return true;
       } catch (e) { 
           console.error('[Retail Closing Error]', e); 
@@ -4962,28 +5098,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return `${part('year')}-${part('month')}-${part('day')}`;
   };
 
-  const mapCashShift = (row: any): ShiftSession => {
-    const acc = accounts.find(a => a.id === row.drawer_id)
-      || accounts.find(a => a.id === (cashDrawers.find(d => d.id === row.drawer_id)?.account_id));
-    const drawerName = acc?.name || cashDrawers.find(d => d.id === row.drawer_id)?.name || row.drawer_name || 'Cash Drawer';
-    return {
-      ...row,
-      account_id: acc?.id || row.account_id || row.drawer_id,
-      account_name: acc?.name || row.account_name,
-      drawer_name: drawerName,
-      date: row.business_date,
-      shift_name: row.shift_name || `Shift ${new Date(row.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-      opening_float: Number(row.opening_counted || 0),
-      start_time: row.started_at,
-      end_time: row.closed_at,
-      expected_drawer_cash: Number(row.expected_closing_cash || 0),
-      actual_physical_cash: row.closing_counted_cash === null ? undefined : Number(row.closing_counted_cash),
-      cash_difference: row.closing_variance === null ? undefined : Number(row.closing_variance),
-      khata_cash_recovered: Number(row.cash_collections || 0),
-      drawer_expenses_paid: Number(row.cash_expenses || 0),
-      spot_purchases_paid: Number(row.cash_purchases || 0)
-    };
-  };
+  const mapCashShift = (row: any): ShiftSession => mapCashShiftRow(row, accounts, cashDrawers);
 
   // Custody drawer ids are cash_drawers ids; resolve the financial account a
   // drawer maps to (drawers created from Bank & Cash share the account id).
@@ -5003,28 +5118,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, [cashRemittances]);
 
+  // Goes through the shared loader, so the accounts and bank rows it reads keep the unsynced bills
+  // projected on top (setting them directly dropped every pending sale's cash until the next load)
+  // and only bank rows created since the last read are downloaded.
   const refreshCashControl = async (): Promise<void> => {
-    const [days, drawers, shifts, handovers, remittances, variances, events, faRes, btxRes] = await Promise.all([
-      fetchFullTable('business_days', 'business_date'),
-      supabase.from('cash_drawers').select('*').order('name'),
-      // Paged reads: a plain select stops at 1000 rows, which cut the bank history after every shift action.
-      fetchFullTable('cash_shifts', 'started_at'),
-      fetchFullTable('drawer_handovers', 'declared_at'),
-      fetchFullTable('cash_remittances', 'declared_at'),
-      fetchFullTable('cash_variances', 'created_at'),
-      fetchFullTable('shift_cash_events', 'occurred_at'),
-      supabase.from('financial_accounts').select('*'),
-      fetchFullTable('bank_transactions', 'date')
-    ]);
-    if (days.data) setBusinessDays(days.data as BusinessDay[]);
-    if (drawers.data) setCashDrawers(drawers.data as CashDrawer[]);
-    if (shifts.data) setShiftSessions(shifts.data.map(mapCashShift));
-    if (handovers.data) setCashHandovers(handovers.data as CashHandover[]);
-    if (remittances.data) setCashRemittances(remittances.data as CashRemittance[]);
-    if (variances.data) setCashVariances(variances.data as CashVariance[]);
-    if (events.data) setShiftCashEvents(events.data as ShiftCashEvent[]);
-    if (faRes.data) setAccounts(faRes.data.map((a: any) => ({ id: a.id, name: a.name, type: a.type, balance: a.balance || 0, isActive: a.is_active, ...a.details })));
-    if (btxRes.data) setBankTransactions(btxRes.data as BankTransaction[]);
+    await fetchData(CASH_CONTROL);
   };
 
   const startCashierShift = async (data: {
@@ -5661,13 +5759,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   useEffect(() => {
     if (!hasLoadedData || !currentUser || !activeShiftSession) return;
     const checkAndRollover = () => {
+      // The newest render's shift and totals: this interval outlives the render that set it up, and
+      // its old closure auto-closed last night's shift with the expected cash of the sales made up to
+      // that render (often the morning), not the whole day's.
+      const { activeShiftSession: shift, rolloverStaleShift: rollover } = latest.current;
       const currentBizDate = getBusinessDate();
       if (
-        activeShiftSession.status === 'Active' &&
-        activeShiftSession.business_date &&
-        activeShiftSession.business_date < currentBizDate
+        shift &&
+        shift.status === 'Active' &&
+        shift.business_date &&
+        shift.business_date < currentBizDate
       ) {
-        void rolloverStaleShift(activeShiftSession);
+        void rollover(shift);
       }
     };
     checkAndRollover();
@@ -6148,7 +6251,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       });
       if (error) throw error;
       const result = Array.isArray(data) ? data[0] : data;
-      await fetchData();
+      await fetchData([...STOCK, 'businessDays']);
       const adjusted = Number(result?.adjusted || 0);
       if (adjusted > 0) {
         showToast(`Stock count applied: ${adjusted} item(s) adjusted.`, 'success');
@@ -6544,7 +6647,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (dcDelError) {
       console.error('[Supabase Day Reopen Error]', dcDelError);
       showToast('Warning: cloud day lock could not be removed — other devices may still see this day as locked.', 'error');
-      fetchData();
+      fetchData(['dayClosings']);
       return false;
     }
     showToast('Day closing unlocked & reopened successfully', 'info');
@@ -6651,7 +6754,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { error } = await supabase.from('customers').update(dbUpdates).eq('id', id);
         if (error) {
           showToast("Failed to update customer: " + error.message, 'error');
-          fetchData();
+          fetchData(['customers']);
           return false;
         }
       }
@@ -6672,7 +6775,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             : "Failed to delete customer: " + error.message,
           'error'
         );
-        fetchData();
+        fetchData(['customers']);
         return false;
       }
       return true;
@@ -6832,12 +6935,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
       setCustomerTransactions(prev => prev.filter(t => t.id !== id));
-      fetchData();
+      fetchData(['customers', 'customerTransactions', ...MONEY_CHANGED]);
       return true;
     } catch (e) {
       console.error("deleteCustomerTransaction error:", e);
       showToast("Transaction delete failed: " + getErrorMessage(e), "error");
-      fetchData();
+      fetchData(['customers', 'customerTransactions', ...MONEY_CHANGED]);
       return false;
     }
   };
@@ -7042,12 +7145,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (expDelError) throw expDelError;
       }
       setExpenses(prev => prev.filter(e => e.id !== id));
-      fetchData();
+      fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return true;
     } catch(e) {
       console.error("deleteExpense error:", e);
       showToast('Expense delete nahi hua: ' + getErrorMessage(e), 'error');
-      fetchData();
+      fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return false;
     }
   };
@@ -7155,7 +7258,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (error) throw error;
 
       showToast("Expense updated successfully", "success");
-      fetchData();
+      fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return true;
     } catch (err) {
       console.error("updateExpense error:", err);
@@ -7175,12 +7278,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         details: extraDetails
       };
       await supabase.from('recurring_expenses').insert([dbRecurring]);
-      fetchData();
+      fetchData(['recurringExpenses']);
       return true;
     } catch (err) { return false; }
   };
 
-  const deleteRecurringExpense = async (id: string) => { await supabase.from('recurring_expenses').delete().eq('id', id); fetchData(); return true; };
+  const deleteRecurringExpense = async (id: string) => { await supabase.from('recurring_expenses').delete().eq('id', id); fetchData(['recurringExpenses']); return true; };
   
   const addExpenseVendor = async (v: Omit<ExpenseVendor, 'id' | 'total_paid'> & { id?: string }): Promise<string | false> => {
     try {
@@ -7231,7 +7334,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('expense_vendors').insert([dbVendor]);
       if (error) throw error;
       showToast(`Vendor "${name}" created successfully!`, "success");
-      fetchData();
+      fetchData(['expenseVendors']);
       return id;
     } catch (e: any) { 
       console.error("addExpenseVendor error:", e);
@@ -7285,7 +7388,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       showToast(`Vendor "${name || existing.name}" updated successfully!`, "success");
-      fetchData();
+      fetchData(['expenseVendors']);
       return true;
     } catch (e: any) {
       console.error("updateExpenseVendor error:", e);
@@ -7302,7 +7405,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (error) throw error;
 
       showToast(`Vendor "${vendor?.name || ''}" deleted successfully`, "info");
-      fetchData();
+      fetchData(['expenseVendors']);
       return true;
     } catch (e: any) { 
       console.error("deleteExpenseVendor error:", e);
@@ -7475,7 +7578,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           : `Payment of Rs ${amount.toLocaleString()} recorded for ${vendor.name}!`,
         "success"
       );
-      fetchData();
+      fetchData(['expenseVendors', 'expenseVendorTransactions', ...MONEY_ADDED]);
       return true;
     } catch (err: any) {
       console.error("recordExpenseVendorPayment error:", err);
@@ -7548,7 +7651,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       showToast("Vendor transaction deleted and balance restored", "info");
-      fetchData();
+      fetchData(['expenseVendors', 'expenseVendorTransactions', ...MONEY_CHANGED]);
       return true;
     } catch (e) {
       console.error("deleteExpenseVendorTransaction error:", e);
@@ -7602,7 +7705,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           reference_id: id
         }]);
       }
-      fetchData();
+      fetchData(['cashDrawers', ...MONEY_ADDED]);
       return true;
     } catch(e) { 
       console.error("addAccount error:", e);
@@ -7630,7 +7733,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
       const { error } = await supabase.from('financial_accounts').update(dbUpdates).eq('id', id);
       if (error) throw error;
-      fetchData();
+      fetchData(['accounts', 'cashDrawers']);
       return true;
     } catch (e) {
       console.error("updateAccount error:", e);
@@ -7643,7 +7746,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setAccounts(prev => prev.filter(a => a.id !== id));
       const { error } = await supabase.from('financial_accounts').delete().eq('id', id);
       if (error) throw error;
-      fetchData();
+      fetchData(['accounts', 'cashDrawers']);
       return true;
     } catch (e) {
       console.error("deleteAccount error:", e);
@@ -7676,7 +7779,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             await supabase.from('bank_transactions').delete().eq('id', taggedTransaction.id);
             throw balanceError;
           }
-          fetchData();
+          fetchData(MONEY_ADDED);
           return true;
       } catch(e) {
         console.error('recordBankTransaction error:', e);
@@ -7691,7 +7794,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const normalizedDate = normalizeTransactionTimestamp(date);
           const { error } = await transferBetweenAccounts(fromId, toId, amount, normalizedDate, description);
           if (error) throw error;
-          fetchData();
+          fetchData(MONEY_ADDED);
           return true;
       } catch(e: any) { 
           showToast("Transfer failed: " + getErrorMessage(e), "error");
@@ -7712,7 +7815,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setManualAccounts(prev => [...prev, { id, name, type, balance: balance || 0, ...extraDetails }]);
       const { error } = await supabase.from('manual_accounts').insert([dbAccount]);
       if (error) throw error;
-      fetchData();
+      fetchData(['manualAccounts']);
       return true;
     } catch(e) { 
       console.error(e);
@@ -7723,7 +7826,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       setManualAccounts(prev => prev.filter(a => a.id !== id));
       await supabase.from('manual_accounts').delete().eq('id', id); 
-      fetchData(); 
+      fetchData(['manualAccounts']); 
       return true; 
     } catch(e) {
       console.error(e);
@@ -7742,7 +7845,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         dbUpdates.details = { ...(existing?.details || {}), ...extraDetails };
       }
       await supabase.from('manual_accounts').update(dbUpdates).eq('id', id);
-      fetchData();
+      fetchData(['manualAccounts']);
       return true;
     } catch(e) { return false; }
   };
@@ -7819,12 +7922,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      fetchData();
+      fetchData(['journalEntries', 'manualAccounts', ...MONEY_ADDED]);
       return true;
     } catch(e) {
       console.error(e);
       showToast('Journal entry post nahi hui: ' + getErrorMessage(e), 'error');
-      fetchData();
+      fetchData(['journalEntries', 'manualAccounts', ...MONEY_ADDED]);
       return false;
     }
   };
@@ -8099,14 +8202,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         await updateCustomer(id, { isActive: false });
         showToast(`Customer "${cust.name}" balance written off and marked Inactive!`, 'success');
-        fetchData();
+        fetchData(['customers', 'customerTransactions', 'expenses']);
         return true;
       }
 
       if (action === 'deactivate') {
         await updateCustomer(id, { isActive: false });
         showToast(`Customer "${cust.name}" marked Inactive (Archived). Ledger and balance sheet preserved.`, 'info');
-        fetchData();
+        fetchData(['customers']);
         return true;
       }
 
@@ -8120,11 +8223,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { error } = await supabase.from('customers').delete().eq('id', id);
         if (error) {
           showToast("Failed to delete customer: " + error.message, 'error');
-          fetchData();
+          fetchData(['customers']);
           return false;
         }
         showToast("Customer permanently deleted successfully", 'success');
-        fetchData();
+        fetchData(['customers']);
         return true;
       }
 
@@ -8167,14 +8270,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         await updateSupplier(id, { isActive: false });
         showToast(`Supplier "${supp.name}" balance settled via waiver and marked Inactive!`, 'success');
-        fetchData();
+        fetchData(['suppliers', 'supplierTransactions']);
         return true;
       }
 
       if (action === 'deactivate') {
         await updateSupplier(id, { isActive: false });
         showToast(`Supplier "${supp.name}" marked Inactive (Archived). Historical records preserved.`, 'info');
-        fetchData();
+        fetchData(['suppliers']);
         return true;
       }
 
@@ -8188,11 +8291,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { error } = await supabase.from('suppliers').delete().eq('id', id);
         if (error) {
           showToast("Failed to delete supplier: " + error.message, 'error');
-          fetchData();
+          fetchData(['suppliers']);
           return false;
         }
         showToast("Supplier permanently deleted successfully", 'success');
-        fetchData();
+        fetchData(['suppliers']);
         return true;
       }
 
@@ -8232,14 +8335,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         await updateItem(id, { isActive: false });
         showToast(`Stock written off to spoilage and "${item.name}" marked Inactive (Discontinued)!`, 'success');
-        fetchData();
+        fetchData(STOCK);
         return true;
       }
 
       if (action === 'deactivate') {
         await updateItem(id, { isActive: false });
         showToast(`Item "${item.name}" marked Inactive (Discontinued). Past sales bills preserved.`, 'info');
-        fetchData();
+        fetchData(['items']);
         return true;
       }
 
@@ -8254,11 +8357,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { error } = await supabase.from('items').delete().eq('id', id);
         if (error) {
           showToast("Failed to delete item: " + error.message, 'error');
-          fetchData();
+          fetchData(['items']);
           return false;
         }
         showToast("Item permanently deleted successfully", 'success');
-        fetchData();
+        fetchData(['items']);
         return true;
       }
 
@@ -8294,7 +8397,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         await updateAccount(id, { isActive: false });
         showToast(`Account "${acc.name}" marked Inactive. Past statements preserved.`, 'info');
-        fetchData();
+        fetchData(['accounts', 'cashDrawers']);
         return true;
       }
 
@@ -8308,11 +8411,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const { error } = await supabase.from('financial_accounts').delete().eq('id', id);
         if (error) {
           showToast("Failed to delete account: " + error.message, 'error');
-          fetchData();
+          fetchData(['accounts', 'cashDrawers']);
           return false;
         }
         showToast("Account permanently deleted", 'success');
-        fetchData();
+        fetchData(['accounts', 'cashDrawers']);
         return true;
       }
 
@@ -8345,7 +8448,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         await updateExpenseVendor(id, { isActive: true });
         showToast("Vendor reactivated successfully!", 'success');
       }
-      fetchData();
+      fetchData(entityType === 'customer' ? ['customers'] : entityType === 'supplier' ? ['suppliers'] : entityType === 'item' ? ['items'] : entityType === 'account' ? ['accounts', 'cashDrawers'] : ['expenseVendors']);
       return true;
     } catch (e: any) {
       console.error("reactivateEntity error:", e);
@@ -9063,6 +9166,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setCategories(prev => prev.filter(c => c.toLowerCase() !== trimmed.toLowerCase()));
     showToast(`Category "${trimmed}" removed`, "info");
   };
+
+  latest.current = { loadData, rolloverStaleShift, accounts, cashDrawers, inventoryLogs, shiftSessions, activeShiftSession };
 
   const contextValue = useMemo(() => ({
     users, roles, currentUser, currentRole, isUserSwitcherOpen, setIsUserSwitcherOpen, isTerminalLocked, lockTerminalNow, isBooting, sessionError, isDataLoading, hasLoadedData, dataLoadError, retryLoading,
