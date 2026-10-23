@@ -21,7 +21,7 @@ const UserSwitcherHost: React.FC = () => {
   useIdleLock();
   if (!isUserSwitcherOpen) return null;
   // The lock screen paints its own opaque backdrop as soon as its small chunk arrives.
-  return <Suspense fallback={<div className="fixed inset-0 z-[120] bg-canvas" data-lock-screen aria-busy="true" />}>
+  return <Suspense fallback={<div className="fixed inset-0 z-[250] bg-canvas" data-lock-screen aria-busy="true" />}>
     <UserSwitcherModal />
   </Suspense>;
 };

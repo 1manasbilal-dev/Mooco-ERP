@@ -65,6 +65,8 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       onClose={onCancel}
       role="alertdialog"
       size="sm"
+      // Always above the dialog it was opened from.
+      elevated
       title={title}
       description={message}
       dismissible={!busy}

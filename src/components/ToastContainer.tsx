@@ -22,7 +22,7 @@ const ToastContainer: React.FC = () => {
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-3 top-[3.75rem] z-[100] flex flex-col items-center gap-2 print:hidden sm:inset-x-auto sm:right-4 sm:top-[4.5rem] sm:w-[360px] sm:items-stretch"
+      className="pointer-events-none fixed inset-x-3 top-[3.75rem] z-[220] flex flex-col items-center gap-2 print:hidden sm:inset-x-auto sm:right-4 sm:top-[4.5rem] sm:w-[360px] sm:items-stretch"
       aria-label="Notifications"
     >
       {toasts.map(toast => (

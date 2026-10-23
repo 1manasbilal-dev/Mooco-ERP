@@ -15,15 +15,21 @@ export interface ModalProps {
   icon?: React.ReactNode;
   children?: React.ReactNode;
   footer?: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg';
+  /** `xl` is for wide forms and tables. */
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** Element to focus when the dialog opens (defaults to the first focusable one). */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   /** Block Esc / backdrop / close button while something is saving. */
   dismissible?: boolean;
   role?: 'dialog' | 'alertdialog';
+  /** Stack above other open modals (confirmations opened from inside a dialog use this). */
+  elevated?: boolean;
 }
 
-const SIZE_CLASS = { sm: 'sm:max-w-sm', md: 'sm:max-w-md', lg: 'sm:max-w-2xl' } as const;
+const SIZE_CLASS = { sm: 'sm:max-w-sm', md: 'sm:max-w-md', lg: 'sm:max-w-2xl', xl: 'sm:max-w-4xl' } as const;
+
+// Layers: page < quick search (150) < modal (200) < elevated modal / confirm (210) < toasts (220) < lock screen (250).
+const LAYER_CLASS = { base: 'z-[200]', elevated: 'z-[210]' } as const;
 
 /** Focusable elements that are actually on screen (offsetParent is null inside fixed parents, so use client rects). */
 const visibleFocusable = (panel: HTMLElement) =>
@@ -34,7 +40,7 @@ const visibleFocusable = (panel: HTMLElement) =>
  * focus goes back to whatever opened it. A bottom sheet on phones, centred from `sm` up.
  */
 export const Modal: React.FC<ModalProps> = ({
-  open, onClose, title, description, icon, children, footer, size = 'md', initialFocusRef, dismissible = true, role = 'dialog',
+  open, onClose, title, description, icon, children, footer, size = 'md', initialFocusRef, dismissible = true, role = 'dialog', elevated = false,
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -81,7 +87,7 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-end justify-center sm:items-center sm:p-4" data-app-modal="true" onKeyDown={handleKeyDown}>
+    <div className={cn('fixed inset-0 flex items-end justify-center sm:items-center sm:p-4', LAYER_CLASS[elevated ? 'elevated' : 'base'])} data-app-modal="true" onKeyDown={handleKeyDown}>
       <div
         className="absolute inset-0 bg-[rgb(2_6_23/0.5)] animate-in fade-in duration-150"
         aria-hidden="true"

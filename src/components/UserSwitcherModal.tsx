@@ -191,12 +191,16 @@ export const LockScreen: React.FC<LockScreenProps> = ({
 
   // While the lock screen is up, the workspace behind it cannot be focused or
   // clicked (Tab + Enter would otherwise reach POS buttons on a locked terminal).
+  // Dialogs portalled to <body> (a modal or confirm left open when the idle lock fired)
+  // are frozen too; the lock screen itself sits above every layer.
   useEffect(() => {
-    const app = document.querySelector<HTMLElement>('.mooco-app');
-    if (!app) return;
-    const wasInert = app.inert;
-    app.inert = true;
-    return () => { app.inert = wasInert; };
+    const targets = [
+      document.querySelector<HTMLElement>('.mooco-app'),
+      ...Array.from(document.body.children).filter((el): el is HTMLElement => el instanceof HTMLElement && el.id !== 'root' && el.tagName !== 'SCRIPT'),
+    ].filter((el): el is HTMLElement => Boolean(el) && !el!.contains(cardRef.current));
+    const previous = targets.map(el => el.inert);
+    targets.forEach(el => { el.inert = true; });
+    return () => { targets.forEach((el, index) => { el.inert = previous[index]; }); };
   }, []);
 
   useEffect(() => {
@@ -278,7 +282,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
       data-lock-screen
       data-app-modal="true"
       className={cn(
-        'fixed inset-0 z-[120] flex flex-col items-center justify-start overflow-y-auto px-4 py-6 sm:justify-center',
+        'fixed inset-0 z-[250] flex flex-col items-center justify-start overflow-y-auto px-4 py-6 sm:justify-center',
         canDismiss ? 'bg-[rgb(2_6_23/0.55)] animate-in fade-in duration-150' : 'bg-canvas',
       )}
       onMouseDown={event => { if (event.target === event.currentTarget && canDismiss) onClose(); }}
