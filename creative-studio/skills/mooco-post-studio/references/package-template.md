@@ -23,10 +23,10 @@ Always deliver the package in this exact structure, in Roman Urdu with copy-read
 
 ### 4. Canva mein
 1. Size: 1080 × 1350 (feed). Gemini wali image background mein lagayein.
-2. Logo: Drive › 03_Brand-Kit › Logo se [light/dark] logo, [position].
-3. Headline (Fredoka Bold, [color hex]): `[headline]`
-4. Subline (Nunito SemiBold, [color hex]): `[subline]`
-5. CTA pill ([pill color] + [text color]): `[CTA]`
+2. Logo: Drive › 03_Brand-Kit › Logo se [light/dark] logo, [position] — light/warm photo par safed rounded chip ke upar.
+3. Headline (Fredoka Bold, [color hex — light photos: #2F5A1E]): `[headline]`
+4. Subline (Nunito SemiBold, [color hex — usually #1A2412]): `[subline]`
+5. CTA [light image: split pill — Ink #1A2412 pill, cream text `Abhi Order Karein` + lime #98C237 chip, ink text `mooco.pk →` · dark image: lime pill, ink text], [position on a calm area]
 6. Badge/price: [only for offer posts — otherwise write "Nahi — ye offer post nahi hai"]
 7. Export: PNG, "05_Outputs" folder mein save karein.
 

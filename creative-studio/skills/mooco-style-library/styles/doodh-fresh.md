@@ -12,7 +12,7 @@ Subah ki dhoop, cream aur lime ki taazgi — airy, clean, milky and cool.
 ## Palette
 - Background: Doodh Cream `#FFF8E8` with a soft Makhan Yellow `#FFF0B3` and Lime Mist `#E8F3CC` glow (the "Doodh Mesh").
 - Accents: Mooco Lime `#98C237` through props (mint, cucumber, leaves) and the packs themselves.
-- Text: Deep Leaf `#4E7A1E` or Ink `#1A2412` headline on cream; Ink on a lime CTA pill.
+- Text: Pasture Green `#2F5A1E` or Ink `#1A2412` headline on the cream photo; Ink sublines; CTA as the split pill (Ink + cream text + lime "mooco.pk →" chip).
 
 ## Composition
 - Product 50–60% of the frame, slightly below center, standing on a light surface.
@@ -26,7 +26,7 @@ Soft morning window light from one side, gentle shadows, bright but not overexpo
 Light wood or white marble table, white ceramic or steel glass/bowl, fresh mint, a few ice cubes or condensation drops (cold products), a clay matka in soft focus, muslin cloth, morning sunlight on a kitchen window.
 
 ## Typography on the post
-Headline top-left or top-center in Deep Leaf; subline in Ink; CTA pill Mooco Lime with Ink text at the bottom; logo small top corner (light version).
+Headline top-left or top-center in Pasture Green `#2F5A1E`; subline in Ink; split CTA pill (Ink + cream text + lime chip) on a calm area at the bottom; light logo on a small white chip in a top corner.
 
 ## Copy tone
 Light, fresh, reassuring. Examples: "Subah ka pehla taaza glass" · "Gaarha. Taaza. Mooco."

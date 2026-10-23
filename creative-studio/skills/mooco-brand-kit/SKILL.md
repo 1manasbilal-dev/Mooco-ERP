@@ -55,6 +55,10 @@ Defined from the logo; locked v1.
 **Color rules (phone readability)**
 - ✅ Ink on Lime (contrast 7.7) · ❌ white text on Lime (2.1)
 - ✅ Lime on Raat Pasture (8.5) · ❌ Lime text on Cream (2.0) — on light backgrounds use Deep Leaf or Ink for text
+- **Measure contrast against what is really behind the element in the finished image**, not against the palette swatch. Photos are warmer and darker than `#FFF8E8`: on a real warm-cream photo background Deep Leaf drops to ~4.3:1 and a lime pill on a wooden table to ~1.2:1. Targets: text ≥ 4.5:1, buttons/pills and badges ≥ 3:1 against the area around them.
+- **Headlines on light photos: Pasture Green `#2F5A1E`** (~6.9:1 on warm cream). Deep Leaf only on clean, pale cream graphic backgrounds.
+- **CTA on light images: split pill** — Ink `#1A2412` pill with Doodh Cream text ("Abhi Order Karein") + a Mooco Lime chip with Ink text ("mooco.pk →"). A plain lime pill is used **only on dark backgrounds** (Raat Pasture); on cream or wood it disappears.
+- **Logo on photos:** if the area behind it is light, warm or busy, place the light logo on a small white rounded chip with a soft shadow (the lime cow is only ~1.5:1 against warm cream).
 - Ghee Gold is an accent, not a background; at most one gold element per post
 - Dark mode is green-black (Raat Pasture), not navy or pure black — decided by the owner
 

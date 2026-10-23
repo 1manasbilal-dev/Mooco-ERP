@@ -58,7 +58,9 @@ Mood:      [3–5 words: light, props, feeling]
 | CTA pill | Nunito ExtraBold | 36–44 px | 4–5 words |
 | Badge / price | Fredoka Bold | 60–100 px | "Rs 300" / "20% OFF" |
 
-Contrast rules from the brand kit apply: ink on lime, lime on Raat Pasture, Deep Leaf or Ink on cream; never white on lime or lime text on cream.
+Contrast rules from the brand kit apply, **measured against the real image area behind each element**: text ≥ 4.5:1, pills and badges ≥ 3:1 against their surroundings. On light photos use Pasture Green `#2F5A1E` headlines, Ink sublines, the split CTA pill (Ink pill + cream text + lime "mooco.pk →" chip) and the logo on a white chip. Lime pills only on dark backgrounds. Never white on lime or lime text on cream.
+
+**CTA placement:** on the calmest area of the image (plain table, wall or background), never over the product, spoon, hands or busy props; align it with the text column or the opposite corner from the product.
 
 ## Fallback styles (only if `mooco-style-library` is unavailable)
 

@@ -26,7 +26,7 @@ Warm side light like late morning or golden hour through a kitchen window, soft 
 Dastarkhwan or wooden table, steel katori and thaal, clay handi, brass bowls, rotis/parathas, fresh coriander and mint, green chillies, cumin, almonds and pistachios for sweets, a simple embroidered cloth.
 
 ## Typography on the post
-Headline top area on a calm surface; recipe posts may use a small "ingredients" strip; CTA pill bottom; logo small top corner.
+Headline top area on a calm surface (Pasture Green or Ink, check contrast on the real photo); recipe posts may use a small "ingredients" strip; split CTA pill (Ink + cream text + lime chip) at the bottom on a calm area; logo on a white chip if the corner is busy.
 
 ## Copy tone
 Warm and familiar, like family advice. Examples: "Jumma ka raita, Mooco dahi se" · "Ghar jaisa meetha".
