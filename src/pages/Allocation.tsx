@@ -1,38 +1,33 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, Droplets, Factory, Refrigerator, ShoppingCart, Store, Trash2 } from 'lucide-react';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
-import { AllocationStatus, DestinationType } from '../types';
-import { 
-  Factory, Plus, X, ShoppingCart, 
-  Droplets, Calculator, Store, ArrowRight,
-  Refrigerator, Search, Trash2, Check, RefreshCw,
-  Sliders
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { formatQty, formatCurrency, cleanNumber } from '../lib/formatters';
+import { AllocationStatus, DestinationType, type AllocationEntry, type InventoryItem, type ItemDefinition, type PurchaseEntry, type Supplier } from '../types';
+import { cleanNumber, formatCurrency, formatQty } from '../lib/formatters';
+import { getRetailMilkStock } from '../lib/retailMilkStock';
+import { useProgressiveList } from '../hooks/useProgressiveList';
+import {
+  Badge, Button, Card, EmptyState, Field, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, StatCard,
+} from '../components/ui';
+import {
+  CartLine, SourceRow, cartLineError, displaySourceName, type CartItem, type MilkSource, type SourceEntry,
+} from '../components/milk-ops/AllocationRows';
+import { PoolSummary } from '../components/milk-ops/PoolSummary';
+import { formatPkDay, isLitreUnit, parseQty, qtyInputValue, remainingOf } from '../components/milk-ops/milkOps';
 
-const MotionDiv = motion.div as any;
+const AllocateQtyModal = lazy(() => import('../components/milk-ops/AllocateQtyModal'));
 
-interface CartItem {
-  allocationId: string;
-  quantity: number;
-  maxQty: number;
-  supplierName: string;
-  milkType: string;
-  rate: number;
-  source: 'fresh' | 'retail';
-}
+const TERMINAL_STATUSES: string[] = [AllocationStatus.FULLY_ALLOCATED, AllocationStatus.ALLOCATED_FOR_SUPPLY, AllocationStatus.COMPLETED];
+const sourceFromSearch = (search: string): MilkSource => (new URLSearchParams(search).get('source') === 'retail' ? 'retail' : 'fresh');
+const defaultDestination = (source: MilkSource) => (source === 'retail' ? DestinationType.PRODUCTION : DestinationType.RETAIL);
 
-interface AllocateModalData {
-  id: string;
-  name: string;
-  milkType: string;
-  rate: number;
-  maxQty: number;
-  source: 'fresh' | 'retail';
-  initialQty: number;
-}
+const milkTypeFromName = (name: string) => {
+  const lower = name.toLowerCase();
+  if (lower.includes('buffalo')) return 'Buffalo';
+  if (lower.includes('cow')) return 'Cow';
+  return 'Mixed';
+};
 
 const Allocation: React.FC = () => {
   const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, discardBatch, trimBatchToSource, items, inventory, suppliers, canPerform } = useDairy();
@@ -41,300 +36,271 @@ const Allocation: React.FC = () => {
   const canStartBatch = canPerform('production', 'create');
   const location = useLocation();
   const navigate = useNavigate();
-  
-  const [activeSource, setActiveSource] = useState<'fresh' | 'retail'>(() => {
-    const sp = new URLSearchParams(window.location.search);
-    return sp.get('source') === 'retail' ? 'retail' : 'fresh';
-  });
+
+  const [activeSource, setActiveSource] = useState<MilkSource>(() => sourceFromSearch(window.location.search));
+  const [destination, setDestination] = useState<string>(() => defaultDestination(sourceFromSearch(window.location.search)));
   const [mobileTab, setMobileTab] = useState<'source' | 'cart'>('source');
   const [searchQuery, setSearchQuery] = useState('');
-
+  const deferredSearch = useDeferredValue(searchQuery);
   const [cart, setCart] = useState<CartItem[]>([]);
-  
-  const [modalData, setModalData] = useState<AllocateModalData | null>(null);
-  const [modalQty, setModalQty] = useState<number | string>('');
-
-  const [destination, setDestination] = useState<string>(() => {
-    const sp = new URLSearchParams(window.location.search);
-    return sp.get('source') === 'retail' ? DestinationType.PRODUCTION : DestinationType.RETAIL;
-  });
-  const [selectedProduct, setSelectedProduct] = useState<string>('');
+  const [modalEntry, setModalEntry] = useState<SourceEntry | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingAllocRef = useRef(false);
 
-  useEffect(() => {
-    const sp = new URLSearchParams(location.search);
-    const srcParam = sp.get('source');
-    const targetSource = srcParam === 'retail' ? 'retail' : 'fresh';
-    if (targetSource !== activeSource) {
-      setActiveSource(targetSource);
-      setDestination(targetSource === 'retail' ? DestinationType.PRODUCTION : DestinationType.RETAIL);
+  // The source tab follows the URL (?source=retail), e.g. when another screen links here.
+  const urlSource = sourceFromSearch(location.search);
+  const [lastUrlSource, setLastUrlSource] = useState(urlSource);
+  if (urlSource !== lastUrlSource) {
+    setLastUrlSource(urlSource);
+    if (urlSource !== activeSource) {
+      setActiveSource(urlSource);
+      setDestination(defaultDestination(urlSource));
     }
-  }, [location.search]);
+  }
 
-  const switchSource = (source: 'fresh' | 'retail') => {
+  const switchSource = (source: MilkSource) => {
     setActiveSource(source);
-    setDestination(source === 'retail' ? DestinationType.PRODUCTION : DestinationType.RETAIL);
+    setDestination(defaultDestination(source));
     const sp = new URLSearchParams(location.search);
-    if (source === 'retail') {
-      sp.set('source', 'retail');
-    } else {
-      sp.delete('source');
-    }
+    if (source === 'retail') sp.set('source', 'retail');
+    else sp.delete('source');
     const q = sp.toString();
     navigate(`${location.pathname}${q ? `?${q}` : ''}`, { replace: true });
   };
 
-  const sourceAllocations = useMemo(() => {
-    return allocations.filter(a => {
-      const status = a.status || AllocationStatus.UNALLOCATED;
-      const qty = (a.remaining_quantity !== null && a.remaining_quantity !== undefined) 
-        ? Number(a.remaining_quantity) 
-        : (Number(a.original_quantity || 0) - Number(a.allocated_quantity || 0));
-      
-      const isTerminalStatus = 
-        status === AllocationStatus.FULLY_ALLOCATED || 
-        status === AllocationStatus.ALLOCATED_FOR_SUPPLY || 
-        status === AllocationStatus.COMPLETED;
+  const purchasesById = useMemo(() => new Map<string, PurchaseEntry>(purchases.map(p => [p.id, p])), [purchases]);
+  const suppliersById = useMemo(() => new Map<string, Supplier>(suppliers.map(s => [s.id, s])), [suppliers]);
 
-      // Anything not in a terminal status with milk left (> 0.001 L) stays in the unallocated pool.
-      return !isTerminalStatus && qty > 0.001;
-    });
-  }, [allocations]);
-
-  const retailMilkItems = useMemo(() => {
-    return inventory.filter(i => {
-      const hasQty = (i.quantity || 0) > 0;
-      if (!hasQty) return false;
-
-      const isMilkCategory = Array.isArray(i.category)
-        ? (i.category as string[]).some((c: string) => String(c).toLowerCase().includes('milk'))
-        : (typeof i.category === 'string' && i.category.toLowerCase().includes('milk'));
-
-      const nameLower = (i.name || '').toLowerCase();
-      const isMilkName = 
-        nameLower.includes('milk') ||
-        nameLower.includes('buffalo') ||
-        nameLower.includes('cow') ||
-        nameLower.includes('doodh') ||
-        nameLower.includes('mixed');
-
-      return isMilkCategory || isMilkName;
-    });
-  }, [inventory]);
-
-  const getRate = (alloc: any) => {
-    if (alloc.average_rate !== undefined && alloc.average_rate !== null && alloc.average_rate > 0) {
-       return alloc.average_rate;
-    }
-    const purchase = purchases.find(p => p.id === alloc.purchase_id);
-    return purchase ? purchase.rate : 0;
-  };
-
-  const getDisplayName = (alloc: any) => {
-     if (alloc.supplier_name && alloc.supplier_name !== 'Unknown') {
-        return alloc.supplier_name;
-     }
-     const purchase = purchases.find(p => p.id === alloc.purchase_id);
-     if (purchase) {
-        const supplier = suppliers.find(s => s.id === purchase.supplier_id);
-        if (supplier) return supplier.name;
-     }
-     return "Unknown Supplier";
-  };
-
-  const filteredSourceAllocations = useMemo(() => {
-    if (!searchQuery.trim()) return sourceAllocations;
-    const q = searchQuery.toLowerCase();
-    return sourceAllocations.filter(alloc => {
-      const name = getDisplayName(alloc).toLowerCase();
-      const type = (alloc.milk_type || '').toLowerCase();
-      return name.includes(q) || type.includes(q);
-    });
-  }, [sourceAllocations, searchQuery, suppliers, purchases]);
-
-  const filteredRetailMilkItems = useMemo(() => {
-    if (!searchQuery.trim()) return retailMilkItems;
-    const q = searchQuery.toLowerCase();
-    return retailMilkItems.filter(item => item.name.toLowerCase().includes(q));
-  }, [retailMilkItems, searchQuery]);
-
-  const openAllocateModal = (item: any, source: 'fresh' | 'retail') => {
-    let id: string, maxQty: number, name: string, milkType: string, rate: number;
-
-    if (source === 'fresh') {
-       id = item.id;
-       maxQty = (item.remaining_quantity !== null && item.remaining_quantity !== undefined) ? item.remaining_quantity : item.original_quantity;
-       name = getDisplayName(item);
-       milkType = item.milk_type || 'Mixed';
-       rate = getRate(item);
-    } else {
-       id = item.item_id || (item.id && typeof item.id === 'string' && item.id.startsWith('inv_') ? item.id.replace('inv_', '') : item.id);
-       maxQty = item.quantity;
-       name = item.name;
-       
-       const n = item.name.toLowerCase();
-       if (n.includes('buffalo')) milkType = 'Buffalo';
-       else if (n.includes('cow')) milkType = 'Cow';
-       else milkType = 'Mixed';
-
-       const itemDef = items.find(def => def.id === id || def.name === item.name);
-       rate = itemDef?.cost_price || item.price || 0;
-    }
-
-    const existingInCart = cart.find(ci => ci.allocationId === id);
-    const initialQty = existingInCart ? existingInCart.quantity : maxQty;
-
-    setModalData({
-      id,
+  // Open collection lots: not in a terminal status and with milk left (> 0.001 L).
+  const freshEntries = useMemo<SourceEntry[]>(() => allocations.flatMap(alloc => {
+    const status = alloc.status || AllocationStatus.UNALLOCATED;
+    const available = remainingOf(alloc);
+    if (TERMINAL_STATUSES.includes(status) || available <= 0.001) return [];
+    const purchase = alloc.purchase_id ? purchasesById.get(alloc.purchase_id) : undefined;
+    const rawName = alloc.supplier_name && alloc.supplier_name !== 'Unknown'
+      ? alloc.supplier_name
+      : (purchase && suppliersById.get(purchase.supplier_id)?.name) || 'Unknown Supplier';
+    const isReturn = rawName.startsWith('Return:');
+    const name = displaySourceName(rawName);
+    const milkType = alloc.milk_type || 'Mixed';
+    const original = Number(alloc.original_quantity) || 0;
+    return [{
+      id: alloc.id,
+      source: 'fresh' as const,
+      rawName,
       name,
+      isReturn,
       milkType,
-      rate,
-      maxQty,
-      source,
-      initialQty
+      rate: Number(alloc.average_rate) > 0 ? Number(alloc.average_rate) : Number(purchase?.rate) || 0,
+      available,
+      original,
+      partial: alloc.status === AllocationStatus.PARTIALLY_ALLOCATED || (Number(alloc.allocated_quantity) || 0) > 0,
+      day: formatPkDay(alloc.date),
+      shift: purchase?.shift ? String(purchase.shift) : undefined,
+      searchText: `${name} ${milkType}`.toLowerCase(),
+    }];
+  }), [allocations, purchasesById, suppliersById]);
+
+  // Loose counter milk in litres. Same rule as the dashboard's counter stock, so shakes, ghee,
+  // packs and kg items never show up as milk; ml stock is left out because batches are in litres.
+  const retailEntries = useMemo<SourceEntry[]>(() => {
+    const inventoryById = new Map<string, InventoryItem>(inventory.map(row => [row.id, row]));
+    const itemsById = new Map<string, ItemDefinition>(items.map(item => [item.id, item]));
+    return getRetailMilkStock(inventory, items).rows.flatMap(row => {
+      const stock = inventoryById.get(row.id);
+      if (!stock || !isLitreUnit(stock.unit) || !(Number(stock.quantity) > 0)) return [];
+      const itemId = stock.item_id || (row.id.startsWith('inv_') ? row.id.replace('inv_', '') : row.id);
+      const master = itemsById.get(itemId) || items.find(def => def.name === stock.name);
+      return [{
+        id: itemId,
+        source: 'retail' as const,
+        rawName: stock.name,
+        name: stock.name,
+        isReturn: false,
+        milkType: milkTypeFromName(stock.name),
+        rate: master?.cost_price || stock.price || 0,
+        available: Number(stock.quantity) || 0,
+        partial: false,
+        searchText: stock.name.toLowerCase(),
+      }];
     });
-    setModalQty(initialQty);
-  };
+  }, [inventory, items]);
 
-  const handleConfirmModalAllocation = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!modalData) return;
-
-    const numQty = parseFloat(modalQty.toString()) || 0;
-    if (numQty <= 0) {
-      showToast("Please enter a valid quantity greater than 0", "warning");
-      return;
+  const pool = useMemo(() => {
+    let remaining = 0;
+    let original = 0;
+    for (const entry of freshEntries) {
+      remaining += entry.available;
+      original += Math.max(entry.original || 0, entry.available);
     }
+    return { remaining: cleanNumber(remaining, 3), allocated: cleanNumber(original - remaining, 3) };
+  }, [freshEntries]);
+  const counterLitres = useMemo(() => cleanNumber(retailEntries.reduce((sum, e) => sum + e.available, 0), 3), [retailEntries]);
 
-    if (numQty > modalData.maxQty) {
-      showToast(`Quantity cannot exceed available ${modalData.maxQty} L`, "warning");
-      return;
+  const visibleSource = activeSource === 'fresh' ? freshEntries : retailEntries;
+  const filteredEntries = useMemo(() => {
+    const q = deferredSearch.trim().toLowerCase();
+    return q ? visibleSource.filter(entry => entry.searchText.includes(q)) : visibleSource;
+  }, [visibleSource, deferredSearch]);
+  const list = useProgressiveList<SourceEntry>(filteredEntries, 40, `${activeSource}|${deferredSearch}`);
+
+  // Live litres left for every cart line, read from current data rather than when the line was added.
+  const allocationsById = useMemo(() => {
+    const map = new Map<string, AllocationEntry>();
+    for (const alloc of allocations) {
+      map.set(alloc.id, alloc);
+      if (alloc.purchase_id && !map.has(alloc.purchase_id)) map.set(alloc.purchase_id, alloc);
     }
+    return map;
+  }, [allocations]);
+  const counterStockById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of inventory) {
+      const qty = Number(row.quantity) || 0;
+      map.set(row.id, qty);
+      if (row.item_id) map.set(row.item_id, qty);
+    }
+    return map;
+  }, [inventory]);
+  const availableFor = useCallback((line: Pick<CartItem, 'allocationId' | 'source'>) => {
+    if (line.source === 'fresh') {
+      const lot = allocationsById.get(line.allocationId);
+      return lot ? remainingOf(lot) : 0;
+    }
+    return counterStockById.get(line.allocationId) ?? counterStockById.get(`inv_${line.allocationId}`) ?? 0;
+  }, [allocationsById, counterStockById]);
 
-    const existing = cart.find(ci => ci.allocationId === modalData.id);
-    if (existing) {
-      setCart(prev => prev.map(ci => ci.allocationId === modalData.id ? { ...ci, quantity: numQty } : ci));
-      showToast(`Updated ${modalData.name} allocation to ${numQty} L`, 'success');
+  const cartQtyById = useMemo(() => new Map<string, number>(cart.map(line => [line.allocationId, parseQty(line.qty)])), [cart]);
+
+  // The open dialog reads the row's current litres, so milk used elsewhere meanwhile cannot be over-allocated.
+  const liveModalEntry = useMemo(() => {
+    if (!modalEntry) return null;
+    const live = (modalEntry.source === 'fresh' ? freshEntries : retailEntries).find(entry => entry.id === modalEntry.id);
+    return live || { ...modalEntry, available: 0 };
+  }, [modalEntry, freshEntries, retailEntries]);
+
+  const totals = useMemo(() => {
+    let volume = 0;
+    let value = 0;
+    let fresh = 0;
+    let invalid = 0;
+    for (const line of cart) {
+      const qty = parseQty(line.qty);
+      volume += qty;
+      value += qty * (line.rate || 0);
+      if (line.source === 'fresh') fresh += qty;
+      if (cartLineError(line, availableFor(line))) invalid += 1;
+    }
+    return { volume: cleanNumber(volume, 3), value, fresh: cleanNumber(fresh, 3), invalid, averageRate: volume > 0 ? value / volume : 0 };
+  }, [cart, availableFor]);
+
+  const retailInCart = cart.some(line => line.source === 'retail');
+  // Counter milk can never go back to the counter; that would only write it off.
+  const retailDestinationBlocked = retailInCart || activeSource === 'retail';
+  useEffect(() => {
+    if (retailDestinationBlocked && destination === DestinationType.RETAIL) setDestination(DestinationType.PRODUCTION);
+  }, [retailDestinationBlocked, destination]);
+
+  const producibleItems = useMemo(() => items.filter(i => {
+    if (i.isActive === false) return false;
+    if (i.source !== 'Production' && i.source !== 'Both') return false;
+    const nameLower = (i.name || '').toLowerCase().trim();
+    if (['buffalo milk', 'cow milk', 'mixed milk', 'raw milk'].includes(nameLower) || ['item_buffalo_milk', 'item_cow_milk', 'item_mixed_milk'].includes(i.id)) return false;
+    const types = Array.isArray(i.item_type) ? i.item_type : [i.item_type || ''];
+    if (types.length > 0 && types.every(t => t === 'Raw material' || t === 'Packaging material')) return false;
+    const categories = Array.isArray(i.category) ? i.category : [i.category || ''];
+    return !categories.some(c => typeof c === 'string' && ['packaging', 'raw material', 'raw materials'].includes(c.toLowerCase()));
+  }), [items]);
+
+  const openEntry = useCallback((entry: SourceEntry) => setModalEntry(entry), []);
+  const closeModal = useCallback(() => setModalEntry(null), []);
+
+  const handleModalSubmit = (litres: number) => {
+    if (!modalEntry) return;
+    const entry = modalEntry;
+    const text = qtyInputValue(litres);
+    if (cartQtyById.has(entry.id)) {
+      setCart(prev => prev.map(line => (line.allocationId === entry.id ? { ...line, qty: text } : line)));
+      showToast(`Updated ${entry.name} allocation to ${formatQty(litres)} L`, 'success');
     } else {
-      setCart(prev => [...prev, {
-        allocationId: modalData.id,
-        quantity: numQty,
-        maxQty: modalData.maxQty,
-        supplierName: modalData.name,
-        milkType: modalData.milkType,
-        rate: modalData.rate,
-        source: modalData.source
-      }]);
-      showToast(`Added ${numQty} L from ${modalData.name} to cart`, 'success');
+      setCart(prev => [...prev, { allocationId: entry.id, qty: text, supplierName: entry.rawName, milkType: entry.milkType, rate: entry.rate, source: entry.source }]);
+      showToast(`Added ${formatQty(litres)} L from ${entry.name} to cart`, 'success');
     }
-
-    setModalData(null);
+    setModalEntry(null);
   };
 
-  const removeFromCart = (id: string) => {
-    setCart(prev => prev.filter(item => item.allocationId !== id));
+  const handleModalRemove = () => {
+    if (!modalEntry) return;
+    const entry = modalEntry;
+    setCart(prev => prev.filter(line => line.allocationId !== entry.id));
+    setModalEntry(null);
+    showToast(`Removed ${entry.name} from cart`, 'info');
   };
 
-  const updateCartQty = (id: string, qty: number) => {
-    setCart(prev => prev.map(item => {
-      if (item.allocationId === id) {
-        const validated = isNaN(qty) ? 0 : Math.min(item.maxQty, Math.max(0, qty));
-        return { ...item, quantity: validated };
-      }
-      return item;
-    }));
-  };
+  const updateCartQty = useCallback((id: string, text: string) => {
+    setCart(prev => prev.map(line => (line.allocationId === id ? { ...line, qty: text } : line)));
+  }, []);
+  const removeFromCart = useCallback((id: string) => {
+    setCart(prev => prev.filter(line => line.allocationId !== id));
+  }, []);
 
-  const clearCart = () => {
-    setCart([]);
-  };
-
-  const totalVolume = useMemo(() => cart.reduce((sum, item) => sum + (item.quantity || 0), 0), [cart]);
-  const totalValue = useMemo(() => cart.reduce((sum, item) => sum + ((item.quantity || 0) * (item.rate || 0)), 0), [cart]);
-  const averageRate = totalVolume > 0 ? (totalValue / totalVolume) : 0;
-
-  const producibleItems = useMemo(() => {
-    return items.filter(i => {
-      if (i.isActive === false) return false;
-      const isProductionSource = i.source === 'Production' || i.source === 'Both';
-      if (!isProductionSource) return false;
-
-      const nameLower = (i.name || '').toLowerCase().trim();
-      if (
-        ['buffalo milk', 'cow milk', 'mixed milk', 'raw milk'].includes(nameLower) ||
-        ['item_buffalo_milk', 'item_cow_milk', 'item_mixed_milk'].includes(i.id)
-      ) {
-        return false;
-      }
-
-      const types = Array.isArray(i.item_type) ? i.item_type : [i.item_type || ''];
-      const isSolelyMaterial = types.length > 0 && types.every(t => t === 'Raw material' || t === 'Packaging material');
-      if (isSolelyMaterial) return false;
-
-      const categories = Array.isArray(i.category) ? i.category : [i.category || ''];
-      const isMaterialCategory = categories.some(c => typeof c === 'string' && ['packaging', 'raw material', 'raw materials'].includes(c.toLowerCase()));
-      if (isMaterialCategory) return false;
-
-      return true;
-    });
-  }, [items]);
-
-  const isSubmittingAllocRef = useRef(false);
+  const blockReason = !canCreate ? 'Aap ko allocation ki ijazat nahi hai.'
+    : cart.length === 0 ? ''
+    : destination === DestinationType.PRODUCTION && !canStartBatch ? 'Aap ko production batch shuru karne ki ijazat nahi hai.'
+    : retailInCart && destination === DestinationType.RETAIL ? 'Counter milk wapas counter par nahi ja sakta.'
+    : totals.invalid > 0 ? `${totals.invalid} ${totals.invalid === 1 ? 'line ki' : 'lines ki'} qty theek karein.`
+    : '';
+  // Shown on the product field itself, so it is not repeated under the button.
+  const productMissing = destination === DestinationType.PRODUCTION && !selectedProduct;
+  const canConfirm = canCreate && cart.length > 0 && !blockReason && !productMissing && !isSubmitting && totals.volume > 0;
 
   const handleProcessAllocation = async () => {
     if (!canCreate) {
-      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
       return;
     }
     if (cart.length === 0 || isSubmitting || isSubmittingAllocRef.current) {
-      if (cart.length === 0) showToast("Allocation cart is empty", "warning");
+      if (cart.length === 0) showToast('Allocation cart is empty', 'warning');
       return;
     }
-
+    const lines = cart.map(line => ({ ...line, quantity: cleanNumber(parseQty(line.qty), 3) }));
+    const totalVolume = cleanNumber(lines.reduce((sum, line) => sum + line.quantity, 0), 3);
     if (totalVolume <= 0) {
-      showToast("Please specify a valid allocation quantity greater than 0", "warning");
+      showToast('Please specify a valid allocation quantity greater than 0', 'warning');
       return;
     }
-
-    if (activeSource === 'retail' && destination === DestinationType.RETAIL) {
-      showToast("Cannot allocate from Retail Stock back to Retail Counter.", "warning");
+    if (lines.some(line => line.source === 'retail') && destination === DestinationType.RETAIL) {
+      showToast('Cannot allocate from Retail Stock back to Retail Counter.', 'warning');
       return;
     }
-
     if (destination === DestinationType.PRODUCTION && !canStartBatch) {
-      showToast("Aap ko production batch shuru karne ki ijazat nahi hai.", "warning");
+      showToast('Aap ko production batch shuru karne ki ijazat nahi hai.', 'warning');
+      return;
+    }
+    if (destination === DestinationType.PRODUCTION && !selectedProduct) {
+      showToast('Please select a product to manufacture first!', 'warning');
       return;
     }
 
     // Check every line against live stock before anything is written. The batch is created first,
     // so a line that the allocation step later rejects (milk used meanwhile) left a batch whose
     // milk was never taken out of the pool or the counter.
-    const emptyLine = cart.find(item => !(Number(item.quantity) > 0));
+    const emptyLine = lines.find(line => !(line.quantity > 0));
     if (emptyLine) {
-      showToast(`${emptyLine.supplierName}: qty 0 hai. Qty likhein ya line hata dein.`, "warning");
+      showToast(`${displaySourceName(emptyLine.supplierName)}: qty 0 hai. Qty likhein ya line hata dein.`, 'warning');
       return;
     }
-    for (const item of cart) {
-      const qty = Number(item.quantity) || 0;
-      let left = Infinity;
-      if (item.source === 'fresh') {
-        const pool = allocations.find(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
-        if (pool) {
-          left = (pool.remaining_quantity !== null && pool.remaining_quantity !== undefined)
-            ? Number(pool.remaining_quantity)
-            : (Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0));
-        } else {
-          left = 0;
-        }
-      } else {
-        const stockRow = inventory.find(inv => inv.item_id === item.allocationId || inv.id === item.allocationId || inv.id === `inv_${item.allocationId}`);
-        left = stockRow ? Number(stockRow.quantity) || 0 : 0;
-      }
-      if (qty > Math.max(0, left) + 0.001) {
-        showToast(`${item.supplierName}: sirf ${cleanNumber(Math.max(0, left))} L baqi hai, ${cleanNumber(qty)} L allocate nahi ho sakta.`, "error");
+    for (const line of lines) {
+      const left = Math.max(0, availableFor(line));
+      if (line.quantity > left + 0.001) {
+        showToast(`${displaySourceName(line.supplierName)}: sirf ${cleanNumber(left)} L baqi hai, ${cleanNumber(line.quantity)} L allocate nahi ho sakta.`, 'error');
         return;
       }
     }
+
+    const value = lines.reduce((sum, line) => sum + line.quantity * (line.rate || 0), 0);
+    const averageRate = totalVolume > 0 ? value / totalVolume : 0;
 
     isSubmittingAllocRef.current = true;
     setIsSubmitting(true);
@@ -342,61 +308,39 @@ const Allocation: React.FC = () => {
     let createdBatchId: string | null = null;
     try {
       if (destination === DestinationType.PRODUCTION) {
-        if (!selectedProduct) {
-          showToast("Please select a product to manufacture first!", "warning");
-          setIsSubmitting(false);
-          isSubmittingAllocRef.current = false;
-          return;
-        }
-        const prodName = selectedProduct;
-
         // One milk type across the whole cart keeps that type; anything else is 'Mixed'.
-        const distinctTypes = Array.from(new Set(cart.map(c => (c.milkType || 'Mixed').trim())));
+        const distinctTypes = Array.from(new Set(lines.map(line => (line.milkType || 'Mixed').trim())));
         let batchMilkType = 'Mixed';
         if (distinctTypes.length === 1) {
           const t = String(distinctTypes[0] || '').toLowerCase();
           if (t.includes('buffalo')) batchMilkType = 'Buffalo';
           else if (t.includes('cow')) batchMilkType = 'Cow';
-          else batchMilkType = 'Mixed';
-        } else {
-          batchMilkType = 'Mixed';
         }
-
         const batchDetails = {
           milk_type: batchMilkType,
-          milk_breakdown: cart.map(c => ({
-            allocationId: c.allocationId,
-            milkType: c.milkType,
-            quantity: c.quantity,
-            supplierName: c.supplierName,
-            rate: c.rate,
-            source: c.source
-          }))
+          milk_breakdown: lines.map(line => ({
+            allocationId: line.allocationId,
+            milkType: line.milkType,
+            quantity: line.quantity,
+            supplierName: line.supplierName,
+            rate: line.rate,
+            source: line.source,
+          })),
         };
-
-        const batchCreated = await createBatch(prodName, totalVolume, undefined, undefined, averageRate, undefined, batchDetails);
-        if (!batchCreated) {
-          setIsSubmitting(false);
-          return;
-        }
+        const batchCreated = await createBatch(selectedProduct, totalVolume, undefined, undefined, averageRate, undefined, batchDetails);
+        if (!batchCreated) return;
         createdBatchId = batchCreated;
       }
 
-      const freshItems = cart.filter(i => i.source === 'fresh').map(i => ({ allocationId: i.allocationId, quantity: i.quantity }));
-      const retailItems = cart.filter(i => i.source === 'retail').map(i => ({ itemId: i.allocationId, quantity: i.quantity, rate: i.rate }));
+      const freshItems = lines.filter(line => line.source === 'fresh').map(line => ({ allocationId: line.allocationId, quantity: line.quantity }));
+      const retailItems = lines.filter(line => line.source === 'retail').map(line => ({ itemId: line.allocationId, quantity: line.quantity, rate: line.rate }));
 
-      let success = true;
-      let anyDeducted = false;
       let freshDeducted = false;
-      if (freshItems.length > 0) {
-        const res = await allocateBulkMilk(freshItems, destination, { rate: averageRate });
-        if (!res) success = false; else { anyDeducted = true; freshDeducted = true; }
-      }
-
-      if (retailItems.length > 0) {
-        const res = await allocateFromRetailStock(retailItems, destination, { rate: averageRate });
-        if (!res) success = false; else anyDeducted = true;
-      }
+      let retailDeducted = false;
+      if (freshItems.length > 0) freshDeducted = Boolean(await allocateBulkMilk(freshItems, destination, { rate: averageRate }));
+      if (retailItems.length > 0) retailDeducted = Boolean(await allocateFromRetailStock(retailItems, destination, { rate: averageRate }));
+      const success = (freshItems.length === 0 || freshDeducted) && (retailItems.length === 0 || retailDeducted);
+      const anyDeducted = freshDeducted || retailDeducted;
 
       // No milk left stock, so the batch created above is a phantom: remove it.
       if (createdBatchId && !anyDeducted) {
@@ -410,710 +354,226 @@ const Allocation: React.FC = () => {
       if (success) {
         setCart([]);
         setSelectedProduct('');
-        showToast(`Successfully allocated ${totalVolume.toFixed(2)} L to ${destination}`, "success");
+        showToast(`Successfully allocated ${formatQty(totalVolume)} L to ${destination}`, 'success');
         setMobileTab('source');
+      } else if (anyDeducted) {
+        // Lines that already left stock must leave the cart too, or confirming again allocates them twice.
+        const done = freshDeducted ? 'fresh' : 'retail';
+        setCart(prev => prev.filter(line => line.source !== done));
+        showToast(`${done === 'fresh' ? 'Fresh doodh' : 'Counter milk'} allocate ho gaya; baqi lines cart mein hain, dobara check karein.`, 'warning');
       }
     } catch (err: any) {
-      showToast(err.message || 'Failed to process allocation', 'error');
+      showToast(err?.message || 'Failed to process allocation', 'error');
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => {
-        isSubmittingAllocRef.current = false;
-      }, 400);
+      window.setTimeout(() => { isSubmittingAllocRef.current = false; }, 400);
     }
   };
 
-  const getDestinationIcon = (type: string) => {
-    switch(type) {
-      case DestinationType.PRODUCTION: return <Factory size={16} />;
-      default: return <Store size={16} />;
-    }
-  };
-
-  const getMilkTypeStyle = (type: string) => {
-    switch(type) {
-      case 'Buffalo': return 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700';
-      case 'Cow': return 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-      default: return 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800';
-    }
-  };
-
-  const inputClass = "w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 text-xs sm:text-sm font-medium text-slate-900 dark:text-slate-100 outline-none focus:border-lime-500 focus:ring-1 focus:ring-lime-500 transition-all";
+  const sourceCount = activeSource === 'fresh' ? freshEntries.length : retailEntries.length;
 
   return (
-    <div className="space-y-3 pb-8 h-full flex flex-col min-h-0">
-      
-      <div className="lg:hidden bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-1.5 shadow-xs flex items-center justify-between gap-2 shrink-0">
-        <div className="bg-slate-100 dark:bg-slate-800 p-1 rounded-xl flex gap-1 w-full">
-          <button
-            onClick={() => setMobileTab('source')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
-              mobileTab === 'source'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-bold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Droplets size={14} className={mobileTab === 'source' ? 'text-lime-600 dark:text-lime-400' : 'text-slate-400'} />
-            <span>Batches</span>
-            <span className="bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
-              {activeSource === 'fresh' ? sourceAllocations.length : retailMilkItems.length}
-            </span>
-          </button>
+    <div className="flex flex-col gap-4 pb-8 lg:gap-6">
+      <PageHeader
+        eyebrow="Dairy operations"
+        description="Collected doodh ko retail counter ya production mein bhejein. Har lot ka baqi doodh yahan nazar aata hai."
+      />
 
-          <button
-            onClick={() => setMobileTab('cart')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition-all ${
-              mobileTab === 'cart'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm font-bold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <ShoppingCart size={14} className={mobileTab === 'cart' ? 'text-lime-600 dark:text-lime-400' : 'text-slate-400'} />
-            <span>Cart</span>
-            {cart.length > 0 ? (
-              <span className="bg-lime-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
-                {cart.length}
-              </span>
-            ) : (
-              <span className="bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
-                0
-              </span>
-            )}
-          </button>
-        </div>
-      </div>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Milk pool summary">
+        <PoolSummary className="col-span-2" remaining={pool.remaining} allocated={pool.allocated} inCart={totals.fresh} lots={freshEntries.length} />
+        <StatCard
+          label="Counter milk"
+          value={`${formatQty(counterLitres)} L`}
+          icon={<Refrigerator />}
+          tone="info"
+          hint={`${retailEntries.length} ${retailEntries.length === 1 ? 'item' : 'items'}`}
+          onClick={() => { switchSource('retail'); setMobileTab('source'); }}
+        />
+        <StatCard
+          label="Allocation cart"
+          value={`${formatQty(totals.volume)} L`}
+          icon={<ShoppingCart />}
+          tone="brand"
+          hint={cart.length > 0 ? `Avg ${formatCurrency(cleanNumber(totals.averageRate, 1))}/L` : 'Khali'}
+          onClick={() => setMobileTab('cart')}
+        />
+      </section>
 
-      <div className="flex flex-col lg:flex-row flex-1 min-h-0 gap-3 lg:gap-4 overflow-hidden relative">
-        
-        <div className={`flex-[1.3] flex-col bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden h-full min-h-0 ${
-          mobileTab === 'source' ? 'flex' : 'hidden lg:flex'
-        }`}>
-          
-          <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 space-y-2.5">
-            
-            <div className="grid grid-cols-2 gap-1.5 bg-slate-200/60 dark:bg-slate-800 p-1 rounded-xl">
-              <button 
-                onClick={() => switchSource('fresh')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  activeSource === 'fresh' 
-                    ? 'bg-white dark:bg-slate-900 text-lime-700 dark:text-lime-400 shadow-xs' 
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Droplets size={14} className="text-lime-600 dark:text-lime-400" />
-                <span className="truncate">Unallocated ({sourceAllocations.length})</span>
-              </button>
+      <SegmentedControl
+        aria-label="Allocation panel"
+        className="lg:hidden"
+        fullWidth
+        value={mobileTab}
+        onChange={setMobileTab}
+        options={[
+          { value: 'source', label: 'Doodh lots', icon: <Droplets />, count: sourceCount },
+          { value: 'cart', label: 'Cart', icon: <ShoppingCart />, count: cart.length },
+        ]}
+      />
 
-              <button 
-                onClick={() => switchSource('retail')}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                  activeSource === 'retail' 
-                    ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-400 shadow-xs' 
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Refrigerator size={14} className="text-indigo-600 dark:text-indigo-400" />
-                <span className="truncate">Retail Stock ({retailMilkItems.length})</span>
-              </button>
-            </div>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] lg:gap-6">
+        <Card className={mobileTab === 'source' ? 'block' : 'hidden lg:block'}>
+          <div className="flex flex-col gap-3 border-b border-line p-3 sm:p-4">
+            <SegmentedControl
+              aria-label="Milk source"
+              fullWidth
+              value={activeSource}
+              onChange={switchSource}
+              options={[
+                { value: 'fresh', label: 'Unallocated', icon: <Droplets />, count: freshEntries.length },
+                { value: 'retail', label: 'Retail stock', icon: <Refrigerator />, count: retailEntries.length },
+              ]}
+            />
+            <SearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder={activeSource === 'fresh' ? 'Gwala / supplier ya milk type search karein...' : 'Counter milk search karein...'}
+              aria-label="Search milk sources"
+            />
+          </div>
 
-            <div className="flex items-center gap-2 bg-white dark:bg-slate-800/80 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 focus-within:border-lime-500 focus-within:ring-1 focus-within:ring-lime-500/20 transition-all shadow-2xs">
-              <Search className="text-slate-400 shrink-0" size={14} />
-              <input
-                type="text"
-                placeholder={activeSource === 'fresh' ? "Search by gwala / supplier name..." : "Search retail milk..."}
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="bg-transparent outline-none text-xs font-medium w-full text-slate-800 dark:text-slate-200 placeholder:text-slate-400"
+          {filteredEntries.length === 0 ? (
+            activeSource === 'fresh' ? (
+              <EmptyState
+                icon={<Droplets />}
+                title={searchQuery ? 'Koi lot nahi mila' : 'Unallocated doodh nahi hai'}
+                description={searchQuery ? 'Search badal kar dekhein.' : 'Milk collection mein intake record karein, ya Retail stock se counter milk production mein bhejein.'}
               />
-              {searchQuery && (
-                <button aria-label="Hatayen" onClick={() => setSearchQuery('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-0.5 shrink-0 cursor-pointer">
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2.5 bg-slate-50/40 dark:bg-slate-950/40">
-            
-            {activeSource === 'fresh' && (
-              filteredSourceAllocations.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full min-h-[220px] text-slate-400 text-center p-6">
-                  <Droplets size={40} className="mb-2 opacity-25 text-slate-400" />
-                  <p className="font-semibold text-xs sm:text-sm text-slate-600 dark:text-slate-400">No unallocated fresh milk available</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Record milk intake in Purchase or switch to Retail Stock.</p>
-                </div>
-              ) : (
-                filteredSourceAllocations.map(alloc => {
-                  const inCartItem = cart.find(i => i.allocationId === alloc.id);
-                  const isInCart = !!inCartItem;
-                  const rate = getRate(alloc);
-                  const displaySupplierName = getDisplayName(alloc);
-                  const isReturn = displaySupplierName.startsWith('Return:');
-                  const displayName = isReturn ? displaySupplierName.replace('Return:', '').trim() : displaySupplierName;
-                  const currentQty = (alloc.remaining_quantity !== null && alloc.remaining_quantity !== undefined) 
-                    ? Number(alloc.remaining_quantity) 
-                    : (Number(alloc.original_quantity || 0) - Number(alloc.allocated_quantity || 0));
-                  const isPartiallyAllocated = 
-                    alloc.status === AllocationStatus.PARTIALLY_ALLOCATED || 
-                    ((Number(alloc.allocated_quantity) || 0) > 0 && currentQty > 0.001);
-
-                  return (
-                    <div 
-                      key={alloc.id} 
-                      onClick={() => openAllocateModal(alloc, 'fresh')}
-                      className={`relative flex items-center justify-between p-3 sm:p-3.5 rounded-xl border transition-all cursor-pointer group ${
-                        isInCart 
-                          ? 'bg-lime-50/70 dark:bg-lime-950/40 border-lime-300 dark:border-lime-700/80 shadow-2xs hover:border-lime-400' 
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-lime-300 dark:hover:border-lime-700/60 hover:shadow-xs'
-                      }`}
-                    >
-                      <div className="min-w-0 pr-2">
-                        <div className="flex items-center gap-1.5">
-                          <h4 className={`font-bold text-xs sm:text-sm truncate ${isInCart ? 'text-lime-950 dark:text-lime-300' : 'text-slate-800 dark:text-slate-100'}`}>
-                            {displayName}
-                          </h4>
-                          {isInCart && (
-                            <span className="text-[10px] font-bold bg-lime-600 text-white px-1.5 py-0.2 rounded-md shrink-0">
-                              {formatQty(inCartItem.quantity)}L in Cart
-                            </span>
-                          )}
-                        </div>
-                        
-                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                          {!isReturn && (
-                            <span className={`text-[10px] px-1.5 py-0.2 rounded border uppercase font-bold tracking-wide ${getMilkTypeStyle(alloc.milk_type || 'Mixed')}`}>
-                              {alloc.milk_type || 'Mixed'}
-                            </span>
-                          )}
-                          {isReturn && (
-                            <span className="text-[10px] bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 px-1.5 py-0.2 rounded border border-amber-200 dark:border-amber-800 uppercase tracking-wide font-bold">
-                              Return
-                            </span>
-                          )}
-                          {isPartiallyAllocated && (
-                            <span className="text-[10px] bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 px-1.5 py-0.2 rounded border border-amber-200 dark:border-amber-800 font-semibold">
-                              Partial ({formatQty(currentQty)} / {formatQty(alloc.original_quantity)}L)
-                            </span>
-                          )}
-                          <span className="text-[11px] text-slate-400 dark:text-slate-400 font-mono">
-                            Rs {rate.toFixed(0)}/L
-                          </span>
-                          <span className="text-slate-300 dark:text-slate-600 hidden sm:inline">•</span>
-                          <span className="text-[11px] text-slate-400 dark:text-slate-400 hidden sm:inline">
-                            {new Date(alloc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                        <div className="text-right">
-                          <p className="text-[10px] text-slate-400 uppercase font-semibold">Avail</p>
-                          <p className="text-sm sm:text-base font-bold font-mono text-slate-800 dark:text-slate-100 leading-tight">
-                            {formatQty(currentQty)} <span className="text-[11px] font-normal text-slate-400">L</span>
-                          </p>
-                        </div>
-
-                        <button aria-label={isInCart ? 'Edit quantity' : 'Add to cart'} 
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openAllocateModal(alloc, 'fresh');
-                          }}
-                          className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                            isInCart 
-                              ? 'bg-lime-600 text-white shadow-xs hover:bg-lime-700' 
-                              : 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 hover:bg-lime-600 hover:text-white border border-lime-200 dark:border-lime-800 shadow-2xs'
-                          }`}
-                          title={isInCart ? 'Edit quantity' : 'Add to cart'}
-                        >
-                          {isInCart ? <Check size={16} /> : <Plus size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )
-            )}
-
-            {activeSource === 'retail' && (
-              filteredRetailMilkItems.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full min-h-[220px] text-slate-400 text-center p-6">
-                  <Refrigerator size={40} className="mb-2 opacity-25 text-slate-400" />
-                  <p className="font-semibold text-xs sm:text-sm text-slate-600 dark:text-slate-400">No milk available in retail counter</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Ensure milk items exist in Items and have stock in POS.</p>
-                </div>
-              ) : (
-                filteredRetailMilkItems.map(item => {
-                  const itemId = item.item_id || item.id;
-                  const inCartItem = cart.find(i => i.allocationId === itemId);
-                  const isInCart = !!inCartItem;
-                  const itemDef = items.find(d => d.name === item.name);
-                  const displayRate = itemDef?.cost_price || item.price || 0;
-
-                  return (
-                    <div 
-                      key={item.id} 
-                      onClick={() => openAllocateModal(item, 'retail')}
-                      className={`relative flex items-center justify-between p-3 sm:p-3.5 rounded-xl border transition-all cursor-pointer group ${
-                        isInCart 
-                          ? 'bg-indigo-50/70 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-2xs hover:border-indigo-400' 
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700/60 hover:shadow-xs'
-                      }`}
-                    >
-                      <div className="min-w-0 pr-2">
-                        <div className="flex items-center gap-1.5">
-                          <h4 className={`font-bold text-xs sm:text-sm truncate ${isInCart ? 'text-indigo-950 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-100'}`}>
-                            {item.name}
-                          </h4>
-                          {isInCart && (
-                            <span className="text-[10px] font-bold bg-indigo-600 text-white px-1.5 py-0.2 rounded-md shrink-0">
-                              {formatQty(inCartItem.quantity)}L in Cart
-                            </span>
-                          )}
-                        </div>
-                        
-                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                          <span className="text-[10px] bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-100 dark:border-indigo-800 font-bold uppercase tracking-wide flex items-center gap-1">
-                            <Refrigerator size={10}/> Retail
-                          </span>
-                          <span className="text-[11px] text-slate-400 dark:text-slate-400 font-mono">
-                            Ref Cost: Rs {displayRate.toFixed(0)}/{item.unit || 'L'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                        <div className="text-right">
-                          <p className="text-[10px] text-slate-400 uppercase font-semibold">Avail</p>
-                          <p className="text-sm sm:text-base font-bold font-mono text-slate-800 dark:text-slate-100 leading-tight">
-                            {formatQty(item.quantity)} <span className="text-[11px] font-normal text-slate-400">{item.unit || 'L'}</span>
-                          </p>
-                        </div>
-
-                        <button aria-label={isInCart ? 'Edit quantity' : 'Add to cart'} 
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openAllocateModal(item, 'retail');
-                          }}
-                          className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                            isInCart 
-                              ? 'bg-indigo-600 text-white shadow-xs hover:bg-indigo-700' 
-                              : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-600 hover:text-white border border-indigo-200 dark:border-indigo-800 shadow-2xs'
-                          }`}
-                          title={isInCart ? 'Edit quantity' : 'Add to cart'}
-                        >
-                          {isInCart ? <Check size={16} /> : <Plus size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )
-            )}
-
-          </div>
-
-          <AnimatePresence>
-            {mobileTab === 'source' && cart.length > 0 && (
-              <MotionDiv 
-                initial={{ y: 50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 50, opacity: 0 }}
-                className="p-2.5 bg-white dark:bg-slate-900 text-slate-900 dark:text-white sm:hidden flex items-center justify-between gap-2 border-t border-slate-200 dark:border-slate-800 shadow-xl"
-              >
-                <div className="min-w-0">
-                  <span className="text-xs font-bold block truncate text-slate-900 dark:text-white">
-                    {cart.length} Batches • {totalVolume.toFixed(1)} L
-                  </span>
-                  <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-mono">
-                    Avg Rs {averageRate.toFixed(1)}/L
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => setMobileTab('cart')}
-                  className="px-3.5 py-1.5 bg-lime-600 hover:bg-lime-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer"
-                >
-                  <span>Review Cart</span>
-                  <ArrowRight size={13} />
-                </button>
-              </MotionDiv>
-            )}
-          </AnimatePresence>
-
-        </div>
-
-        <div className={`flex-[1.1] flex-col bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden h-full min-h-0 ${
-          mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'
-        }`}>
-          
-          <div className="p-3 sm:px-4 sm:py-3 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/80 flex items-center justify-between shrink-0">
-            <h3 className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-200 flex items-center gap-2">
-              <ShoppingCart className="text-lime-600 dark:text-lime-400" size={16} /> 
-              <span>Allocation Cart</span>
-              <span className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold">
-                {cart.length}
-              </span>
-            </h3>
-
-            {cart.length > 0 && (
-              <button 
-                onClick={clearCart}
-                className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 px-2 py-1 rounded-md transition-colors flex items-center gap-1 font-semibold cursor-pointer"
-              >
-                <Trash2 size={12} /> Clear
-              </button>
-            )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-white dark:bg-slate-900/60">
-            {cart.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full min-h-[180px] text-slate-400 text-center p-6">
-                <ShoppingCart size={36} className="mb-2 opacity-30 text-slate-400" />
-                <p className="font-semibold text-xs sm:text-sm text-slate-600 dark:text-slate-400">Cart is empty</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Select milk batches from the left panel to begin allocation.</p>
-                <button
-                  onClick={() => setMobileTab('source')}
-                  className="mt-3 text-xs font-bold text-lime-700 dark:text-lime-400 bg-lime-50 dark:bg-lime-950/40 border border-lime-200 dark:border-lime-800 px-3 py-1.5 rounded-lg sm:hidden cursor-pointer"
-                >
-                  Browse Batches
-                </button>
-              </div>
             ) : (
-              cart.map(item => {
-                const isReturn = (item.supplierName || '').startsWith('Return:');
-                const displayCartName = isReturn ? (item.supplierName || '').replace('Return:', '').trim() : (item.supplierName || 'Unknown');
-                const isRetail = item.source === 'retail';
+              <EmptyState
+                icon={<Refrigerator />}
+                title={searchQuery ? 'Koi item nahi mila' : 'Counter par milk stock nahi hai'}
+                description={searchQuery ? 'Search badal kar dekhein.' : 'Litre wale milk items ka POS stock yahan nazar aata hai.'}
+              />
+            )
+          ) : (
+            <div className="p-3 sm:p-4">
+              <ul className="flex flex-col gap-2">
+                {list.visibleItems.map(entry => (
+                  <SourceRow key={entry.id} entry={entry} inCartQty={cartQtyById.get(entry.id) ?? null} onOpen={openEntry} />
+                ))}
+              </ul>
+              <LoadMoreRow sentinelRef={list.sentinelRef} hiddenCount={list.hiddenCount} onShowMore={list.showMore} onShowAll={list.showAll} />
+            </div>
+          )}
+        </Card>
 
-                return (
-                  <div 
-                    key={item.allocationId} 
-                    className={`p-2.5 sm:p-3 rounded-xl border flex items-center justify-between gap-2.5 transition-all ${
-                      isRetail ? 'border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/20 dark:bg-indigo-950/30' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <button aria-label="Remove" 
-                        onClick={() => removeFromCart(item.allocationId)}
-                        className="text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 p-1 rounded-md transition-colors shrink-0 cursor-pointer"
-                        title="Remove"
-                      >
-                        <X size={14} />
-                      </button>
-                      
-                      <div className="min-w-0">
-                        <p className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 truncate flex items-center gap-1.5">
-                          {isRetail && <Refrigerator size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0"/>}
-                          <span>{displayCartName}</span>
-                          {!isRetail && !isReturn && (
-                            <span className="text-[10px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1 py-0.2 rounded font-medium">
-                              {item.milkType}
-                            </span>
-                          )}
-                        </p>
-                        <p className="text-[11px] text-slate-400 font-mono truncate">
-                          Rs {item.rate.toFixed(0)}/L • Max: {formatQty(item.maxQty)}L
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 px-1.5 py-1 focus-within:border-lime-500 focus-within:ring-1 focus-within:ring-lime-500 transition-all">
-                        <input 
-                          type="number"
-                          step="any"
-                          min="0"
-                          max={item.maxQty}
-                          className="w-14 sm:w-16 bg-transparent text-right font-bold font-mono text-slate-800 dark:text-slate-100 text-xs sm:text-sm outline-none"
-                          value={item.quantity === 0 ? '' : item.quantity}
-                          onChange={(e) => updateCartQty(item.allocationId, parseFloat(e.target.value))}
-                        />
-                        <span className="text-[11px] font-semibold text-slate-400 pl-1">L</span>
-                      </div>
-
-                      {item.quantity < item.maxQty && (
-                        <button
-                          type="button"
-                          onClick={() => updateCartQty(item.allocationId, item.maxQty)}
-                          className="text-[9px] font-bold text-lime-700 dark:text-lime-400 bg-lime-50 dark:bg-lime-950/40 border border-lime-200 dark:border-lime-800 px-1.5 py-1 rounded hover:bg-lime-100 dark:hover:bg-lime-900/50 cursor-pointer"
-                          title="Set max volume"
-                        >
-                          Max
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
+        <Card className={`${mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'} flex-col lg:sticky lg:top-4`}>
+          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+            <h3 className="flex items-center gap-2 text-[15px] font-bold tracking-tight text-fg">
+              <ShoppingCart className="size-4 text-brand-fg" aria-hidden="true" />
+              Allocation cart
+              <Badge tone={cart.length > 0 ? 'brand' : 'neutral'}>{cart.length}</Badge>
+            </h3>
+            {cart.length > 0 && (
+              <Button variant="ghost" size="sm" leftIcon={<Trash2 />} onClick={() => setCart([])} className="text-danger-fg hover:bg-danger-soft hover:text-danger-fg">
+                Clear
+              </Button>
             )}
           </div>
 
-          <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900/90 shrink-0 space-y-3">
-            
-            <div className="grid grid-cols-2 gap-2 bg-white dark:bg-slate-900 p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs">
-              <div>
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Volume</p>
-                <p className="text-base sm:text-xl font-bold font-mono text-lime-700 dark:text-lime-400 leading-tight mt-0.5">
-                  {totalVolume.toFixed(1)} <span className="text-xs font-normal text-slate-400">L</span>
-                </p>
+          {cart.length === 0 ? (
+            <EmptyState
+              size="compact"
+              icon={<ShoppingCart />}
+              title="Cart khali hai"
+              description="Baen taraf se doodh ka lot chunein aur qty likhein."
+              action={<Button variant="soft" size="sm" className="lg:hidden" onClick={() => setMobileTab('source')}>Lots dekhein</Button>}
+            />
+          ) : (
+            <ul className="flex flex-col gap-2 p-3 sm:p-4 lg:max-h-[38vh] lg:overflow-y-auto">
+              {cart.map(line => (
+                <CartLine key={line.allocationId} line={line} available={availableFor(line)} onQtyChange={updateCartQty} onRemove={removeFromCart} />
+              ))}
+            </ul>
+          )}
+
+          <div className="flex flex-col gap-4 border-t border-line bg-surface-2/60 p-4 sm:p-5">
+            <dl className="grid grid-cols-3 gap-2">
+              <div className="min-w-0">
+                <dt className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Total</dt>
+                <dd className="mt-1 text-xl font-bold leading-none tabular-nums text-fg">{formatQty(totals.volume)}<span className="ml-0.5 text-xs font-semibold text-fg-subtle">L</span></dd>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center justify-end gap-1">
-                  <Calculator size={10} /> Avg Cost
-                </p>
-                <p className="text-base sm:text-xl font-bold font-mono text-slate-800 dark:text-slate-100 leading-tight mt-0.5">
-                  Rs {averageRate.toFixed(1)}
-                </p>
+              <div className="min-w-0">
+                <dt className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Avg cost</dt>
+                <dd className="mt-1 text-xl font-bold leading-none tabular-nums text-fg">{formatCurrency(cleanNumber(totals.averageRate, 1))}</dd>
               </div>
-            </div>
+              <div className="min-w-0 text-right">
+                <dt className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Value</dt>
+                <dd className="mt-1 text-xl font-bold leading-none text-fg"><Money amount={totals.value} compact /></dd>
+              </div>
+            </dl>
 
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                Allocation Destination
-              </label>
-              <div className="grid grid-cols-2 gap-1.5 bg-slate-200/60 dark:bg-slate-800 p-1 rounded-xl">
-                {[DestinationType.RETAIL, DestinationType.PRODUCTION].map(type => {
-                  if (activeSource === 'retail' && type === DestinationType.RETAIL) return null;
-                  
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setDestination(type)}
-                      className={`py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                        destination === type 
-                          ? 'bg-white dark:bg-slate-900 text-lime-700 dark:text-lime-400 shadow-xs' 
-                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                      }`}
-                    >
-                      {getDestinationIcon(type)}
-                      <span>{type}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <p className="mb-1.5 text-xs font-semibold text-fg-muted">Kahan bhejna hai</p>
+              <SegmentedControl
+                aria-label="Allocation destination"
+                fullWidth
+                value={destination}
+                onChange={setDestination}
+                options={[
+                  { value: DestinationType.RETAIL, label: 'Retail counter', icon: <Store />, disabled: retailDestinationBlocked },
+                  { value: DestinationType.PRODUCTION, label: 'Production', icon: <Factory /> },
+                ]}
+              />
+              {retailInCart && (
+                <p className="mt-1.5 text-xs text-fg-subtle">Cart mein counter milk hai, is liye sirf production mein ja sakta hai.</p>
+              )}
             </div>
 
-            <div>
-              {destination === DestinationType.PRODUCTION && (
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
-                    Product to Manufacture *
-                  </label>
-                  <select
-                    className={`${inputClass} ${
-                      !selectedProduct ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/20' : ''
-                    }`}
-                    value={selectedProduct}
-                    onChange={(e) => setSelectedProduct(e.target.value)}
-                  >
-                    <option value="">Select Product...</option>
-                    {producibleItems.map(p => (
-                      <option key={p.id} value={p.name}>Make: {p.name}</option>
+            {destination === DestinationType.PRODUCTION ? (
+              <Field
+                label="Kya banana hai"
+                required
+                error={cart.length > 0 && !selectedProduct ? 'Confirm se pehle product chunein.' : undefined}
+                hint={producibleItems.length === 0 ? 'Items mein product ka source "Production" set karein.' : undefined}
+              >
+                {control => (
+                  <Select {...control} value={selectedProduct} onChange={event => setSelectedProduct(event.target.value)}>
+                    <option value="">Product chunein...</option>
+                    {producibleItems.map(product => (
+                      <option key={product.id} value={product.name}>Make: {product.name}</option>
                     ))}
-                    {producibleItems.length === 0 && (
-                      <option value="" disabled>No production items defined (Set source to Production in Items)</option>
-                    )}
-                  </select>
-                  {!selectedProduct && (
-                    <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                      ⚠️ Please select a product to enable allocation confirmation
-                    </p>
-                  )}
-                </div>
-              )}
-              
-              {destination === DestinationType.RETAIL && (
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900/80 p-2 rounded-lg border border-slate-200 dark:border-slate-800 text-center italic">
-                  Milk will be transferred directly into POS Retail Counter stock.
-                </div>
-              )}
+                  </Select>
+                )}
+              </Field>
+            ) : (
+              <p className="rounded-control border border-line bg-surface px-3 py-2.5 text-xs text-fg-subtle">
+                Doodh seedha POS retail counter ke stock mein chala jayega.
+              </p>
+            )}
+
+            <div className="space-y-2">
+              <Button size="lg" fullWidth loading={isSubmitting} disabled={!canConfirm} rightIcon={<ArrowRight />} onClick={handleProcessAllocation}>
+                {isSubmitting ? 'Processing...' : `Confirm allocation${totals.volume > 0 ? ` · ${formatQty(totals.volume)} L` : ''}`}
+              </Button>
+              {blockReason && <p className="text-center text-xs font-semibold text-warning-fg" role="status">{blockReason}</p>}
             </div>
-
-            {(() => {
-              const isInvalidProduction = destination === DestinationType.PRODUCTION && !selectedProduct;
-              const isInvalidRetail = activeSource === 'retail' && destination === DestinationType.RETAIL;
-              const isBatchBlocked = destination === DestinationType.PRODUCTION && !canStartBatch;
-              const canConfirm = canCreate && !isBatchBlocked && cart.length > 0 && !isSubmitting && totalVolume > 0 && !isInvalidProduction && !isInvalidRetail;
-
-              return (
-                <button 
-                  onClick={handleProcessAllocation}
-                  disabled={!canConfirm}
-                  title={!canCreate ? 'Aap ko allocation ki ijazat nahi hai' : isBatchBlocked ? 'Aap ko production batch shuru karne ki ijazat nahi hai' : undefined}
-                  className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm text-white flex items-center justify-center gap-2 shadow-sm transition-all active:scale-[0.98] ${
-                    canConfirm
-                      ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-200 cursor-pointer' 
-                      : 'bg-slate-300 dark:bg-slate-800 text-slate-500 dark:text-slate-600 cursor-not-allowed opacity-60'
-                  }`}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw size={15} className="animate-spin" /> Processing...
-                    </>
-                  ) : (
-                    <>
-                      Confirm Allocation <ArrowRight size={16} />
-                    </>
-                  )}
-                </button>
-              );
-            })()}
-
           </div>
-
-        </div>
-
+        </Card>
       </div>
 
-      <AnimatePresence>
-        {modalData && (
-          <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-            <MotionDiv
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-md overflow-hidden"
-            >
-              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/90 flex justify-between items-center">
-                <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                  <Sliders size={16} className="text-lime-600 dark:text-lime-400" />
-                  <span>Allocate Milk Volume</span>
-                </h3>
-                <button aria-label="Band karein" 
-                  onClick={() => setModalData(null)} 
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-lg transition-colors cursor-pointer"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <form onSubmit={handleConfirmModalAllocation} className="p-4 sm:p-5 space-y-4">
-                
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 rounded-xl space-y-2 text-xs">
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500 dark:text-slate-400">Source:</span>
-                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">{modalData.name}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-500 dark:text-slate-400">Milk Type / Cost:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold uppercase ${getMilkTypeStyle(modalData.milkType)}`}>
-                        {modalData.milkType}
-                      </span>
-                      <span className="font-bold font-mono text-slate-700 dark:text-slate-300">Rs {modalData.rate.toFixed(0)}/L</span>
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-center pt-1 border-t border-slate-200 dark:border-slate-700">
-                    <span className="text-slate-500 dark:text-slate-400">Max Available Stock:</span>
-                    <span className="font-bold font-mono text-lime-700 dark:text-lime-400 text-sm">{formatQty(modalData.maxQty)} Liters</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Quantity to Allocate (Liters) *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="any"
-                      min="0.1"
-                      max={modalData.maxQty}
-                      required
-                      autoFocus
-                      className="w-full h-12 pl-4 pr-12 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-lg font-bold font-mono text-slate-900 dark:text-slate-100 outline-none focus:border-lime-500 focus:ring-2 focus:ring-lime-500/20 transition-all shadow-xs"
-                      placeholder="0.0"
-                      value={modalQty}
-                      onChange={(e) => setModalQty(e.target.value)}
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">
-                      L
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                    Quick Volume Presets
-                  </span>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {[
-                      { label: '5L', val: 5 },
-                      { label: '10L', val: 10 },
-                      { label: '50% (Half)', val: cleanNumber(modalData.maxQty / 2) },
-                      { label: `100% (${formatQty(modalData.maxQty)}L)`, val: modalData.maxQty }
-                    ].map(p => {
-                      if (p.val > modalData.maxQty && p.val !== modalData.maxQty) return null;
-                      return (
-                        <button
-                          key={p.label}
-                          type="button"
-                          onClick={() => setModalQty(p.val)}
-                          className={`py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
-                            parseFloat(modalQty.toString()) === p.val
-                              ? 'bg-lime-600 text-white border-lime-600 font-bold'
-                              : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                          }`}
-                        >
-                          {p.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="flex justify-between items-center pt-2 text-xs">
-                  <span className="text-slate-500 dark:text-slate-400">Estimated Value:</span>
-                  <span className="font-bold font-mono text-slate-900 dark:text-slate-100 text-sm">
-                    {formatCurrency((parseFloat(modalQty.toString()) || 0) * modalData.rate)}
-                  </span>
-                </div>
-
-                <div className="pt-2 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800">
-                  {cart.some(ci => ci.allocationId === modalData.id) ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        removeFromCart(modalData.id);
-                        setModalData(null);
-                        showToast(`Removed ${modalData.name} from cart`, 'info');
-                      }}
-                      className="px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl transition-colors border border-red-200 dark:border-red-800 cursor-pointer"
-                    >
-                      Remove from Cart
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setModalData(null)}
-                      className="px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="flex-1 bg-lime-600 hover:bg-lime-700 text-white font-bold text-xs sm:text-sm py-2.5 px-4 rounded-xl shadow-xs transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Check size={16} />
-                    <span>
-                      {cart.some(ci => ci.allocationId === modalData.id) ? 'Update Cart' : 'Add to Cart'}
-                    </span>
-                  </button>
-                </div>
-
-              </form>
-
-            </MotionDiv>
+      {mobileTab === 'source' && cart.length > 0 && (
+        <div className="sticky bottom-3 z-10 flex items-center justify-between gap-3 rounded-card border border-line bg-surface p-3 shadow-e2 animate-fade-up lg:hidden">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold tabular-nums text-fg">{cart.length} {cart.length === 1 ? 'line' : 'lines'} · {formatQty(totals.volume)} L</p>
+            <p className="text-xs tabular-nums text-fg-subtle">Avg {formatCurrency(cleanNumber(totals.averageRate, 1))}/L</p>
           </div>
-        )}
-      </AnimatePresence>
+          <Button size="md" rightIcon={<ArrowRight />} onClick={() => setMobileTab('cart')}>Review cart</Button>
+        </div>
+      )}
 
+      {liveModalEntry && (
+        <Suspense fallback={null}>
+          <AllocateQtyModal
+            entry={liveModalEntry}
+            cartQty={cartQtyById.get(liveModalEntry.id) ?? null}
+            onSubmit={handleModalSubmit}
+            onRemove={handleModalRemove}
+            onClose={closeModal}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };
