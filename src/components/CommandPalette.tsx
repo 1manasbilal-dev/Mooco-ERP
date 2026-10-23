@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { useDairy } from '../context/DairyContext';
 import { useTabs } from '../context/TabContext';
 import {
@@ -7,6 +7,9 @@ import {
   Store, History, ClipboardCheck, Moon, Sun, Plus, CornerDownLeft
 } from 'lucide-react';
 import { formatCurrency } from '../lib/formatters';
+import { cn } from '../lib/cn';
+import { Badge, type Tone } from './ui/Badge';
+import { Kbd } from './ui/Field';
 
 interface PaletteItem {
   id: string;
@@ -18,6 +21,10 @@ interface PaletteItem {
   badge?: string;
   badgeColor?: 'lime' | 'amber' | 'blue' | 'rose' | 'slate';
 }
+
+const BADGE_TONE: Record<NonNullable<PaletteItem['badgeColor']>, Tone> = {
+  lime: 'brand', amber: 'warning', blue: 'info', rose: 'danger', slate: 'neutral',
+};
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -38,13 +45,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   useEffect(() => {
-    if (isOpen) {
-      setQuery('');
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+    if (!isOpen) return;
+    setQuery('');
+    setSelectedIndex(0);
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    return () => {
+      cancelAnimationFrame(frame);
+      // Back to where the operator was (unless an action moved focus somewhere new on purpose).
+      if (previousFocus?.isConnected && (document.activeElement === document.body || !document.activeElement)) previousFocus.focus({ preventScroll: true });
+    };
   }, [isOpen]);
 
   const allItems = useMemo<PaletteItem[]>(() => {
@@ -333,168 +346,170 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     return items;
   }, [isOpen, customers, suppliers, dairyItems, openTab, onClose, toggleTheme, themeMode, hasPermission]);
 
+  // Lower-cased once per open, not on every keystroke for every customer.
+  const searchIndex = useMemo(
+    () => allItems.map(item => `${item.title}\n${item.subtitle || ''}\n${item.category}`.toLowerCase()),
+    [allItems]
+  );
+
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) {
       return allItems.filter(i => i.category === 'Navigation' || i.category === 'Actions').slice(0, 10);
     }
-    return allItems.filter(item => {
-      return (
-        item.title.toLowerCase().includes(q) ||
-        (item.subtitle && item.subtitle.toLowerCase().includes(q)) ||
-        item.category.toLowerCase().includes(q)
-      );
-    }).slice(0, 25);
-  }, [allItems, query]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex(prev => (prev + 1) % Math.max(1, filteredItems.length));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex(prev => (prev - 1 + filteredItems.length) % Math.max(1, filteredItems.length));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        if (filteredItems[selectedIndex]) {
-          filteredItems[selectedIndex].action();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filteredItems, selectedIndex, onClose]);
-
-  useEffect(() => {
-    if (listRef.current) {
-      const activeEl = listRef.current.querySelector(`[data-index="${selectedIndex}"]`);
-      if (activeEl) {
-        activeEl.scrollIntoView({ block: 'nearest' });
-      }
+    const matches: PaletteItem[] = [];
+    for (let i = 0; i < allItems.length && matches.length < 25; i++) {
+      if (searchIndex[i].includes(q)) matches.push(allItems[i]);
     }
-  }, [selectedIndex]);
+    return matches;
+  }, [allItems, searchIndex, query]);
+
+  const activeIndex = Math.min(selectedIndex, Math.max(0, filteredItems.length - 1));
+  const activeItem = filteredItems[activeIndex];
+
+  // Keys typed in the palette belong to it: page shortcuts behind it (POS F8/F9, list hotkeys) never fire.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const count = filteredItems.length;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (Math.min(prev, count - 1) + 1) % Math.max(1, count));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (Math.min(prev, count - 1) - 1 + count) % Math.max(1, count));
+    } else if (e.key === 'Home' && e.ctrlKey) {
+      e.preventDefault();
+      setSelectedIndex(0);
+    } else if (e.key === 'End' && e.ctrlKey) {
+      e.preventDefault();
+      setSelectedIndex(Math.max(0, count - 1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      activeItem?.action();
+    } else if (e.key === 'Tab') {
+      // The search box is the only stop; arrows move through the results.
+      e.preventDefault();
+    }
+  };
+
+  useEffect(() => {
+    listRef.current?.querySelector(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex]);
 
   if (!isOpen) return null;
 
+  const optionId = (index: number) => `${listId}-option-${index}`;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 px-3 sm:px-4">
-      <div 
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity duration-200" 
-        onClick={onClose} 
+    <div className="fixed inset-0 z-[150] flex items-start justify-center px-3 pt-[9vh] sm:px-4 sm:pt-[14vh]" data-app-modal="true" onKeyDown={handleKeyDown}>
+      <div
+        className="absolute inset-0 bg-[rgb(2_6_23/0.45)] animate-in fade-in duration-150"
+        aria-hidden="true"
+        onClick={onClose}
       />
 
-      <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col">
-        
-        <div className="flex items-center px-4 py-3.5 border-b border-slate-100 dark:border-slate-800 gap-3">
-          <Search size={18} className="text-lime-600 dark:text-lime-400 shrink-0" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Quick search"
+        // Clicks inside keep focus in the search box, so the keyboard keeps working.
+        // (The list itself is left alone so its scrollbar can still be dragged.)
+        onMouseDown={e => { if (e.target !== inputRef.current && e.target !== listRef.current) e.preventDefault(); }}
+        className="relative flex max-h-[min(620px,78dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-card border border-line bg-surface shadow-e3 animate-in fade-in zoom-in-[.98] duration-150"
+      >
+        <div className="flex shrink-0 items-center gap-3 border-b border-line px-4">
+          <Search size={18} className="shrink-0 text-fg-faint" aria-hidden="true" />
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeItem ? optionId(activeIndex) : undefined}
+            aria-label="Search pages, customers, suppliers, actions"
             placeholder="Search pages, customers, suppliers, actions (e.g. POS, Milk, Sale)..."
             value={query}
             onChange={e => {
               setQuery(e.target.value);
               setSelectedIndex(0);
             }}
-            className="w-full bg-transparent text-sm font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none"
+            autoComplete="off"
+            spellCheck={false}
+            className="ds-control h-14 w-full min-w-0 bg-transparent text-[15px] font-medium text-fg outline-none placeholder:font-normal placeholder:text-fg-faint"
           />
-          <kbd className="hidden sm:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-            ESC
-          </kbd>
+          <Kbd className="hidden sm:inline-flex">Esc</Kbd>
         </div>
 
-        <div 
-          ref={listRef} 
-          className="max-h-[60vh] overflow-y-auto p-2 space-y-1 divide-y divide-slate-100 dark:divide-slate-800/40"
-        >
+        <div ref={listRef} id={listId} role="listbox" aria-label="Results" className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
           {filteredItems.length > 0 ? (
             filteredItems.map((item, index) => {
-              const isSelected = index === selectedIndex;
+              const isSelected = index === activeIndex;
               const Icon = item.icon;
+              const startsGroup = index === 0 || filteredItems[index - 1].category !== item.category;
 
               return (
-                <div
-                  key={item.id}
-                  data-index={index}
-                  onClick={() => item.action()}
-                  onMouseEnter={() => setSelectedIndex(index)}
-                  className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
-                    isSelected 
-                      ? 'bg-lime-500/10 dark:bg-lime-500/20 text-lime-900 dark:text-lime-100' 
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                      isSelected 
-                        ? 'bg-lime-600 text-white shadow-xs' 
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                    }`}>
-                      <Icon size={16} />
+                <React.Fragment key={item.id}>
+                  {startsGroup && (
+                    <div role="presentation" className={cn('px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-faint', index === 0 ? 'pt-1.5' : 'pt-3')}>
+                      {item.category}
+                    </div>
+                  )}
+                  <div
+                    id={optionId(index)}
+                    role="option"
+                    aria-selected={isSelected}
+                    data-index={index}
+                    onClick={() => item.action()}
+                    onMouseMove={() => { if (!isSelected) setSelectedIndex(index); }}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-3 rounded-control px-2.5 py-2 transition-colors duration-75',
+                      isSelected ? 'bg-brand-soft' : 'hover:bg-surface-2'
+                    )}
+                  >
+                    <div className={cn(
+                      'flex size-9 shrink-0 items-center justify-center rounded-[10px] transition-colors duration-75',
+                      isSelected ? 'bg-brand text-brand-on shadow-e1' : 'bg-surface-2 text-fg-subtle ring-1 ring-inset ring-line'
+                    )}>
+                      <Icon size={16} aria-hidden="true" />
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold truncate">
-                          {item.title}
-                        </span>
-                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider hidden sm:inline">
-                          • {item.category}
-                        </span>
-                      </div>
+                      <p className={cn('truncate text-[13.5px] font-semibold', isSelected ? 'text-brand-fg' : 'text-fg')}>{item.title}</p>
                       {item.subtitle && (
-                        <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate">
-                          {item.subtitle}
-                        </p>
+                        <p className="truncate text-xs text-fg-subtle">{item.subtitle}</p>
                       )}
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-2 shrink-0 ml-3">
-                    {item.badge && (
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-                        item.badgeColor === 'lime' ? 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-400 border-lime-200 dark:border-lime-800' :
-                        item.badgeColor === 'amber' ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800' :
-                        item.badgeColor === 'rose' ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800' :
-                        item.badgeColor === 'blue' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800' :
-                        'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                      }`}>
-                        {item.badge}
-                      </span>
-                    )}
-
-                    {isSelected && (
-                      <CornerDownLeft size={14} className="text-lime-600 dark:text-lime-400 animate-in fade-in" />
-                    )}
+                    <div className="ml-2 flex shrink-0 items-center gap-2">
+                      {item.badge && (
+                        <Badge tone={BADGE_TONE[item.badgeColor || 'slate']} className="hidden tabular-nums sm:inline-flex">{item.badge}</Badge>
+                      )}
+                      <CornerDownLeft size={14} className={cn('text-brand-fg', isSelected ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+                    </div>
                   </div>
-                </div>
+                </React.Fragment>
               );
             })
           ) : (
-            <div className="py-12 text-center text-slate-400">
-              <Search size={28} className="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
-              <p className="font-bold text-xs text-slate-600 dark:text-slate-300">No matching results found</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Try searching for POS, Purchase, Customer or Expense</p>
+            <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+              <span className="flex size-11 items-center justify-center rounded-2xl bg-surface-2 text-fg-faint ring-1 ring-inset ring-line">
+                <Search size={20} aria-hidden="true" />
+              </span>
+              <p className="text-sm font-bold text-fg">No matching results found</p>
+              <p className="text-xs text-fg-subtle">Try searching for POS, Purchase, Customer or Expense</p>
             </div>
           )}
         </div>
 
-        <div className="px-4 py-2 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+        <div className="hidden shrink-0 items-center justify-between border-t border-line bg-surface-2/60 px-4 py-2 text-[11px] font-medium text-fg-subtle sm:flex">
           <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] font-bold">↑↓</kbd> to navigate
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] font-bold">↵</kbd> to select
-            </span>
+            <span className="flex items-center gap-1.5"><Kbd>↑</Kbd><Kbd>↓</Kbd> to navigate</span>
+            <span className="flex items-center gap-1.5"><Kbd>↵</Kbd> to select</span>
+            <span className="flex items-center gap-1.5"><Kbd>Esc</Kbd> to close</span>
           </div>
           <span>Mooco Smart Search</span>
         </div>
