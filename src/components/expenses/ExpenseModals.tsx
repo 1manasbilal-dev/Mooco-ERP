@@ -32,6 +32,22 @@ const defaultAccountFor = (mode: string, accounts: any[], settings: any) => (
     : settings.financial?.defaultDigitalAccountId || accounts.find(a => a.type === 'Bank' || a.type === 'Wallet')?.id || accounts[0]?.id || ''
 );
 
+/**
+ * The vendor pickers list active vendors only, so an inactive vendor that is already chosen (paying off
+ * its dues, editing an old bill) showed "Select vendor…" while the save still went to that vendor.
+ */
+const withChosenVendor = (options: RichSelectOption[], vendors: ExpenseVendor[], vendorId?: string): RichSelectOption[] => {
+  if (!vendorId || options.some(option => option.value === vendorId)) return options;
+  const vendor = vendors.find(v => v.id === vendorId);
+  if (!vendor) return options;
+  return [...options, {
+    value: vendor.id,
+    label: vendor.name,
+    subLabel: `${vendor.service_type || 'Vendor'} · Inactive`,
+    avatarLetter: vendor.name.charAt(0).toUpperCase(),
+  }];
+};
+
 const submitOnCtrlEnter = (event: React.KeyboardEvent<HTMLFormElement>) => {
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
@@ -458,11 +474,17 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
   const datalistId = 'expense-description-suggestions';
 
   const setStatus = (next: 'Paid' | 'Partial' | 'Unpaid') => {
-    setFormData(prev => ({
-      ...prev,
-      paymentStatus: next,
-      paidAmount: next === 'Paid' ? (prev.amount || 0) : next === 'Unpaid' ? 0 : (prev.paidAmount || 0),
-    }));
+    setFormData(prev => {
+      const total = prev.amount || 0;
+      const paid = prev.paidAmount || 0;
+      return {
+        ...prev,
+        paymentStatus: next,
+        // Partial starts empty: coming from "Paid now" it used to carry the full amount over, so an
+        // untouched Partial bill was really fully paid.
+        paidAmount: next === 'Paid' ? total : next === 'Unpaid' ? 0 : (paid > 0 && paid < total ? paid : 0),
+      };
+    });
   };
 
   const setDescription = (value: string) => {
@@ -704,7 +726,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
               </div>
             ) : (
               <RichSelect
-                options={[{ value: '', label: needsVendor ? 'Select vendor…' : 'No vendor (spot cash)' }, ...vendorRichOptions]}
+                options={[{ value: '', label: needsVendor ? 'Select vendor…' : 'No vendor (spot cash)' }, ...withChosenVendor(vendorRichOptions, expenseVendors, formData.vendor_id)]}
                 value={formData.vendor_id || ''}
                 onChange={id => setFormData(prev => ({ ...prev, vendor_id: id }))}
                 placeholder={needsVendor ? 'Select vendor for khata…' : 'No vendor (spot cash)'}
@@ -1126,7 +1148,7 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
           <div>
             <FieldLabel>Vendor <span className="text-danger">*</span></FieldLabel>
             <RichSelect
-              options={vendorRichOptions}
+              options={withChosenVendor(vendorRichOptions, expenseVendors, paymentFormData.vendor_id)}
               value={paymentFormData.vendor_id}
               onChange={vId => {
                 const found = expenseVendors.find(v => v.id === vId) || null;

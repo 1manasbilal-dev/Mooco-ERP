@@ -52,6 +52,7 @@ interface ExpenseVendorsTabProps {
   expenses?: ExpenseEntry[];
   expenseVendorTransactions?: ExpenseVendorTransaction[];
   canCreate?: boolean;
+  canEdit?: boolean;
   canDelete?: boolean;
   handleDeleteVendorTransaction?: (id: string) => void;
 }
@@ -146,6 +147,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
   expenses = [],
   expenseVendorTransactions = [],
   canCreate = true,
+  canEdit = true,
   canDelete = false,
   handleDeleteVendorTransaction,
 }) => {
@@ -534,7 +536,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                     icon={<Users />}
                     title={expenseVendors.length ? 'No vendor matches' : 'No vendors yet'}
                     description={expenseVendors.length ? 'Try another search or filter.' : 'Add your landlord, diesel pump, packaging supplier or staff.'}
-                    action={!expenseVendors.length && <Button size="sm" leftIcon={<Plus />} onClick={handleOpenAddVendorModal}>Add vendor</Button>}
+                    action={!expenseVendors.length && canCreate && <Button size="sm" leftIcon={<Plus />} onClick={handleOpenAddVendorModal}>Add vendor</Button>}
                   />
                 </li>
               )}
@@ -546,13 +548,13 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <VendorDetail
                 vendor={selectedVendor}
                 onBack={() => setIsMobileLedgerOpen(false)}
-                onPay={amount => handleOpenPaymentModal(selectedVendor, amount, 'payment')}
-                onReceive={() => handleOpenPaymentModal(selectedVendor, undefined, 'refund')}
+                onPay={canCreate ? amount => handleOpenPaymentModal(selectedVendor, amount, 'payment') : undefined}
+                onReceive={canCreate ? () => handleOpenPaymentModal(selectedVendor, undefined, 'refund') : undefined}
                 onRecordBill={canCreate && onRecordBill ? () => onRecordBill(selectedVendor) : undefined}
                 onWhatsApp={() => handleShareWhatsAppStatement(selectedVendor)}
                 onPrint={handlePrintStatement}
-                onEdit={() => handleOpenEditVendorModal(selectedVendor)}
-                onDelete={() => handleDeleteVendor(selectedVendor)}
+                onEdit={canEdit ? () => handleOpenEditVendorModal(selectedVendor) : undefined}
+                onDelete={canDelete ? () => handleDeleteVendor(selectedVendor) : undefined}
                 showInfo={showMobileVendorInfo}
                 setShowInfo={setShowMobileVendorInfo}
                 khataDateRange={khataDateRange}
@@ -571,7 +573,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                 icon={<BookUser />}
                 title={selectedVendorId ? 'Vendor not found' : 'Pick a vendor'}
                 description="Choose a vendor on the left to see their khata, or add a new one."
-                action={<Button leftIcon={<Plus />} onClick={handleOpenAddVendorModal}>Add vendor</Button>}
+                action={canCreate && <Button leftIcon={<Plus />} onClick={handleOpenAddVendorModal}>Add vendor</Button>}
               />
             )}
           </section>
@@ -668,13 +670,13 @@ LogRow.displayName = 'LogRow';
 const VendorDetail: React.FC<{
   vendor: ExpenseVendor;
   onBack: () => void;
-  onPay: (amount?: number) => void;
-  onReceive: () => void;
+  onPay?: (amount?: number) => void;
+  onReceive?: () => void;
   onRecordBill?: () => void;
   onWhatsApp: () => void;
   onPrint: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
   showInfo: boolean;
   setShowInfo: (open: boolean) => void;
   khataDateRange: KhataDateRangeType;
@@ -751,20 +753,21 @@ const VendorDetail: React.FC<{
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 print:hidden">
-          {bal >= 0 ? (
-            <Button leftIcon={<ArrowUpRight />} onClick={() => onPay()} className="flex-1 sm:flex-initial">Pay</Button>
+          {onPay && onReceive && (bal >= 0 ? (
+            <>
+              <Button leftIcon={<ArrowUpRight />} onClick={() => onPay()} className="flex-1 sm:flex-initial">Pay</Button>
+              <Button variant="secondary" leftIcon={<ArrowDownLeft />} onClick={onReceive} title="Refund / advance wapas" aria-label="Receive">
+                <span className="hidden xl:inline">Receive</span>
+              </Button>
+            </>
           ) : (
-            <Button leftIcon={<ArrowDownLeft />} onClick={onReceive} className="flex-1 sm:flex-initial">Receive</Button>
-          )}
-          {bal >= 0 ? (
-            <Button variant="secondary" leftIcon={<ArrowDownLeft />} onClick={onReceive} title="Refund / advance wapas" aria-label="Receive">
-              <span className="hidden xl:inline">Receive</span>
-            </Button>
-          ) : (
-            <Button variant="secondary" leftIcon={<ArrowUpRight />} onClick={() => onPay()} title="Pay vendor" aria-label="Pay">
-              <span className="hidden xl:inline">Pay</span>
-            </Button>
-          )}
+            <>
+              <Button leftIcon={<ArrowDownLeft />} onClick={onReceive} className="flex-1 sm:flex-initial">Receive</Button>
+              <Button variant="secondary" leftIcon={<ArrowUpRight />} onClick={() => onPay()} title="Pay vendor" aria-label="Pay">
+                <span className="hidden xl:inline">Pay</span>
+              </Button>
+            </>
+          ))}
           {onRecordBill && (
             <Button variant="secondary" leftIcon={<FileText />} onClick={onRecordBill} title="Is vendor ka naya bill likhein" aria-label="Add bill">
               <span className="hidden sm:inline">Add bill</span>
@@ -772,8 +775,8 @@ const VendorDetail: React.FC<{
           )}
           <IconButton variant="secondary" aria-label="WhatsApp statement" icon={<MessageCircle />} onClick={onWhatsApp} className="hover:text-success-fg" />
           <IconButton variant="secondary" aria-label="Print statement" icon={<Printer />} onClick={onPrint} className="hidden sm:inline-flex" />
-          <IconButton variant="secondary" aria-label="Vendor edit karein" icon={<Edit />} onClick={onEdit} />
-          <IconButton variant="secondary" aria-label="Vendor delete karein" icon={<Trash2 />} onClick={onDelete} className="hover:border-danger/30 hover:text-danger-fg" />
+          {onEdit && <IconButton variant="secondary" aria-label="Vendor edit karein" icon={<Edit />} onClick={onEdit} />}
+          {onDelete && <IconButton variant="secondary" aria-label="Vendor delete karein" icon={<Trash2 />} onClick={onDelete} className="hover:border-danger/30 hover:text-danger-fg" />}
         </div>
       </div>
 
@@ -784,7 +787,7 @@ const VendorDetail: React.FC<{
             <Money amount={Math.abs(bal)} className={cn('mt-1 block text-2xl font-bold tracking-tight sm:text-3xl', hero.value)} />
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] text-fg-subtle">{hero.note}</p>
-              {bal > 0 && (
+              {bal > 0 && onPay && (
                 <Button size="sm" variant="secondary" onClick={() => onPay(bal)} className="print:hidden">
                   Pay full {formatCurrency(bal)}
                 </Button>

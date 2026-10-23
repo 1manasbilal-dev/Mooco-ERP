@@ -593,6 +593,10 @@ const Expenses: React.FC = () => {
     showToast(`Sub-category "${sub.name}" ab ${newStatus ? 'Active' : 'Inactive'} hai`, newStatus ? 'success' : 'info');
   };
 
+  // One category write at a time: a double Enter created the same category or sub-category twice,
+  // because the duplicate check reads the list before the first save has reached it.
+  const categoryWriteRef = useRef(false);
+
   const handleCreateMainCategory = async (name: string): Promise<string | null> => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -605,20 +609,25 @@ const Expenses: React.FC = () => {
       return trimmed;
     }
 
-    const success = await addManualAccount({
-      name: trimmed,
-      type: 'Expense',
-      balance: 0,
-      description: 'Parent Expense Category',
-      isActive: true
-    });
+    if (categoryWriteRef.current) return null;
+    categoryWriteRef.current = true;
+    try {
+      const success = await addManualAccount({
+        name: trimmed,
+        type: 'Expense',
+        balance: 0,
+        description: 'Parent Expense Category',
+        isActive: true
+      });
 
-    if (success) {
-      showToast(`Category "${trimmed}" ban gayi`, 'success');
-      return trimmed;
-    } else {
+      if (success) {
+        showToast(`Category "${trimmed}" ban gayi`, 'success');
+        return trimmed;
+      }
       showToast("Category save nahi hui, dobara koshish karein", "error");
       return null;
+    } finally {
+      categoryWriteRef.current = false;
     }
   };
 
@@ -629,47 +638,69 @@ const Expenses: React.FC = () => {
       return null;
     }
 
-    const parentAcc = manualAccounts.find(a => a.type === 'Expense' && a.name.toLowerCase() === parentCatName.toLowerCase() && !a.parentId);
-    let parentId = parentAcc?.id;
-
-    if (!parentId) {
-      const generatedId = `ma_${Date.now()}_root`;
-      await addManualAccount({
-        id: generatedId,
-        name: parentCatName,
-        type: 'Expense',
-        balance: 0,
-        description: 'Parent Expense Category',
-        isActive: true
-      });
-      parentId = generatedId;
+    // Adding a name that already exists created a second ledger account with the same name.
+    const existing = categoryTree
+      .find(c => c.name.toLowerCase() === parentCatName.toLowerCase())
+      ?.subcategories.find(s => s.name.toLowerCase() === trimmedSub.toLowerCase());
+    if (existing) {
+      showToast(`Sub-category "${existing.name}" pehle se "${parentCatName}" mein mojood hai`, "info");
+      return existing.name;
     }
 
-    const success = await addManualAccount({
-      name: trimmedSub,
-      type: 'Expense',
-      balance: 0,
-      parentId: parentId,
-      description: `Sub-category under ${parentCatName}`,
-      isActive: true
-    });
+    if (categoryWriteRef.current) return null;
+    categoryWriteRef.current = true;
+    try {
+      const parentAcc = manualAccounts.find(a => a.type === 'Expense' && a.name.toLowerCase() === parentCatName.toLowerCase() && !a.parentId);
+      let parentId = parentAcc?.id;
 
-    if (success) {
-      showToast(`Sub-category "${trimmedSub}" "${parentCatName}" ke neeche add ho gayi`, 'success');
-      return trimmedSub;
-    } else {
+      if (!parentId) {
+        const generatedId = `ma_${Date.now()}_root`;
+        const rootSaved = await addManualAccount({
+          id: generatedId,
+          name: parentCatName,
+          type: 'Expense',
+          balance: 0,
+          description: 'Parent Expense Category',
+          isActive: true
+        });
+        // Without its parent account the sub-category would be saved but never shown.
+        if (!rootSaved) {
+          showToast("Sub-category save nahi hui", "error");
+          return null;
+        }
+        parentId = generatedId;
+      }
+
+      const success = await addManualAccount({
+        name: trimmedSub,
+        type: 'Expense',
+        balance: 0,
+        parentId: parentId,
+        description: `Sub-category under ${parentCatName}`,
+        isActive: true
+      });
+
+      if (success) {
+        showToast(`Sub-category "${trimmedSub}" "${parentCatName}" ke neeche add ho gayi`, 'success');
+        return trimmedSub;
+      }
       showToast("Sub-category save nahi hui", "error");
       return null;
+    } finally {
+      categoryWriteRef.current = false;
     }
   };
 
-  const handleModalAddCategory = async (e: React.FormEvent) => {
+  /** Resolves to false when nothing was saved, so the dialog keeps the typed name open. */
+  const handleModalAddCategory = async (e: React.FormEvent): Promise<boolean> => {
     e.preventDefault();
-    if (!modalNewCategoryName.trim()) return;
+    if (!modalNewCategoryName.trim()) return false;
     const res = await handleCreateMainCategory(modalNewCategoryName);
     if (res) {
       setModalNewCategoryName('');
+      return true;
     }
+    return false;
   };
 
   const handleModalAddSubcat = async (parentCatName: string) => {
@@ -1136,6 +1167,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleOpenAddVendorModal = () => {
+    if (!canCreate) {
+      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      return;
+    }
     setEditingVendor(null);
     setVendorFormData({
       name: '',
@@ -1154,6 +1189,10 @@ const Expenses: React.FC = () => {
   };
 
   const handleOpenEditVendorModal = (vendor: ExpenseVendor) => {
+    if (!canEdit) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
     setEditingVendor(vendor);
     setVendorFormData({
       name: vendor.name,
@@ -1171,23 +1210,43 @@ const Expenses: React.FC = () => {
     setIsVendorModalOpen(true);
   };
 
+  // State alone let a fast double submit through (both clicks ran before the re-render disabled Save).
+  const isSubmittingVendorRef = useRef(false);
+
+  /** Another vendor (any status) already using this name; the khata also matches entries by name. */
+  const findVendorByName = (name: string, exceptId?: string) => {
+    const key = name.trim().toLowerCase();
+    return expenseVendors.find(v => v.id !== exceptId && v.name.trim().toLowerCase() === key);
+  };
+
   const handleVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!vendorFormData.name?.trim() || isSubmittingVendor) {
-      if (!vendorFormData.name?.trim()) showToast("Vendor ka naam zaroori hai", "warning");
+    const name = vendorFormData.name?.trim() || '';
+    if (!name || isSubmittingVendor || isSubmittingVendorRef.current) {
+      if (!name) showToast("Vendor ka naam zaroori hai", "warning");
+      return;
+    }
+    if (editingVendor ? !canEdit : !canCreate) {
+      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      return;
+    }
+    const duplicate = findVendorByName(name, editingVendor?.id);
+    if (duplicate) {
+      showToast(`"${duplicate.name}" naam ka vendor pehle se mojood hai${duplicate.isActive === false ? ' (Inactive)' : ''}. Doosra naam rakhein.`, "warning");
       return;
     }
 
+    isSubmittingVendorRef.current = true;
     setIsSubmittingVendor(true);
     try {
       if (editingVendor) {
-        const success = await updateExpenseVendor(editingVendor.id, vendorFormData);
+        const success = await updateExpenseVendor(editingVendor.id, { ...vendorFormData, name });
         if (success) {
           setIsVendorModalOpen(false);
           setEditingVendor(null);
         }
       } else {
-        const success = await addExpenseVendor(vendorFormData as Omit<ExpenseVendor, 'id' | 'total_paid'>);
+        const success = await addExpenseVendor({ ...vendorFormData, name } as Omit<ExpenseVendor, 'id' | 'total_paid'>);
         if (success) {
           setIsVendorModalOpen(false);
         }
@@ -1195,17 +1254,30 @@ const Expenses: React.FC = () => {
     } catch (err: any) {
       showToast("Vendor save nahi hua: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
+      isSubmittingVendorRef.current = false;
       setIsSubmittingVendor(false);
     }
   };
 
+  // Ids whose delete is already running: a second click during the network call reversed the money twice.
+  const pendingDeletesRef = useRef(new Set<string>());
+
   const handleDeleteVendor = async (vendor: ExpenseVendor) => {
+    if (!canDelete) {
+      showToast("Aap ko vendor delete karne ki ijazat nahi.", "warning");
+      return;
+    }
+    if (pendingDeletesRef.current.has(vendor.id)) return;
     const assessment = getDeleteAssessment('vendor', vendor.id);
     if (assessment.balance !== 0) {
       showToast(`Vendor delete nahi ho sakta: ${formatCurrency(Math.abs(assessment.balance))} baqi hain. Pehle hisaab barabar karein.`, 'error');
       return;
     }
     if (assessment.hasHistory) {
+      if (vendor.isActive === false) {
+        showToast(`"${vendor.name}" pehle se Inactive hai. Record wale vendor delete nahi hote.`, 'info');
+        return;
+      }
       const deactivate = await confirmAction({
         tone: 'warning',
         title: `"${vendor.name}" Inactive karein?`,
@@ -1213,9 +1285,15 @@ const Expenses: React.FC = () => {
         consequences: ['Purane kharche aur khata waise hi rahenge.', 'Naye kharche mein yeh vendor nazar nahi aayega.'],
         confirmLabel: 'Haan, Inactive karein',
       });
-      if (deactivate) {
-        updateExpenseVendor(vendor.id, { isActive: false });
-        showToast(`Vendor "${vendor.name}" Inactive ho gaya`, 'info');
+      if (!deactivate) return;
+      pendingDeletesRef.current.add(vendor.id);
+      try {
+        // Was fire-and-forget: the "Inactive ho gaya" toast showed even when the save failed.
+        if (await updateExpenseVendor(vendor.id, { isActive: false })) {
+          showToast(`Vendor "${vendor.name}" Inactive ho gaya`, 'info');
+        }
+      } finally {
+        pendingDeletesRef.current.delete(vendor.id);
       }
       return;
     }
@@ -1224,31 +1302,67 @@ const Expenses: React.FC = () => {
       message: 'Is vendor ka koi record nahi, is liye yeh hamesha ke liye hat jayega.',
       consequences: ['Yeh kaam wapas nahi ho sakta.'],
     });
-    if (hardDelete) {
-      deleteExpenseVendor(vendor.id);
+    if (!hardDelete) return;
+    pendingDeletesRef.current.add(vendor.id);
+    try {
+      // The detail pane kept pointing at the deleted vendor ("Vendor not found").
+      if (await deleteExpenseVendor(vendor.id) && selectedVendorId === vendor.id) selectVendor(null);
+    } finally {
+      pendingDeletesRef.current.delete(vendor.id);
     }
   };
 
+  const [isCreatingQuickVendor, setIsCreatingQuickVendor] = useState(false);
+  const isCreatingQuickVendorRef = useRef(false);
+
   const handleQuickCreateVendor = async () => {
-    if (!quickVendorName.trim()) {
+    const name = quickVendorName.trim();
+    if (!name) {
       showToast("Vendor ka naam likhein", "warning");
       return;
     }
+    if (isCreatingQuickVendorRef.current) return;
+    if (!canCreate) {
+      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      return;
+    }
 
-    const createdId = await addExpenseVendor({
-      name: quickVendorName.trim(),
-      service_type: 'Other',
-      phone: quickVendorPhone.trim(),
-      isActive: true,
-      pending_balance: 0,
-      opening_balance: 0
-    } as any);
-
-    if (createdId && typeof createdId === 'string') {
-      setFormData(prev => ({ ...prev, vendor_id: createdId }));
+    // Enter on an existing name used to create a second vendor with the same khata name.
+    const existing = findVendorByName(name);
+    if (existing) {
+      if (existing.isActive === false) {
+        showToast(`"${existing.name}" Inactive vendor hai. Vendors tab se use Active karein.`, "warning");
+        return;
+      }
+      setFormData(prev => ({ ...prev, vendor_id: existing.id }));
       setQuickVendorName('');
       setQuickVendorPhone('');
       setIsModalCreatingVendor(false);
+      showToast(`"${existing.name}" pehle se mojood hai, wohi chun liya`, "info");
+      return;
+    }
+
+    isCreatingQuickVendorRef.current = true;
+    setIsCreatingQuickVendor(true);
+    try {
+      const createdId = await addExpenseVendor({
+        name,
+        service_type: 'Other',
+        phone: quickVendorPhone.trim(),
+        isActive: true,
+        pending_balance: 0,
+        opening_balance: 0
+      } as any);
+
+      if (createdId && typeof createdId === 'string') {
+        setFormData(prev => ({ ...prev, vendor_id: createdId }));
+        setQuickVendorName('');
+        setQuickVendorPhone('');
+        setIsModalCreatingVendor(false);
+      }
+    } finally {
+      isCreatingQuickVendorRef.current = false;
+      setIsCreatingQuickVendor(false);
     }
   };
 
@@ -1257,6 +1371,7 @@ const Expenses: React.FC = () => {
       showToast("Aap ko kharcha delete karne ki ijazat nahi.", "warning");
       return;
     }
+    if (pendingDeletesRef.current.has(id)) return;
     const assessment = getDeleteAssessment('expense', id);
     if (assessment.isLocked) {
       showToast("Yeh kharcha band shift ya lock din ka hai, is liye delete nahi ho sakta.", "error");
@@ -1270,15 +1385,23 @@ const Expenses: React.FC = () => {
         'Yeh kaam wapas nahi ho sakta.',
       ],
     });
-    if (ok) {
+    if (!ok || pendingDeletesRef.current.has(id)) return;
+    pendingDeletesRef.current.add(id);
+    try {
       const success = await safeDeleteExpense(id);
       if (success) {
         showToast("Kharcha delete ho gaya, accounts theek kar diye gaye", 'info');
       }
+    } finally {
+      pendingDeletesRef.current.delete(id);
     }
   };
 
   const handleOpenPaymentModal = (vendor?: ExpenseVendor, prefilledAmount?: number, defaultType: 'payment' | 'refund' = 'payment') => {
+    if (!canCreate) {
+      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      return;
+    }
     const defaultAcc = settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '';
     const targetVendor = vendor || (expenseVendors.find(v => v.isActive !== false) || null);
 
@@ -1312,9 +1435,16 @@ const Expenses: React.FC = () => {
     setIsPaymentModalOpen(true);
   };
 
+  // Held from the first check until the save ends, including while the low-balance confirm is open.
+  const isSubmittingPaymentRef = useRef(false);
+
   const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmittingPayment) return;
+    if (isSubmittingPayment || isSubmittingPaymentRef.current) return;
+    if (!canCreate) {
+      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      return;
+    }
 
     const amt = parseFloat(paymentFormData.amount as string);
     if (!amt || amt <= 0) {
@@ -1332,28 +1462,34 @@ const Expenses: React.FC = () => {
       return;
     }
 
+    if (!paymentFormData.date) {
+      showToast("Payment ki tareekh chunein", "warning");
+      return;
+    }
+
     // Ctrl+Enter submits past the disabled button, and the payment engine only checks the books lock date.
-    if (paymentFormData.date && isDayLocked && isDayLocked(paymentFormData.date)) {
+    if (isDayLocked && isDayLocked(paymentFormData.date)) {
       showToast(`${paymentFormData.date} ka din lock hai — is tareekh par payment save nahi ho sakti.`, "error");
       return;
     }
 
-    const isRefund = paymentFormData.type === 'refund';
-    const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
-    if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
-      if (!(await confirmAction({
-        tone: 'warning',
-        title: 'Account mein itna balance nahi',
-        message: `"${chosenAccount.name}" mein ${formatCurrency(chosenAccount.balance)} hain, aur payment ${formatCurrency(amt)} ki hai.`,
-        consequences: [`Payment ke baad "${chosenAccount.name}" ka balance ${formatCurrency(chosenAccount.balance - amt)} (minus) ho jayega.`],
-        confirmLabel: 'Phir bhi payment karein',
-      }))) {
-        return;
-      }
-    }
-
-    setIsSubmittingPayment(true);
+    isSubmittingPaymentRef.current = true;
     try {
+      const isRefund = paymentFormData.type === 'refund';
+      const chosenAccount = accounts.find(a => a.id === paymentFormData.account_id);
+      if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
+        if (!(await confirmAction({
+          tone: 'warning',
+          title: 'Account mein itna balance nahi',
+          message: `"${chosenAccount.name}" mein ${formatCurrency(chosenAccount.balance)} hain, aur payment ${formatCurrency(amt)} ki hai.`,
+          consequences: [`Payment ke baad "${chosenAccount.name}" ka balance ${formatCurrency(chosenAccount.balance - amt)} (minus) ho jayega.`],
+          confirmLabel: 'Phir bhi payment karein',
+        }))) {
+          return;
+        }
+      }
+
+      setIsSubmittingPayment(true);
       const success = await recordExpenseVendorPayment(
         paymentFormData.vendor_id,
         amt,
@@ -1372,6 +1508,7 @@ const Expenses: React.FC = () => {
     } catch (err: any) {
       showToast("Payment record nahi hui: " + (err?.message || "dobara koshish karein"), "error");
     } finally {
+      isSubmittingPaymentRef.current = false;
       setIsSubmittingPayment(false);
     }
   };
@@ -1381,6 +1518,7 @@ const Expenses: React.FC = () => {
       showToast("Sirf Admin vendor payment delete kar sakta hai.", "error");
       return;
     }
+    if (pendingDeletesRef.current.has(txId)) return;
     // Reversing a payment from a closed day would change that day's reconciled cash.
     const vendorTx = expenseVendorTransactions.find(t => t.id === txId);
     if (vendorTx?.date && isDayLocked && isDayLocked(vendorTx.date)) {
@@ -1397,7 +1535,13 @@ const Expenses: React.FC = () => {
     }))) {
       return;
     }
-    await deleteExpenseVendorTransaction(txId);
+    if (pendingDeletesRef.current.has(txId)) return;
+    pendingDeletesRef.current.add(txId);
+    try {
+      await deleteExpenseVendorTransaction(txId);
+    } finally {
+      pendingDeletesRef.current.delete(txId);
+    }
   };
 
   const khataLedgerRows = useMemo<LedgerRow[]>(() => {
@@ -1654,21 +1798,23 @@ const Expenses: React.FC = () => {
             )}
           </>
         ) : (
-          <>
-            <Button variant="secondary" leftIcon={<UserPlus />} onClick={handleOpenAddVendorModal} title="Add vendor" aria-label="New vendor">
-              <span className="hidden sm:inline">New vendor</span>
-            </Button>
-            <Button
-              leftIcon={<ArrowUpRight />}
-              onClick={() => {
-                const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
-                if (target) handleOpenPaymentModal(target);
-                else handleOpenAddVendorModal();
-              }}
-            >
-              <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
-            </Button>
-          </>
+          canCreate && (
+            <>
+              <Button variant="secondary" leftIcon={<UserPlus />} onClick={handleOpenAddVendorModal} title="Add vendor" aria-label="New vendor">
+                <span className="hidden sm:inline">New vendor</span>
+              </Button>
+              <Button
+                leftIcon={<ArrowUpRight />}
+                onClick={() => {
+                  const target = selectedVendor || expenseVendors.find(v => v.isActive !== false);
+                  if (target) handleOpenPaymentModal(target);
+                  else handleOpenAddVendorModal();
+                }}
+              >
+                <span className="hidden sm:inline">Pay / Receive</span><span className="sm:hidden">Pay</span>
+              </Button>
+            </>
+          )
         )}
       />
 
@@ -1749,6 +1895,7 @@ const Expenses: React.FC = () => {
           expenses={expenses}
           expenseVendorTransactions={expenseVendorTransactions}
           canCreate={canCreate}
+          canEdit={canEdit}
           canDelete={canDelete}
           handleDeleteVendorTransaction={handleDeleteVendorTx}
         />
@@ -1841,6 +1988,7 @@ const Expenses: React.FC = () => {
             quickVendorPhone={quickVendorPhone}
             setQuickVendorPhone={setQuickVendorPhone}
             handleQuickCreateVendor={handleQuickCreateVendor}
+            isCreatingQuickVendor={isCreatingQuickVendor}
             accounts={accounts}
             settings={settings}
             rememberExpense={rememberExpense}
