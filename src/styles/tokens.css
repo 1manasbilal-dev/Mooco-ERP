@@ -1,0 +1,139 @@
+/*
+ * Mooco design tokens. Semantic colours are RGB triplets so Tailwind can apply
+ * opacity (`bg-brand/10`). Components use the Tailwind names from
+ * tailwind.config.js (`bg-surface`, `text-fg-muted`, `border-line`, ...), never
+ * raw hex values, so light and dark mode come from this file alone.
+ * See docs/design-system.md.
+ */
+:root {
+  /* Surfaces: canvas (app background) < surface (cards) < surface-2 (insets, table heads) < surface-3 (hover, pressed) */
+  --canvas: 245 247 250;
+  --surface: 255 255 255;
+  --surface-2: 243 245 248;
+  --surface-3: 232 236 242;
+
+  /* Text */
+  --fg: 15 23 42;
+  --fg-muted: 51 65 85;
+  --fg-subtle: 100 116 139;
+  --fg-faint: 148 163 184;
+
+  /* Lines */
+  --line: 226 232 240;
+  --line-strong: 203 213 225;
+
+  /* Brand: Mooco lime. `brand` fills carry `brand-on` text (AA contrast); `brand-accent` is for dots, charts and highlights. */
+  --brand: 77 124 15;
+  --brand-hover: 63 98 18;
+  --brand-on: 255 255 255;
+  --brand-soft: 240 250 220;
+  --brand-fg: 63 98 18;
+  --brand-accent: 101 163 13;
+  --ring: 132 204 22;
+
+  /* Status. Due / payable = danger, advance / paid = success. */
+  --success: 5 150 105;
+  --success-soft: 236 253 245;
+  --success-fg: 4 120 87;
+  --danger: 220 38 38;
+  --danger-soft: 254 242 242;
+  --danger-fg: 185 28 28;
+  --warning: 217 119 6;
+  --warning-soft: 255 251 235;
+  --warning-fg: 180 83 9;
+  --info: 37 99 235;
+  --info-soft: 239 246 255;
+  --info-fg: 29 78 216;
+
+  /* Elevation */
+  --shadow-e1: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.05);
+  --shadow-e2: 0 8px 24px -6px rgb(15 23 42 / 0.12), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+  --shadow-e3: 0 28px 64px -16px rgb(15 23 42 / 0.32), 0 8px 20px -8px rgb(15 23 42 / 0.12);
+
+  /* Shape and motion */
+  --radius-card: 1rem;
+  --radius-control: 0.75rem;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dark {
+  --canvas: 8 11 18;
+  --surface: 16 21 31;
+  --surface-2: 22 28 40;
+  --surface-3: 31 39 54;
+
+  --fg: 241 245 249;
+  --fg-muted: 203 213 225;
+  --fg-subtle: 148 163 184;
+  --fg-faint: 100 116 139;
+
+  --line: 36 45 61;
+  --line-strong: 55 66 86;
+
+  /* On dark, the brand button is bright lime with dark text. */
+  --brand: 163 230 53;
+  --brand-hover: 190 242 100;
+  --brand-on: 26 46 5;
+  --brand-soft: 31 45 14;
+  --brand-fg: 190 242 100;
+  --brand-accent: 132 204 22;
+  --ring: 163 230 53;
+
+  --success: 16 185 129;
+  --success-soft: 8 44 34;
+  --success-fg: 110 231 183;
+  --danger: 239 68 68;
+  --danger-soft: 56 17 21;
+  --danger-fg: 252 165 165;
+  --warning: 245 158 11;
+  --warning-soft: 52 35 8;
+  --warning-fg: 252 211 77;
+  --info: 59 130 246;
+  --info-soft: 17 32 64;
+  --info-fg: 147 197 253;
+
+  --shadow-e1: 0 1px 2px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --shadow-e2: 0 10px 28px -8px rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --shadow-e3: 0 32px 72px -16px rgb(0 0 0 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+@keyframes ds-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Chevron for components/ui Select. */
+.ds-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 0.75rem center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+}
+
+/* Skeleton loading sweep (see components/ui/Skeleton.tsx). */
+.animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.animate-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+  animation: ds-shimmer 1.4s infinite;
+}
+.dark .animate-shimmer::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.05), transparent);
+}
+
+@keyframes ds-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer::after,
+  .animate-fade-up {
+    animation: none !important;
+  }
+}

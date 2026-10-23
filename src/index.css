@@ -1,3 +1,5 @@
+@import './styles/tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -7,7 +9,7 @@
 /* Design tokens */
 :root {
   /* Light theme */
-  --bg-app: #f8fafc;          /* slate-50 */
+  --bg-app: #f5f7fa;          /* = --canvas */
   --bg-card: #ffffff;         /* white */
   --bg-panel: #f1f5f9;        /* slate-100 */
   --bg-panel-hover: #e2e8f0;  /* slate-200 */
@@ -28,19 +30,19 @@
 .dark {
   color-scheme: dark;
   /* Dark theme */
-  --bg-app: #090d16;
-  --bg-card: #111827;
-  --bg-panel: #1a2234;
-  --bg-panel-hover: #26334d;
+  --bg-app: #080b12;          /* = --canvas */
+  --bg-card: #10151f;         /* = --surface */
+  --bg-panel: #161c28;        /* = --surface-2 */
+  --bg-panel-hover: #1f2736;  /* = --surface-3 */
   
   --text-primary: #f8fafc;    /* slate-50 */
   --text-secondary: #e2e8f0;  /* slate-200 */
   --text-muted: #94a3b8;      /* slate-400 */
   --text-dimmed: #64748b;     /* slate-500 */
   
-  --border-color: #1f293d;
-  --border-light: #162032;
-  --border-dark: #334155;
+  --border-color: #242d3d;    /* = --line */
+  --border-light: #1a2130;
+  --border-dark: #374256;     /* = --line-strong */
   
   --shadow-color: rgba(0, 0, 0, 0.45);
   --modal-overlay: rgba(3, 7, 18, 0.82);
@@ -239,7 +241,7 @@ body {
   border-color: var(--border-light) !important;
 }
 
-.dark .border,
+.dark .border:not(.ds-control),
 .dark .border-t,
 .dark .border-b,
 .dark .border-l,
@@ -339,9 +341,10 @@ body {
 }
 
 /* Form controls, selects, dropdowns and modals */
-.dark input,
-.dark select,
-.dark textarea {
+/* Legacy controls only: components/ui controls carry .ds-control and style themselves. */
+.dark input:not(.ds-control),
+.dark select:not(.ds-control),
+.dark textarea:not(.ds-control) {
   background-color: var(--bg-card) !important;
   border-color: var(--border-color) !important;
   color: var(--text-primary) !important;
@@ -367,9 +370,9 @@ select option {
   filter: none;
   cursor: pointer;
 }
-.dark input:focus,
-.dark select:focus,
-.dark textarea:focus {
+.dark input:not(.ds-control):focus,
+.dark select:not(.ds-control):focus,
+.dark textarea:not(.ds-control):focus {
   border-color: #84cc16 !important; /* lime-500 */
   box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.15) !important;
 }

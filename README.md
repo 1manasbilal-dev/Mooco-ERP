@@ -70,6 +70,7 @@ Pushing to `main` runs the GitHub Actions workflow in `.github/workflows/deploy.
 
 ## Documentation
 
+- [Design system](docs/design-system.md): tokens, UI components and screen rules (live gallery at `/__ui` in dev)
 - [Cash control](docs/cash-control.md): cashier shifts, handovers, remittances and day close
 - [POS](docs/pos.md): catalog, quick entry and keyboard shortcuts
 - [Customer orders](docs/customer-orders.md): bookings and billing through POS

@@ -288,7 +288,13 @@ const AppContent: React.FC = () => {
   );
 };
 
+// Design-system gallery for development only; the import is dropped from production builds.
+const UiGallery = import.meta.env.DEV ? lazy(() => import('./dev/UiGallery')) : null;
+
 const App: React.FC = () => {
+  if (UiGallery && window.location.pathname === '/__ui') {
+    return <Suspense fallback={null}><UiGallery /></Suspense>;
+  }
   return (
     <ErrorBoundary>
       <ToastProvider>
