@@ -1,5 +1,5 @@
 import { StockType, type InventoryItem, type ItemDefinition } from '../types';
-import { cleanQty } from './formatters';
+import { cleanNumber, cleanQty } from './formatters';
 
 export const RETAIL_CHILLER_CAPACITY = 500;
 
@@ -7,7 +7,12 @@ export interface RetailMilkRow {
   id: string;
   itemId?: string;
   name: string;
+  /** Unit of liters, rate and costRate: always litres, even when the item is stocked in ml. */
+  unit: 'L';
   liters: number;
+  /** The inventory row's own unit and quantity ('ml', 2500), for anything that writes stock back. */
+  stockUnit: 'L' | 'ml';
+  stockQuantity: number;
   rate: number;
   costRate: number;
   value: number;
@@ -18,6 +23,8 @@ export interface RetailMilkRow {
 
 export interface RetailMilkStockSummary {
   rows: RetailMilkRow[];
+  /** Unit of liters and the average rates. */
+  unit: 'L';
   liters: number;
   totalValue: number;
   totalCostValue: number;
@@ -53,8 +60,8 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
     // Stock keeps three decimals; two would show 0.125 L as 0.13 L and drift the totals.
     const liters = cleanQty(quantity * factor);
     // Catalog rates are per stock unit; express them per litre so ml stock is valued correctly.
-    const rate = (Number(master?.selling_price || stock.price) || 0) / factor;
-    const costRate = (Number(master?.cost_price) || 0) / factor;
+    const rate = cleanNumber((Number(master?.selling_price || stock.price) || 0) / factor, 4);
+    const costRate = cleanNumber((Number(master?.cost_price) || 0) / factor, 4);
     const value = Math.round(liters * rate);
     const costValue = Math.round(liters * costRate);
 
@@ -73,7 +80,10 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
       id: stock.id,
       itemId: master?.id || stock.item_id,
       name: stock.name,
+      unit: 'L' as const,
       liters,
+      stockUnit: factor === 1 ? 'L' as const : 'ml' as const,
+      stockQuantity: quantity,
       rate,
       costRate,
       value,
@@ -97,6 +107,7 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
 
   return {
     rows,
+    unit: 'L',
     liters: totalLiters,
     totalValue,
     totalCostValue,

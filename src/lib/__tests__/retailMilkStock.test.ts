@@ -28,16 +28,18 @@ describe('getRetailMilkStock', () => {
     expect(summary.liters).toBe(50);
     expect(summary.totalValue).toBe(9720 + 1900);
     expect(summary.totalCostValue).toBe(8100 + 1615);
-    expect(summary.rows[0]).toMatchObject({ name: 'Buffalo Milk', milkType: 'Buffalo', percentOfTotal: 81 });
+    expect(summary.rows[0]).toMatchObject({ name: 'Buffalo Milk', milkType: 'Buffalo', percentOfTotal: 81, unit: 'L', stockUnit: 'L', stockQuantity: 40.5 });
     expect(summary.rows[1]).toMatchObject({ milkType: 'Cow', percentOfTotal: 19 });
     expect(summary.avgRate).toBe(232);
   });
 
   it('converts millilitre stock and per-ml rates to litres', () => {
     const summary = getRetailMilkStock([stock({ id: 's3', item_id: 'ml', name: 'Mixed Milk Pouch', unit: 'ml', quantity: 2500 })], items);
-    expect(summary.rows[0]).toMatchObject({ liters: 2.5, value: 550, costValue: 450, milkType: 'Mixed' });
-    expect(summary.rows[0].rate).toBeCloseTo(220, 6);
-    expect(summary.rows[0].costRate).toBeCloseTo(180, 6);
+    expect(summary.rows[0]).toMatchObject({
+      unit: 'L', liters: 2.5, stockUnit: 'ml', stockQuantity: 2500,
+      rate: 220, costRate: 180, value: 550, costValue: 450, milkType: 'Mixed'
+    });
+    expect(summary.unit).toBe('L');
   });
 
   it('keeps the three-decimal stock precision', () => {
