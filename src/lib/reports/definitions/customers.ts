@@ -1,9 +1,10 @@
-import type { ReportDefinition, ReportRow } from '../types';
+import type { ReportData, ReportDefinition, ReportRow } from '../types';
 import {
-  autoGroup, chronological, COLOR, customerName, customerTxEffect, dayOf, groupSum, inRange, isVoidStatus,
-  lower, n, pct, r2, r3, saleFigures, saleMode, sum, timeSeries, topSlices
+  autoGroup, chronological, COLOR, customerName, customerTxEffect, dayOf, findCustomer, groupSum, inRange, isCustomerCharge,
+  isCustomerReceipt, isNonCashCustomerTx, isOpeningCustomerTx, isVoidStatus, isWriteOffCustomerTx, lower, n, pct, r2, r3,
+  saleFigures, saleMode, sum, timeSeries, topSlices
 } from '../helpers';
-import type { Customer, CustomerTransaction } from '../../../types';
+import type { Customer, CustomerTransaction, DailySupplyEntry } from '../../../types';
 
 /** Whole days from `date` to `today` (0 for today or a future date). */
 const ageDays = (date: string, today: string) => {
@@ -38,6 +39,50 @@ const txByCustomer = (txs: CustomerTransaction[]) => {
   return map;
 };
 
+const supplyStatus = (e: DailySupplyEntry) => lower((e as any).status ?? (e as any).details?.status);
+/** Delivery entries that moved the khata: recordDailySupply skips Pending and Cancelled ones. */
+const isPostedSupply = (e: DailySupplyEntry) => Boolean(e?.date) && !['pending', 'cancelled'].includes(supplyStatus(e));
+const supplyPaid = (e: DailySupplyEntry) => n((e as any).payment_received ?? (e as any).details?.payment_received);
+/** Unpaid part of a delivery, exactly what recordDailySupply added to the customer balance. */
+const supplyDue = (e: DailySupplyEntry) => {
+  const due = (e as any).balance_due ?? (e as any).details?.balance_due;
+  return r2(due !== undefined && due !== null && due !== '' ? n(due) : Math.max(0, n(e.total_amount) - supplyPaid(e)));
+};
+
+/**
+ * Home-delivery dues raise the customer balance directly (no khata row is written for them), so
+ * statements and aging read them from the delivery entries as khata charges of their own.
+ */
+function supplyChargesByCustomer(data: ReportData) {
+  const map = new Map<string, CustomerTransaction[]>();
+  data.dailySupplyEntries.forEach(e => {
+    if (!e?.customer_id || !isPostedSupply(e)) return;
+    const due = supplyDue(e);
+    if (due <= 0) return;
+    const litres = r3(n(e.net_qty) || Math.max(0, n(e.delivered_qty) - n(e.returned_qty)));
+    const paid = supplyPaid(e);
+    const list = map.get(e.customer_id) || [];
+    list.push({
+      id: `supply_${e.id}`, customer_id: e.customer_id, date: e.date, type: 'Charge', amount: due, mode: 'Home delivery',
+      note: `Home delivery ${litres} L × ${r2(n(e.rate))}${e.route ? ` (${e.route})` : ''}${paid ? ` · Rs ${Math.round(paid).toLocaleString('en-PK')} paid on delivery` : ''}`,
+    });
+    map.set(e.customer_id, list);
+  });
+  return map;
+}
+
+/** What a khata row is, for the statement badge. */
+const txKind = (tx: CustomerTransaction) => {
+  if (isOpeningCustomerTx(tx)) return 'Opening';
+  if (isWriteOffCustomerTx(tx)) return 'Write-off';
+  if (String(tx.id || '').startsWith('supply_')) return 'Delivery';
+  const type = lower(tx.type);
+  if (type === 'charge') return 'Charge';
+  if (type === 'return') return 'Return';
+  if (type === 'payment') return isNonCashCustomerTx(tx) ? 'Adjustment' : 'Payment';
+  return 'Adjustment';
+};
+
 const statusTones = { New: 'info', Active: 'good', 'At risk': 'warn', Lost: 'bad', Never: 'neutral' } as const;
 
 export const customerReports: ReportDefinition[] = [
@@ -50,14 +95,18 @@ export const customerReports: ReportDefinition[] = [
     keywords: ['udhaar', 'receivable', 'aging', 'outstanding', 'baqaya', 'khata', 'debtors'],
     financial: false,
     snapshot: true,
+    // FIFO aging: payments clear the oldest dues first, so what is still owed is the newest charges.
+    // The balance is spread over charges from the newest back; whatever is left is older than every
+    // recorded charge. Charges include debit adjustments and home-delivery dues (both raise the balance).
     build: (data) => {
       const today = data.today;
       const byCustomer = txByCustomer(data.customerTransactions);
+      const deliveries = supplyChargesByCustomer(data);
       let unexplained = 0;
       const rows: ReportRow[] = data.customers.filter(c => n(c.balance) > 0.5).map(c => {
         const balance = r2(n(c.balance));
         const txs = byCustomer.get(c.id) || [];
-        const charges = txs.filter(t => lower(t.type) === 'charge').sort(chronological).reverse();
+        const charges = [...txs.filter(t => isCustomerCharge(t.type)), ...(deliveries.get(c.id) || [])].sort(chronological).reverse();
         const buckets: Record<string, number> = { b7: 0, b15: 0, b30: 0, b60: 0, b60p: 0 };
         let left = balance;
         let oldest = '';
@@ -72,7 +121,7 @@ export const customerReports: ReportDefinition[] = [
         }
         // Balance older than every recorded charge (opening balance): treat as the oldest bucket.
         if (left > 0.5) { buckets.b60p += left; unexplained++; }
-        const lastPayment = txs.filter(t => lower(t.type) === 'payment').map(t => dayOf(t.date)).sort().pop() || '';
+        const lastPayment = txs.filter(isCustomerReceipt).map(t => dayOf(t.date)).sort().pop() || '';
         const limit = n(c.credit_limit);
         const over = limit > 0 && balance > limit;
         return {
@@ -138,10 +187,16 @@ export const customerReports: ReportDefinition[] = [
     financial: false,
     filters: ['customerId'],
     requires: 'customerId',
+    // Opening balance is worked back from today's balance: balance today minus every khata movement
+    // on or after the start date. Movements = khata rows (charge / debit adjustment up; payment /
+    // return down) plus home-delivery dues, which change the balance without a khata row.
     build: (data, f) => {
-      const customer = data.customers.find(c => c.id === f.customerId);
+      const customer = findCustomer(data, f.customerId);
       if (!customer) return { notes: [{ tone: 'warn', text: 'Choose a customer to see the statement.' }] };
-      const txs = data.customerTransactions.filter(t => t.customer_id === customer.id);
+      const txs = [
+        ...data.customerTransactions.filter(t => t.customer_id === customer.id),
+        ...(supplyChargesByCustomer(data).get(customer.id) || []),
+      ];
       const fromDay = f.from || '';
       const afterFrom = txs.filter(t => !fromDay || dayOf(t.date) >= fromDay);
       const opening = r2(n(customer.balance) - afterFrom.reduce((s, t) => s + customerTxEffect(t.type, n(t.amount)), 0));
@@ -150,10 +205,11 @@ export const customerReports: ReportDefinition[] = [
       const rows: ReportRow[] = inPeriod.map(t => {
         const effect = customerTxEffect(t.type, n(t.amount));
         running = r2(running + effect);
-        const type = lower(t.type) === 'charge' ? 'Charge' : lower(t.type) === 'return' ? 'Return' : 'Payment';
+        const type = txKind(t);
         return {
-          date: t.date, type, description: txNote(t) || (type === 'Charge' ? 'Charge' : type === 'Return' ? 'Sale return' : 'Payment received'),
-          mode: type === 'Charge' ? '' : txMode(t),
+          date: t.date, type,
+          description: txNote(t) || (type === 'Charge' ? 'Charge' : type === 'Return' ? 'Sale return' : type === 'Payment' ? 'Payment received' : type),
+          mode: effect > 0 ? '' : txMode(t),
           debit: effect > 0 ? r2(effect) : 0, credit: effect < 0 ? r2(-effect) : 0, balance: running,
         };
       });
@@ -161,6 +217,8 @@ export const customerReports: ReportDefinition[] = [
       const charges = sum(rows, r => n(r.debit));
       const payments = sum(rows.filter(r => r.type === 'Payment'), r => n(r.credit));
       const returns = sum(rows.filter(r => r.type === 'Return'), r => n(r.credit));
+      // Opening-advance, write-off and adjustment credits: they lower the khata, but no money came in.
+      const otherCredits = r2(sum(rows, r => n(r.credit)) - payments - returns);
       const bills: ReportRow[] = data.sales
         .filter(s => s.customer_id === customer.id && !isVoidStatus(s.status) && inRange(s.date, f))
         .map(s => {
@@ -176,6 +234,7 @@ export const customerReports: ReportDefinition[] = [
           { key: 'charges', label: 'Charges', value: charges, format: 'money' },
           { key: 'payments', label: 'Payments received', value: payments, format: 'money', tone: 'good' },
           { key: 'returns', label: 'Returns', value: returns, format: 'money' },
+          ...(otherCredits > 0.009 ? [{ key: 'adjusted', label: 'Written off / adjusted', value: otherCredits, format: 'money' as const, hint: 'No money received' }] : []),
           { key: 'closing', label: closing < 0 ? 'Closing (advance)' : 'Closing balance', value: closing, format: 'money', tone: closing > 0.5 ? 'warn' : 'good' },
           { key: 'current', label: 'Balance today', value: r2(n(customer.balance)), format: 'money', hint: [customer.phone, customer.route].filter(Boolean).join(' · ') || undefined },
         ],
@@ -186,7 +245,7 @@ export const customerReports: ReportDefinition[] = [
             emptyText: 'No khata entries in this period.',
             columns: [
               { key: 'date', label: 'Date', format: 'date' },
-              { key: 'type', label: 'Type', format: 'badge', tones: { Charge: 'warn', Payment: 'good', Return: 'info' } },
+              { key: 'type', label: 'Type', format: 'badge', tones: { Charge: 'warn', Delivery: 'warn', Payment: 'good', Return: 'info', Opening: 'neutral', 'Write-off': 'bad', Adjustment: 'neutral' } },
               { key: 'description', label: 'Details', wrap: true },
               { key: 'mode', label: 'Mode' },
               { key: 'debit', label: 'Debit', format: 'money', total: true },
@@ -245,16 +304,24 @@ export const customerReports: ReportDefinition[] = [
           net.set(s.customer_id, (net.get(s.customer_id) || 0) + saleFigures(s).net);
         }
       });
+      // Opening balances and adjustments are not purchases: they must not make a customer "new" or "active".
       data.customerTransactions.forEach(t => {
-        if (lower(t.type) !== 'charge' || !t.customer_id) return;
+        if (lower(t.type) !== 'charge' || !t.customer_id || isNonCashCustomerTx(t)) return;
         seen(t.customer_id, dayOf(t.date));
         if (inRange(t.date, f)) charged.set(t.customer_id, (charged.get(t.customer_id) || 0) + n(t.amount));
+      });
+      // Home-delivery customers buy through delivery entries, not POS bills.
+      const delivered = new Set<string>();
+      data.dailySupplyEntries.forEach(e => {
+        if (!e?.customer_id || !isPostedSupply(e) || n(e.total_amount) <= 0) return;
+        seen(e.customer_id, dayOf(e.date));
+        if (inRange(e.date, f)) delivered.add(e.customer_id);
       });
       const rows: ReportRow[] = data.customers.filter(isActiveCustomer).map(c => {
         const firstDay = first.get(c.id) || '';
         const lastDay = last.get(c.id) || '';
         const billCount = bills.get(c.id) || 0;
-        const boughtInRange = billCount > 0 || (charged.get(c.id) || 0) > 0;
+        const boughtInRange = billCount > 0 || (charged.get(c.id) || 0) > 0 || delivered.has(c.id);
         const days = lastDay ? ageDays(lastDay, today) : null;
         let status: keyof typeof statusTones;
         if (!firstDay) status = 'Never';
@@ -320,7 +387,8 @@ export const customerReports: ReportDefinition[] = [
     financial: false,
     filters: ['customerId', 'groupBy'],
     build: (data, f) => {
-      const entries = data.dailySupplyEntries.filter(e => inRange(e.date, f) && (!f.customerId || e.customer_id === f.customerId));
+      // Cancelled entries never reached the khata; pending ones are kept and flagged in a note.
+      const entries = data.dailySupplyEntries.filter(e => inRange(e.date, f) && supplyStatus(e) !== 'cancelled' && (!f.customerId || e.customer_id === f.customerId));
       const netQty = (e: typeof entries[number]) => n(e.net_qty) || Math.max(0, n(e.delivered_qty) - n(e.returned_qty));
       const byCustomer = new Map<string, any>();
       const byRoute = new Map<string, any>();
@@ -342,7 +410,7 @@ export const customerReports: ReportDefinition[] = [
         customer: c.customer, route: c.route, days: c.days.size, delivered: r3(c.delivered), returned: r3(c.returned), net: r3(c.net),
         amount: r2(c.amount), received: r2(c.received), due: r2(Math.max(0, c.amount - c.received)),
         rate: c.net ? r2(c.amount / c.net) : 0,
-        balance: c.customerId ? r2(n(data.customers.find(x => x.id === c.customerId)?.balance)) : 0,
+        balance: c.customerId ? r2(n(findCustomer(data, c.customerId)?.balance)) : 0,
         _drill: c.customerId ? { report: 'customer_statement', filters: { customerId: c.customerId }, label: 'Customer statement' } : undefined,
       }));
       const routeRows: ReportRow[] = [...byRoute.values()].map(r => ({
@@ -355,7 +423,7 @@ export const customerReports: ReportDefinition[] = [
       }, ['delivered', 'returned', 'net', 'amount']);
       const delivered = sum(entries, e => n(e.delivered_qty));
       const returned = sum(entries, e => n(e.returned_qty));
-      const pending = entries.filter(e => lower(e.status) === 'pending').length;
+      const pending = entries.filter(e => supplyStatus(e) === 'pending').length;
       return {
         kpis: [
           { key: 'delivered', label: 'Delivered', value: r3(delivered), format: 'qty', unit: 'L' },
@@ -418,11 +486,14 @@ export const customerReports: ReportDefinition[] = [
     filters: ['customerId', 'paymentMode', 'groupBy'],
     comparable: true,
     build: (data, f) => {
+      // Money received only: opening-balance advances and bad-debt write-offs are "Payment" rows too,
+      // but nothing was collected, so they are listed in a note instead of counted as wasooli.
+      const forCustomer = (t: CustomerTransaction) => inRange(t.date, f) && (!f.customerId || t.customer_id === f.customerId);
       const txs = data.customerTransactions.filter(t =>
-        lower(t.type) === 'payment' && inRange(t.date, f) &&
-        (!f.customerId || t.customer_id === f.customerId) &&
+        isCustomerReceipt(t) && forCustomer(t) &&
         (!f.paymentMode || lower(txMode(t)).includes(lower(f.paymentMode)))
       );
+      const writtenOff = sum(data.customerTransactions.filter(t => lower(t.type) === 'payment' && isWriteOffCustomerTx(t) && forCustomer(t)), t => n(t.amount));
       const rows: ReportRow[] = txs.map(t => ({
         date: t.date, customer: customerName(data, t.customer_id, 'Unknown customer'), mode: txMode(t), amount: r2(n(t.amount)), note: txNote(t),
         _drill: t.customer_id ? { report: 'customer_statement', filters: { customerId: t.customer_id }, label: 'Customer statement' } : undefined,
@@ -458,6 +529,7 @@ export const customerReports: ReportDefinition[] = [
           ],
           rows,
         }],
+        notes: writtenOff > 0 ? [{ tone: 'info', text: `Rs ${fmt(writtenOff)} of khata was written off as bad debt in this period. It is not counted as recovered.` }] : undefined,
       };
     },
   },
