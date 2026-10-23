@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { ClipboardCheck, Droplets, Moon, Package, Sun, SunMedium } from 'lucide-react';
 import { useTabs } from '../../context/TabContext';
+import { PageHeader, SegmentedControl } from '../ui';
+import { cn } from '../../lib/cn';
+import { formatCurrency } from '../../lib/formatters';
 
-/** Shared building blocks for the three Procurement screens (milk, supplies, collection details). */
+/**
+ * Shared building blocks for the Procurement screens (milk, supplies, collection details),
+ * built on the design system in `src/components/ui`. The Expenses screens import
+ * `PillGroup`, `StatTile`, `SettlementBar` and `Avatar` too, so their props stay stable.
+ */
 
 export type ProcurementPageId = 'purchase' | 'purchase-supplies' | 'purchase-details';
 
@@ -12,69 +19,51 @@ const PAGES: { id: ProcurementPageId; label: string; short: string; Icon: React.
   { id: 'purchase-details', label: 'Collection Details', short: 'Details', Icon: ClipboardCheck },
 ];
 
+/** Screen header with the procurement sub-navigation. The app header already shows the screen name. */
 export const ProcurementHeader: React.FC<{
   active: ProcurementPageId;
   title: string;
-  subtitle: string;
+  subtitle: React.ReactNode;
   actions?: React.ReactNode;
 }> = ({ active, title, subtitle, actions }) => {
   const { openTab } = useTabs();
-  const ActiveIcon = PAGES.find(page => page.id === active)?.Icon || Droplets;
-
   return (
-    <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-      <div className="flex min-w-0 items-center gap-3">
-        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-lime-400 to-lime-600 text-white shadow-md shadow-lime-600/25">
-          <ActiveIcon size={20} strokeWidth={2.2} />
-        </span>
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Procurement</p>
-          <h1 className="truncate text-lg font-black leading-tight tracking-tight text-slate-900 sm:text-xl">{title}</h1>
-          <p className="truncate text-xs text-slate-500">{subtitle}</p>
-        </div>
-      </div>
-
-      <div className="flex min-w-0 items-center gap-2">
-        <nav aria-label="Procurement screens" className="flex min-w-0 flex-1 gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-1 scrollbar-hide lg:flex-initial">
-          {PAGES.map(({ id, label, short, Icon }) => {
-            const selected = id === active;
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-current={selected ? 'page' : undefined}
-                onClick={() => !selected && openTab(id)}
-                className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all lg:flex-initial ${
-                  selected
-                    ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-900/5'
-                    : 'text-slate-500 hover:text-slate-900'
-                }`}
-              >
-                <Icon size={14} className={selected ? 'text-lime-600' : ''} />
-                <span className="sm:hidden">{short}</span>
-                <span className="hidden sm:inline">{label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        {actions}
-      </div>
-    </header>
+    <PageHeader eyebrow="Procurement" description={subtitle} actions={actions}>
+      <h1 className="sr-only">{title}</h1>
+      <SegmentedControl<ProcurementPageId>
+        aria-label="Procurement screens"
+        variant="underline"
+        value={active}
+        onChange={id => { if (id !== active) openTab(id); }}
+        options={PAGES.map(({ id, label, short, Icon }) => ({
+          value: id,
+          icon: <Icon aria-hidden="true" />,
+          label: (
+            <>
+              <span className="sm:hidden">{short}</span>
+              <span className="hidden sm:inline">{label}</span>
+            </>
+          ),
+        }))}
+      />
+    </PageHeader>
   );
 };
 
 export type Tone = 'lime' | 'cyan' | 'violet' | 'rose' | 'amber' | 'emerald' | 'slate';
 
-const TONE: Record<Tone, { tile: string; text: string; bar: string }> = {
-  lime: { tile: 'bg-lime-100 text-lime-700', text: 'text-lime-700', bar: 'bg-lime-500' },
-  cyan: { tile: 'bg-cyan-100 text-cyan-700', text: 'text-cyan-700', bar: 'bg-cyan-500' },
-  violet: { tile: 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300', text: 'text-violet-700 dark:text-violet-300', bar: 'bg-violet-500' },
-  rose: { tile: 'bg-rose-100 text-rose-700', text: 'text-rose-600 dark:text-rose-400', bar: 'bg-rose-500' },
-  amber: { tile: 'bg-amber-100 text-amber-700', text: 'text-amber-700', bar: 'bg-amber-500' },
-  emerald: { tile: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-700', bar: 'bg-emerald-500' },
-  slate: { tile: 'bg-slate-100 text-slate-600', text: 'text-slate-900', bar: 'bg-slate-400' },
+// Legacy tone names mapped onto the design-system status colours.
+const TONE: Record<Tone, { tile: string; text: string }> = {
+  lime: { tile: 'bg-brand-soft text-brand-fg', text: 'text-brand-fg' },
+  cyan: { tile: 'bg-info-soft text-info-fg', text: 'text-info-fg' },
+  violet: { tile: 'bg-surface-2 text-fg-muted', text: 'text-fg' },
+  rose: { tile: 'bg-danger-soft text-danger-fg', text: 'text-danger-fg' },
+  amber: { tile: 'bg-warning-soft text-warning-fg', text: 'text-warning-fg' },
+  emerald: { tile: 'bg-success-soft text-success-fg', text: 'text-success-fg' },
+  slate: { tile: 'bg-surface-2 text-fg-muted', text: 'text-fg' },
 };
 
+/** KPI tile with room for a small chart under the value. Prefer `StatCard` when no children are needed. */
 export const StatTile: React.FC<{
   icon: React.ElementType;
   label: string;
@@ -84,18 +73,18 @@ export const StatTile: React.FC<{
   valueTone?: Tone;
   className?: string;
   children?: React.ReactNode;
-}> = ({ icon: Icon, label, value, hint, tone = 'slate', valueTone, className = '', children }) => (
-  <div className={`min-w-0 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xs ${className}`}>
-    <div className="flex items-center justify-between gap-2">
-      <span className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</span>
-      <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${TONE[tone].tile}`}>
-        <Icon size={14} />
+}> = ({ icon: Icon, label, value, hint, tone = 'slate', valueTone, className, children }) => (
+  <div className={cn('flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 shadow-e1', className)}>
+    <div className="flex items-center gap-2.5">
+      <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg', TONE[tone].tile)}>
+        <Icon size={16} aria-hidden="true" />
       </span>
+      <span className="truncate text-[13px] font-semibold text-fg-subtle">{label}</span>
     </div>
-    <p className={`mt-1.5 truncate font-mono text-lg font-black tracking-tight tabular-nums sm:text-xl ${valueTone ? TONE[valueTone].text : 'text-slate-900'}`}>
+    <p className={cn('truncate text-2xl font-bold leading-tight tracking-tight tabular-nums', valueTone ? TONE[valueTone].text : 'text-fg')}>
       {value}
     </p>
-    {hint && <p className="mt-0.5 truncate text-[11px] text-slate-500">{hint}</p>}
+    {hint && <p className="-mt-1 truncate text-xs text-fg-subtle">{hint}</p>}
     {children}
   </div>
 );
@@ -104,14 +93,14 @@ export interface PillOption<T extends string> {
   value: T;
   label: string;
   icon?: React.ReactNode;
-  /** Small colour swatch shown before the label, e.g. 'bg-sky-500'. */
+  /** Small colour swatch shown before the label, e.g. 'bg-info'. */
   dot?: string;
   disabled?: boolean;
 }
 
-/** Radio-style segmented pills. Faster than a dropdown for two to five choices. */
+/** Radio-style segmented pills (arrow keys move the choice). Faster than a dropdown for two to five choices. */
 export function PillGroup<T extends string>({
-  options, value, onChange, label, size = 'md', className = '',
+  options, value, onChange, label, size = 'md', className,
 }: {
   options: PillOption<T>[];
   value: T;
@@ -120,8 +109,27 @@ export function PillGroup<T extends string>({
   size?: 'sm' | 'md';
   className?: string;
 }) {
+  const groupRef = useRef<HTMLDivElement>(null);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    const enabled = options.filter(option => !option.disabled);
+    if (enabled.length === 0) return;
+    const index = enabled.findIndex(option => option.value === value);
+    const next = enabled[(index + step + enabled.length) % enabled.length];
+    event.preventDefault();
+    onChange(next.value);
+    groupRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[options.indexOf(next)]?.focus();
+  };
+
   return (
-    <div role="radiogroup" aria-label={label} className={`flex gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1 ${className}`}>
+    <div
+      ref={groupRef}
+      role="radiogroup"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      className={cn('flex gap-1 rounded-control bg-surface-2 p-1 ring-1 ring-inset ring-line/70', className)}
+    >
       {options.map(option => {
         const selected = option.value === value;
         return (
@@ -130,17 +138,17 @@ export function PillGroup<T extends string>({
             type="button"
             role="radio"
             aria-checked={selected}
+            tabIndex={selected || (!options.some(o => o.value === value) && option === options[0]) ? 0 : -1}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
-            className={`flex flex-auto shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-              size === 'sm' ? 'px-2 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'
-            } ${
-              selected
-                ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-900/5'
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
+            className={cn(
+              'flex flex-auto shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--radius-control)-4px)] font-semibold transition-colors duration-150',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
+              size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-[13px]',
+              selected ? 'bg-surface text-fg shadow-e1' : 'text-fg-subtle hover:text-fg',
+            )}
           >
-            {option.dot && <span className={`h-2 w-2 shrink-0 rounded-full ${option.dot}`} />}
+            {option.dot && <span className={cn('size-2 shrink-0 rounded-full', option.dot)} aria-hidden="true" />}
             {option.icon}
             <span>{option.label}</span>
           </button>
@@ -150,19 +158,26 @@ export function PillGroup<T extends string>({
   );
 }
 
-export function ShiftIcon({ name, size = 14 }: { name: string; size?: number }) {
+/** Which part of the day a shift name means: morning, noon or evening. */
+export function shiftPart(name: string): 'morning' | 'noon' | 'evening' {
   const value = name.toLowerCase();
-  if (value.includes('evening') || value.includes('night') || value.includes('sham') || value.includes('raat')) {
-    return <Moon size={size} className="shrink-0 text-indigo-400" />;
-  }
-  if (value.includes('noon') || value.includes('dopehar')) return <SunMedium size={size} className="shrink-0 text-orange-500" />;
-  return <Sun size={size} className="shrink-0 text-amber-500" />;
+  if (value.includes('evening') || value.includes('night') || value.includes('sham') || value.includes('raat')) return 'evening';
+  if (value.includes('noon') || value.includes('dopehar')) return 'noon';
+  return 'morning';
 }
 
+export function ShiftIcon({ name, size = 14, className }: { name: string; size?: number; className?: string }) {
+  const part = shiftPart(name);
+  if (part === 'evening') return <Moon size={size} className={cn('shrink-0 text-info', className)} aria-hidden="true" />;
+  if (part === 'noon') return <SunMedium size={size} className={cn('shrink-0 text-warning', className)} aria-hidden="true" />;
+  return <Sun size={size} className={cn('shrink-0 text-warning', className)} aria-hidden="true" />;
+}
+
+/** Identity colours for the milk varieties (small dots and mix bars only). */
 export const VARIETY_DOT: Record<string, string> = {
-  buffalo: 'bg-lime-500',
-  cow: 'bg-sky-500',
-  mixed: 'bg-violet-500',
+  buffalo: 'bg-brand-accent',
+  cow: 'bg-info',
+  mixed: 'bg-fg-faint',
 };
 
 export function varietyDot(type: string) {
@@ -172,45 +187,49 @@ export function varietyDot(type: string) {
   return VARIETY_DOT.mixed;
 }
 
-/** Initials avatar; red when we owe the party money, lime otherwise. */
+/** Initials avatar; red when we owe the party money, neutral otherwise. */
 export function Avatar({ name, owed = false, size = 'md' }: { name: string; owed?: boolean; size?: 'sm' | 'md' | 'lg' }) {
   const letters = (name || '?').trim().split(/\s+/).slice(0, 2).map(part => part.charAt(0).toUpperCase()).join('') || '?';
-  const box = size === 'lg' ? 'h-11 w-11 text-sm rounded-2xl' : size === 'sm' ? 'h-7 w-7 text-[10px] rounded-lg' : 'h-9 w-9 text-xs rounded-xl';
+  const box = size === 'lg' ? 'size-11 rounded-2xl text-sm' : size === 'sm' ? 'size-7 rounded-lg text-[10px]' : 'size-9 rounded-xl text-xs';
   return (
-    <span className={`grid shrink-0 place-items-center font-black ${box} ${owed ? 'bg-rose-100 text-rose-700' : 'bg-lime-100 text-lime-700'}`}>
+    <span
+      aria-hidden="true"
+      className={cn('grid shrink-0 place-items-center font-bold', box, owed ? 'bg-danger-soft text-danger-fg' : 'bg-brand-soft text-brand-fg')}
+    >
       {letters}
     </span>
   );
 }
 
 /** Paid vs khata split of a bill, as one bar with both amounts underneath. */
-export function SettlementBar({ total, paid, formatMoney }: { total: number; paid: number; formatMoney: (value: number) => string }) {
+export function SettlementBar({ total, paid, formatMoney = formatCurrency }: { total: number; paid: number; formatMoney?: (value: number) => string }) {
   if (total <= 0) return null;
   const paidPart = Math.min(total, Math.max(0, paid));
   const due = Math.max(0, total - paidPart);
   const pct = (paidPart / total) * 100;
   return (
     <div>
-      <div className="flex h-2 overflow-hidden rounded-full bg-rose-500/20" aria-hidden="true">
-        <span className="h-full rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+      <div className="flex h-2 overflow-hidden rounded-full bg-danger/20" aria-hidden="true">
+        <span className="h-full rounded-full bg-success transition-[width] duration-300 ease-out-expo" style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] font-semibold">
-        <span className="flex items-center gap-1.5 text-emerald-700"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Paid {formatMoney(paidPart)}</span>
-        <span className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400"><span className="h-1.5 w-1.5 rounded-full bg-rose-500" />Khata {formatMoney(due)}</span>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] font-semibold tabular-nums">
+        <span className="flex items-center gap-1.5 text-success-fg"><span className="size-1.5 rounded-full bg-success" aria-hidden="true" />Paid {formatMoney(paidPart)}</span>
+        <span className="flex items-center gap-1.5 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" aria-hidden="true" />Khata {formatMoney(due)}</span>
       </div>
     </div>
   );
 }
 
-export function SectionLabel({ step, children, aside }: { step?: number; children: React.ReactNode; aside?: React.ReactNode }) {
+export function SectionLabel({ step, children, aside, htmlFor }: { step?: number; children: React.ReactNode; aside?: React.ReactNode; htmlFor?: string }) {
+  const Tag = htmlFor ? 'label' : 'span';
   return (
-    <div className="mb-1.5 flex items-center justify-between gap-2">
-      <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+    <div className="mb-1.5 flex min-h-5 items-center justify-between gap-2">
+      <Tag htmlFor={htmlFor} className="flex items-center gap-1.5 text-xs font-semibold text-fg-muted">
         {step !== undefined && (
-          <span className="grid h-4 w-4 place-items-center rounded-full bg-lime-600 text-[9px] font-black text-white">{step}</span>
+          <span className="grid size-4 place-items-center rounded-full bg-brand text-[9px] font-bold text-brand-on" aria-hidden="true">{step}</span>
         )}
         {children}
-      </span>
+      </Tag>
       {aside}
     </div>
   );
