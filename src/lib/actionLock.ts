@@ -37,6 +37,24 @@ class ActionLockManager {
     }
   }
 
+  /**
+   * Like runExclusive, and also refused while another tab of this browser runs the same key
+   * (Web Locks; without them it is the same-tab lock only). Returns null when blocked.
+   */
+  async runExclusiveAcrossTabs<T>(lockKey: string, action: () => Promise<T>, timeoutMs: number = 60000): Promise<T | null> {
+    return this.runExclusive(lockKey, async () => {
+      const locks = typeof navigator !== 'undefined' ? (navigator as any).locks : undefined;
+      if (!locks?.request) return action();
+      return locks.request(`mooco_action_${lockKey}`, { ifAvailable: true }, async (lock: unknown) => {
+        if (!lock) {
+          console.warn(`[ActionLock] "${lockKey}" is running in another tab`);
+          return null;
+        }
+        return action();
+      });
+    }, timeoutMs);
+  }
+
   isLocked(lockKey: string): boolean {
     return this.activeLocks.has(lockKey);
   }

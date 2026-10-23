@@ -2097,7 +2097,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     account_id_arg?: string
   ): Promise<boolean> => {
     if (!guardOpenPeriod(entry.date)) return false;
-    const lockResult = await actionLock.runExclusive(`add_purchase_${entry.supplier_id}_${entry.date}_${entry.shift}`, async () => {
+    if (!(Number(entry.quantity) > 0) || !(Number(entry.rate) > 0)) {
+      showToast('Doodh ki miqdar aur rate 0 se zyada hone chahiye.', 'warning');
+      return false;
+    }
+    // Keyed by the business day, not the full timestamp: the timestamp differs on every click, so
+    // the lock never stopped a double tap from saving the intake twice.
+    const lockKey = `add_purchase_${entry.supplier_id}_${entry.date ? businessDayOf(String(entry.date)) : ''}_${entry.shift}`;
+    const lockResult = await actionLock.runExclusive(lockKey, async () => {
       try {
         const id = generateUUID();
         const total_amount = roundCurrency((Number(entry.quantity) || 0) * (Number(entry.rate) || 0));
@@ -2282,7 +2289,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     });
 
-    return lockResult !== null ? lockResult : false;
+    if (lockResult === null) {
+      showToast('Is supplier ki pichli entry abhi save ho rahi hai.', 'warning');
+      return false;
+    }
+    return lockResult;
   };
 
   const addSale = async (cart: any[], customer: any, subtotal: number, discount: number, total: number, paymentMode: 'Cash' | 'Online' | 'Credit', paidAmount?: number): Promise<string | false> => {
@@ -3379,7 +3390,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       || accountId === resolveDrawerAccountId(activeShiftSession.drawer_id);
   };
 
-  const returnPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Milk Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
+  // One return per intake at a time, also across tabs: a double tap returned the milk (and refunded) twice.
+  const returnPurchase = async (...args: Parameters<typeof returnPurchaseUnlocked>): Promise<boolean> => {
+    const result = await actionLock.runExclusiveAcrossTabs(`return_purchase_${args[0]}`, () => returnPurchaseUnlocked(...args));
+    if (result === null) {
+      showToast('Is entry ka return pehle se chal raha hai.', 'warning');
+      return false;
+    }
+    return result;
+  };
+
+  const returnPurchaseUnlocked = async (purchaseId: string, returnQty?: number, reason: string = 'Milk Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
     try {
       const purchase = purchases.find(p => p.id === purchaseId);
       if (!purchase) {
@@ -3417,6 +3438,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const returnTimestamp = new Date().toISOString();
+      // Puts the intake row back when the milk pool cannot follow it, so a failed return can be retried
+      // instead of leaving a returned intake whose milk is still in the pool.
+      const restorePurchaseRow = async () => {
+        const { error: restoreError } = await supabase.from('purchases').update({
+          status: purchase.status || 'Completed',
+          quantity: totalPurchaseQty,
+          total_amount: Number(purchase.total_amount ?? roundCurrency(totalPurchaseQty * (purchase.rate || 0))),
+          return_reason: (purchase as any).return_reason ?? null,
+          details: (purchase as any).details || {}
+        }).eq('id', purchaseId);
+        if (restoreError) console.error('[returnPurchase] Intake row could not be restored:', restoreError);
+      };
 
       if (isFullReturn) {
         const prevPurDetails = ((purchase as any).details || {}) as any;
@@ -3444,17 +3477,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         if (purErr) throw purErr;
 
+        if (alloc) {
+          const { error: allocDeleteError } = await supabase.from('allocations').delete().eq('id', alloc.id);
+          if (allocDeleteError) {
+            await restorePurchaseRow();
+            throw allocDeleteError;
+          }
+          setAllocations(prev => prev.filter(a => a.id !== alloc.id));
+        }
+
         setPurchases(prev => prev.map(p => p.id === purchaseId ? {
           ...p,
           status: 'Returned',
           return_reason: reason,
           returned_at: returnTimestamp
         } : p));
-
-        if (alloc) {
-          await supabase.from('allocations').delete().eq('id', alloc.id);
-          setAllocations(prev => prev.filter(a => a.id !== alloc.id));
-        }
       } else {
         const prevDetails = ((purchase as any).details || {}) as any;
         const origPaidForRemainder = Number(purchase.paid_amount || prevDetails.paid_amount || 0);
@@ -3488,6 +3525,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         if (purErr) throw purErr;
 
+        if (alloc) {
+          const newAllocRemaining = roundQuantity(Math.max(0, (alloc.remaining_quantity || alloc.original_quantity) - actualReturnQty));
+          const newAllocOriginal = roundQuantity(Math.max(0, alloc.original_quantity - actualReturnQty));
+          const { error: allocUpdateError } = await supabase.from('allocations').update({
+            original_quantity: newAllocOriginal,
+            remaining_quantity: newAllocRemaining
+          }).eq('id', alloc.id);
+          if (allocUpdateError) {
+            await restorePurchaseRow();
+            throw allocUpdateError;
+          }
+
+          setAllocations(prev => prev.map(a => a.id === alloc.id ? {
+            ...a,
+            original_quantity: newAllocOriginal,
+            remaining_quantity: newAllocRemaining
+          } : a));
+        }
+
         setPurchases(prev => prev.map(p => p.id === purchaseId ? {
           ...p,
           quantity: remainingAcceptedQty,
@@ -3497,21 +3553,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return_reason: `Partial Return: ${actualReturnQty}L returned (${reason})`,
           details: updatedDetails
         } : p));
-
-        if (alloc) {
-          const newAllocRemaining = roundQuantity(Math.max(0, (alloc.remaining_quantity || alloc.original_quantity) - actualReturnQty));
-          const newAllocOriginal = roundQuantity(Math.max(0, alloc.original_quantity - actualReturnQty));
-          await supabase.from('allocations').update({
-            original_quantity: newAllocOriginal,
-            remaining_quantity: newAllocRemaining
-          }).eq('id', alloc.id);
-
-          setAllocations(prev => prev.map(a => a.id === alloc.id ? {
-            ...a,
-            original_quantity: newAllocOriginal,
-            remaining_quantity: newAllocRemaining
-          } : a));
-        }
       }
 
       // A purchase paid on the spot (cash/bank) refunds the paid amount back to that account.
@@ -3579,7 +3620,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (milkReturnTxError) throw milkReturnTxError;
       }
 
-      await supabase.from('inventory_logs').insert([{
+      const { error: returnLogError } = await supabase.from('inventory_logs').insert([{
         id: `log_pur_ret_${generateUUID()}`,
         date: returnTimestamp,
         item_id: 'milk_raw',
@@ -3592,11 +3633,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }]);
 
       showToast(
-        isFullReturn 
-          ? `Full milk purchase of ${actualReturnQty}L returned to supplier! Balance reduced by Rs ${returnAmount.toLocaleString()}.` 
+        isFullReturn
+          ? `Full milk purchase of ${actualReturnQty}L returned to supplier! Balance reduced by Rs ${returnAmount.toLocaleString()}.`
           : `Partial return of ${actualReturnQty}L processed! ${remainingAcceptedQty}L kept (Rs ${returnAmount.toLocaleString()} deducted from supplier).`,
         "success"
       );
+      // The return itself is complete; only its stock-history line is missing, so say so instead of hiding it.
+      if (returnLogError) {
+        console.error('[returnPurchase] Stock log not saved:', returnLogError);
+        showToast('Return ho gaya, lekin stock history mein iski entry save nahi hui.', 'warning');
+      }
 
       fetchData(['purchases', 'allocations', 'suppliers', 'supplierTransactions', 'inventoryLogs', ...MONEY_ADDED]);
       return true;
@@ -4339,29 +4385,56 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
      } catch(err) { console.error(err); return false; }
   };
 
-  const processSalesReturn = async (
-    saleId: string, 
-    returnReason: string, 
+  // One return per bill at a time, also across tabs: two clicks or two tabs could post the same
+  // return (stock, khata and refund) twice.
+  const processSalesReturn = async (...args: Parameters<typeof processSalesReturnUnlocked>): Promise<boolean> => {
+    const result = await actionLock.runExclusiveAcrossTabs(`sales_return_${args[0]}`, () => processSalesReturnUnlocked(...args));
+    if (result === null) {
+      showToast('Is bill ka return pehle se chal raha hai. Thori der baad dekhein.', 'warning');
+      return false;
+    }
+    return result;
+  };
+
+  const processSalesReturnUnlocked = async (
+    saleId: string,
+    returnReason: string,
     refundAccountId?: string,
     returnAction: 'refund' | 'replace' = 'refund',
     restockOption: 'restock' | 'scrap_spoilage' = 'restock',
     returnedItemsList?: Array<{ itemId?: string; name: string; qty: number; price: number; variantId?: string; unit?: string }>,
     refundPaymentMode?: 'Cash' | 'Online',
     correctOriginalSaleMode?: boolean
-  ) => {
+  ): Promise<boolean> => {
     try {
-      const sale = sales.find(s => s.id === saleId);
-      if (!sale) {
+      const localSale = sales.find(s => s.id === saleId);
+      if (!localSale) {
         showToast("Sale record not found", "error");
         return false;
       }
+      if (await isSaleUnsynced(localSale.id)) {
+        showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad return karein.', 'error');
+        return false;
+      }
+      // Another device may have returned (part of) this bill or changed its mode since it was loaded:
+      // what was already returned comes from the server copy, not the one on screen.
+      const { data: serverSale, error: serverSaleError } = await supabase.from('sales').select('*').eq('id', saleId).maybeSingle();
+      if (serverSaleError) throw serverSaleError;
+      if (!serverSale) {
+        showToast('Ye bill server par nahi mila. Records refresh kar ke dobara koshish karein.', 'error');
+        return false;
+      }
+      const sale: POSBill = {
+        ...localSale,
+        status: serverSale.status ?? localSale.status,
+        payment_mode: serverSale.payment_mode ?? localSale.payment_mode,
+        refund_amount: serverSale.refund_amount ?? serverSale.details?.refund_amount ?? localSale.refund_amount,
+        returned_items: serverSale.returned_items || serverSale.details?.returned_items || undefined,
+        details: serverSale.details ?? (localSale as any).details
+      } as POSBill;
 
       if (sale.status === 'Returned') {
         showToast("This sale has already been fully returned", "warning");
-        return false;
-      }
-      if (await isSaleUnsynced(sale.id)) {
-        showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad return karein.', 'error');
         return false;
       }
 
