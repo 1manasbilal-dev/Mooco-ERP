@@ -27,6 +27,18 @@ export const cleanQty = (val: number | string | null | undefined): number => {
   return cleanNumber(val, 3);
 };
 
+// One Intl formatter per precision: toLocaleString builds a new formatter on every call, and
+// lists and charts format thousands of numbers per render.
+const groupedFormats = new Map<number, Intl.NumberFormat>();
+const grouped = (maxDecimals: number) => {
+  let format = groupedFormats.get(maxDecimals);
+  if (!format) {
+    format = new Intl.NumberFormat('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: maxDecimals });
+    groupedFormats.set(maxDecimals, format);
+  }
+  return format;
+};
+
 /**
  * Formats a quantity/weight/liter number cleanly:
  * - Drops floating-point noise: 60.259999999999992 -> '60.26'
@@ -37,11 +49,7 @@ export const formatQty = (
   qty: number | string | null | undefined,
   maxDecimals: number = 2
 ): string => {
-  const cleaned = cleanNumber(qty, maxDecimals);
-  return cleaned.toLocaleString('en-PK', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: maxDecimals
-  });
+  return grouped(maxDecimals).format(cleanNumber(qty, maxDecimals));
 };
 
 /**
@@ -56,10 +64,7 @@ export const formatCurrency = (
 ): string => {
   const cleaned = cleanNumber(amount, 2);
   const isNegative = cleaned < 0;
-  const absFormatted = Math.abs(cleaned).toLocaleString('en-PK', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  });
+  const absFormatted = grouped(2).format(Math.abs(cleaned));
   return isNegative ? `-${prefix}${absFormatted}` : `${prefix}${absFormatted}`;
 };
 
@@ -70,11 +75,7 @@ export const formatMoneyRaw = (
   amount: number | string | null | undefined,
   maxDecimals: number = 2
 ): string => {
-  const cleaned = cleanNumber(amount, maxDecimals);
-  return cleaned.toLocaleString('en-PK', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: maxDecimals
-  });
+  return grouped(maxDecimals).format(cleanNumber(amount, maxDecimals));
 };
 
 /**
@@ -163,6 +164,8 @@ export const normalizeTransactionTimestamp = (dateInput?: string | Date | null):
   return new Date(Date.UTC(y, m - 1, d, 12 - PKT_OFFSET_HOURS, 0, 0, 0)).toISOString();
 };
 
+let shopClock: Intl.DateTimeFormat | undefined;
+
 /**
  * Formats a transaction time safely:
  * - If time is empty or is a legacy midnight artifact, returns fallback (default '')
@@ -184,7 +187,8 @@ export const formatTransactionTime = (
     }
 
     // Shop time, like getTodayLocalDate: a device on another zone must not shift bill times.
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Karachi' });
+    shopClock ??= new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Karachi' });
+    return shopClock.format(d);
   } catch {
     return fallback;
   }

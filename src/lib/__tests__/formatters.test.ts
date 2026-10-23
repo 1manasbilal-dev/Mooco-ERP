@@ -92,6 +92,15 @@ describe('Rs formatting', () => {
     expect(formatQty('2.10')).toBe('2.1');
   });
 
+  it('keeps each precision separate when formatters are reused', () => {
+    expect(formatQty(1234.5678, 3)).toBe('1,234.568');
+    expect(formatQty(1234.5678, 1)).toBe('1,234.6');
+    expect(formatQty(1234.5678, 0)).toBe('1,235');
+    expect(formatMoneyRaw(1234.5678, 3)).toBe('1,234.568');
+    expect(formatCurrency(1234.5678)).toBe('Rs 1,234.57');
+    expect(formatQty(1234.5678, 3)).toBe('1,234.568');
+  });
+
   it('formats percentages', () => {
     expect(formatPercent(30.3333333)).toBe('30.3%');
     expect(formatPercent(30)).toBe('30%');
