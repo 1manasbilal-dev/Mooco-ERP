@@ -1,4 +1,4 @@
-import { businessDate, offsetDate } from '../dashboardAnalytics';
+import { businessDate, offsetDate, reportingHour } from '../dashboardAnalytics';
 import { saleNetCollection, salePaidAmount } from '../moneyFlow';
 import { saleLineStock, saleLineCostPerBase } from '../sellUnits';
 import { itemStockValue, returnedQtyForLine } from '../stockProfit';
@@ -68,6 +68,15 @@ export const dayOf = (value?: string | null): string => {
     dayCache.set(value, day);
   }
   return day;
+};
+
+/** Hour (0-23) in Pakistan time, as reportingHour(): 12 when only a date was stored. */
+export const hourOf = (value: string): number => {
+  if (!value?.includes('T')) return 12;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return 12;
+  if (time < FIXED_OFFSET_SINCE) return reportingHour(value);
+  return Math.floor((((time + PKT_OFFSET_MS) % DAY_MS) + DAY_MS) % DAY_MS / 3600000);
 };
 
 export const inRange = (value: string | undefined | null, f: Pick<ReportFilters, 'from' | 'to'>): boolean => {

@@ -1,9 +1,8 @@
 import type { ReportDefinition, ReportRow } from '../types';
 import {
-  autoGroup, cashierOf, COLOR, customerName, dayOf, findCustomer, groupSum, inRange, isFullyReturned, isVoidStatus, n, pct, r2, r3,
+  autoGroup, cashierOf, COLOR, customerName, dayOf, findCustomer, groupSum, hourOf, inRange, isFullyReturned, isVoidStatus, n, pct, r2, r3,
   reportSales, saleFigures, saleLines, saleMode, saleReturnEvents, sum, timeSeries, topSlices, weekdayOf
 } from '../helpers';
-import { reportingHour } from '../../dashboardAnalytics';
 import type { POSBill } from '../../../types';
 
 const matchesFilters = (sale: POSBill, f: { customerId?: string; paymentMode?: string; cashierId?: string }) =>
@@ -411,7 +410,7 @@ export const salesReports: ReportDefinition[] = [
       const heat: Record<string, Record<number, number>> = {};
       sales.forEach(sale => {
         const fig = saleFigures(sale);
-        const h = reportingHour(sale.date);
+        const h = hourOf(sale.date);
         hours[h].bills++; hours[h].net += fig.net;
         const d = dayOf(sale.date);
         const wd = weekdayOf(d);
