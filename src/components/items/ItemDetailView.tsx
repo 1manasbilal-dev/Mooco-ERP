@@ -1,12 +1,17 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangle, Archive, ArrowRight, Banknote, Boxes, Briefcase, ChefHat, Edit, Factory, Layers,
-  Package, RotateCcw, Scale, ShieldAlert, ShoppingCart, Tag, Trash2, TrendingUp, Truck, X, Zap, Check,
+  AlertTriangle, Archive, ArrowRight, Banknote, Boxes, Briefcase, ChefHat, Factory, Pencil, RotateCcw, Scale,
+  ShoppingCart, Trash2, Truck, X, Zap,
 } from 'lucide-react';
-import { ItemDefinition } from '../../types';
+import type { ItemDefinition } from '../../types';
+import { Badge, Button, IconButton, Money, SegmentedControl } from '../ui';
+import type { Tone } from '../ui';
+import { cn } from '../../lib/cn';
 import { formatCurrency, formatQty } from '../../lib/formatters';
 import { buildQuickPreview, getQuickPresets } from '../../lib/posQuickEntry';
 import { describeItemStock, oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { profitBasisFor, profitOf } from './catalogModel';
+import { ProductThumb } from './ProductThumb';
 
 export interface SellInPosEntry {
   mode: 'amount' | 'qty';
@@ -30,36 +35,62 @@ interface Props {
   onSellInPos: (entry?: SellInPosEntry) => void;
   /** Current catalog name for a recipe material, so renamed materials don't show their old name. */
   materialName?: (itemId: string) => string | undefined;
+  /** id for the product name heading, so the surrounding sheet can use it as its label. */
+  titleId?: string;
 }
 
-const Section: React.FC<{ icon: React.ReactNode; title: string; aside?: React.ReactNode; children: React.ReactNode }> = ({ icon, title, aside, children }) => (
-  <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-xs">
-    <div className="flex items-center justify-between gap-2 mb-3">
-      <h4 className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">{icon}{title}</h4>
-      {aside}
+const STOCK_TONE: Record<'ok' | 'low' | 'out', { tone: Tone; text: string; bar: string }> = {
+  ok: { tone: 'success', text: 'In stock', bar: 'bg-success' },
+  low: { tone: 'warning', text: 'Low stock', bar: 'bg-warning' },
+  out: { tone: 'danger', text: 'Out of stock', bar: 'bg-danger' },
+};
+
+const TYPE_TONE: Record<string, Tone> = { 'Sale product': 'success', 'Raw material': 'warning', 'Packaging material': 'info' };
+
+function Section({ icon, title, aside, children }: { icon: React.ReactNode; title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="rounded-card border border-line bg-surface p-4 shadow-e1 sm:p-5">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle [&_svg]:size-3.5">{icon}{title}</h4>
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-line/70 py-2.5 first:pt-0 last:border-0 last:pb-0">
+      <span className="shrink-0 pt-0.5 text-xs font-semibold text-fg-subtle">{label}</span>
+      <div className="flex flex-wrap justify-end gap-1.5 text-right text-[13px] font-semibold text-fg">{children}</div>
     </div>
-    {children}
-  </section>
-);
+  );
+}
 
-const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div className="flex items-start justify-between gap-4 py-2.5 border-b border-slate-100 dark:border-slate-800/80 last:border-0 last:pb-0 first:pt-0">
-    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 shrink-0 pt-0.5">{label}</span>
-    <div className="text-xs sm:text-[13px] font-bold text-slate-800 dark:text-slate-200 text-right flex flex-wrap justify-end gap-1.5">{children}</div>
-  </div>
-);
+function Metric({ label, value, sub, children }: { label: string; value: React.ReactNode; sub?: React.ReactNode; children?: React.ReactNode }) {
+  return (
+    <div className="rounded-card border border-line bg-surface p-3.5 shadow-e1">
+      <span className="text-xs font-semibold text-fg-subtle">{label}</span>
+      <div className="mt-1 text-xl font-bold leading-tight tracking-tight tabular-nums text-fg">{value}</div>
+      {sub && <div className="mt-1 text-[11px] text-fg-subtle">{sub}</div>}
+      {children}
+    </div>
+  );
+}
 
+/** Read-only product page: stock by pile, prices, profit, quick POS buttons and warnings. */
 export const ItemDetailView: React.FC<Props> = ({
   item, stock, variantStocks, allowNegativeStock, canEdit, canDelete, canOpenPos,
-  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos, materialName,
+  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos, materialName, titleId,
 }) => {
   const isSale = Boolean(item.item_type?.includes('Sale product'));
   const rate = Number(item.selling_price) || 0;
   const cost = Number(item.cost_price) || 0;
   const looseAllowed = item.allow_loose_sale !== false;
   const qtyFirst = item.pos_primary_mode === 'qty';
-  const activeVariants = (item.variants || []).filter(v => v.isActive !== false);
-  const reorder = item.reorder_level || 5;
+  const activeVariants = useMemo(() => (item.variants || []).filter(v => v.isActive !== false), [item.variants]);
+  const reorder = Number(item.reorder_level) || 5;
   const picture = useMemo(() => describeItemStock(item, stock, variantStocks), [item, stock, variantStocks]);
   const onHand = picture.sellableBase;
   const stockTone: 'out' | 'low' | 'ok' = onHand <= 0 ? 'out' : onHand <= reorder ? 'low' : 'ok';
@@ -76,198 +107,122 @@ export const ItemDetailView: React.FC<Props> = ({
   const preview = useMemo(() => buildQuickPreview(rate, item.unit, item.quick_amounts), [rate, item.unit, item.quick_amounts]);
   const packCounts = useMemo(() => getQuickPresets({ mode: 'qty', packaged: true, unit: item.unit, rate: 1 }).filter(n => n <= 10), [item.unit]);
 
-  // Profit is shown for the unit people actually buy: loose rate, else the first priced pack.
-  // With loose sale off nobody pays the per-kg rate, so the headline and profit follow the pack.
+  // Profit is shown for the unit people actually buy (same rule as the catalog list).
+  const profitBasis = useMemo(() => profitBasisFor(item), [item]);
+  const { profit, marginPct, markupPct } = profitOf(profitBasis);
   const looseRate = looseAllowed ? rate : 0;
-  const profitBasis = useMemo(() => {
-    if (looseRate > 0) return { sell: looseRate, cost, per: item.unit };
-    const pack = activeVariants.find(v => sellUnitPrice(rate, sellUnitContains(v), v.selling_price) > 0);
-    if (pack) return { sell: sellUnitPrice(rate, sellUnitContains(pack), pack.selling_price), cost: cost * sellUnitContains(pack), per: pack.name };
-    return null;
-  }, [looseRate, rate, cost, item.unit, activeVariants]);
-  const profit = profitBasis ? profitBasis.sell - profitBasis.cost : 0;
-  const marginPct = profitBasis && profitBasis.sell > 0 ? (profit / profitBasis.sell) * 100 : 0;
-  const markupPct = profitBasis && profitBasis.cost > 0 ? (profit / profitBasis.cost) * 100 : 0;
 
-  const packPrices = activeVariants.map(v => Number(v.selling_price) || rate * (Number(v.quantity_in_base_unit) || 1)).filter(p => p > 0);
+  const packPrices = activeVariants.map(v => sellUnitPrice(rate, sellUnitContains(v), v.selling_price)).filter(p => p > 0);
+  const minPack = packPrices.length ? Math.min(...packPrices) : 0;
+  const maxPack = packPrices.length ? Math.max(...packPrices) : 0;
   const priceHeadline = looseRate > 0
-    ? { value: formatCurrency(looseRate), sub: `per ${item.unit}` }
+    ? { value: <Money amount={looseRate} />, sub: `per ${item.unit}` }
     : packPrices.length
-      ? { value: Math.min(...packPrices) === Math.max(...packPrices) ? formatCurrency(packPrices[0]) : `${formatCurrency(Math.min(...packPrices))}+`, sub: activeVariants.length === 1 ? `per ${activeVariants[0].name}` : 'per pack' }
-      : { value: formatCurrency(0), sub: 'not set' };
+      ? { value: <>{<Money amount={minPack} />}{minPack !== maxPack ? '+' : ''}</>, sub: activeVariants.length === 1 ? `per ${activeVariants[0].name}` : 'per pack' }
+      : { value: <span className="text-fg-faint">—</span>, sub: 'Rate set nahi' };
 
   const canSell = canOpenPos && item.isActive && isSale && (rate > 0 || packPrices.length > 0);
-  const sellLabel = !isSale ? 'Not a sale product' : !item.isActive ? 'Inactive' : !canOpenPos ? 'No POS access' : !(rate > 0 || packPrices.length > 0) ? 'Set a selling rate first' : 'Sell in POS';
+  const sellLabel = !isSale ? 'Sale product nahi' : !item.isActive ? 'Inactive' : !canOpenPos ? 'POS ki ijazat nahi' : !(rate > 0 || packPrices.length > 0) ? 'Pehle rate set karein' : 'POS mein bechein';
+  const s = STOCK_TONE[stockTone];
 
-  const tone = {
-    ok: { pill: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800/60', bar: 'bg-emerald-500', text: 'In stock' },
-    low: { pill: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800/60', bar: 'bg-amber-500', text: 'Low stock' },
-    out: { pill: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/50 dark:text-rose-400 dark:border-rose-800/60', bar: 'bg-rose-500', text: 'Out of stock' },
-  }[stockTone];
-
-  const cashGroup = (
-    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" role="group" aria-label="Quick cash buttons">
-      {preview.cash.map(c => (
-        <button key={c.amount} type="button" disabled={!canSell || rate <= 0} onClick={() => onSellInPos({ mode: 'amount', value: String(c.amount) })}
-          title={`Sell ${c.label} of ${item.name} in POS`}
-          className="p-2.5 bg-white dark:bg-slate-800/90 rounded-xl border border-emerald-200 dark:border-emerald-900/50 flex flex-col items-center justify-center transition-all enabled:hover:border-emerald-500 dark:enabled:hover:border-emerald-500 enabled:hover:bg-emerald-50 dark:enabled:hover:bg-emerald-950/40 enabled:hover:-translate-y-0.5 enabled:active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs">
-          <span className="text-[13px] font-black font-mono text-emerald-800 dark:text-emerald-400">{c.label}</span>
-          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mt-0.5">≈ {c.converted}</span>
-        </button>
-      ))}
-    </div>
-  );
-  const qtyGroup = (
-    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" role="group" aria-label="Quick quantity buttons">
-      {preview.qty.map(q => (
-        <button key={q.qty} type="button" disabled={!canSell || rate <= 0} onClick={() => onSellInPos({ mode: 'qty', value: String(q.qty) })}
-          title={`Sell ${q.title} of ${item.name} in POS`}
-          className="p-2.5 bg-white dark:bg-slate-800/90 rounded-xl border border-lime-200 dark:border-lime-900/50 flex flex-col items-center justify-center transition-all enabled:hover:border-lime-500 dark:enabled:hover:border-lime-500 enabled:hover:bg-lime-50 dark:enabled:hover:bg-lime-950/40 enabled:hover:-translate-y-0.5 enabled:active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-2xs">
-          <span className="text-[13px] font-black font-mono text-lime-800 dark:text-lime-400">{q.title}</span>
-          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mt-0.5">{q.converted}</span>
-          {q.hint && <span className="text-[9px] font-semibold text-lime-700/80 dark:text-lime-400/80">{q.hint}</span>}
-        </button>
-      ))}
-    </div>
-  );
+  const quickButton = 'flex flex-col items-center justify-center rounded-control border border-line bg-surface p-2.5 text-center transition-[border-color,background-color,transform] duration-150 enabled:cursor-pointer enabled:hover:border-brand-accent enabled:hover:bg-brand-soft/60 enabled:active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-      <div className="shrink-0 border-b border-slate-100 dark:border-slate-800 bg-gradient-to-br from-lime-50/80 via-white to-white dark:from-slate-900 dark:via-slate-900 dark:to-slate-850 px-5 pt-5 pb-4 sm:px-6">
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-fg">
+      <div className="shrink-0 border-b border-line bg-surface px-4 pb-4 pt-4 sm:px-6 sm:pt-5">
         <div className="flex items-start gap-4">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-lime-500/10 dark:bg-lime-500/20 text-lime-700 dark:text-lime-400 flex items-center justify-center font-black text-2xl shrink-0 border border-lime-500/20 dark:border-lime-500/30 overflow-hidden shadow-xs">
-            {item.image_url ? <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" /> : item.name.charAt(0)}
-          </div>
+          <ProductThumb name={item.name} src={item.image_url} dimmed={!item.isActive} className="size-16 rounded-2xl sm:size-20" initialsClassName="text-xl" />
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white leading-tight break-words">{item.name}</h3>
-            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${item.isActive ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800/60' : 'bg-rose-50 text-rose-600 border-rose-200 dark:bg-rose-950/50 dark:text-rose-400 dark:border-rose-800/60'}`}>
-                {item.isActive ? 'Active' : 'Inactive'}
-              </span>
-              {item.isSystem && <span className="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full font-bold">System core</span>}
-              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">{item.unit}</span>
-              {(item.category.length ? item.category : ['Uncategorized']).map(c => (
-                <span key={c} className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-transparent dark:border-slate-700/60">{c}</span>
-              ))}
+            <h3 id={titleId} className="break-words text-xl font-bold leading-tight tracking-tight text-fg">{item.name}</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge tone={item.isActive ? 'success' : 'neutral'} dot>{item.isActive ? 'Active' : 'Inactive'}</Badge>
+              {item.isSystem && <Badge tone="info">System core</Badge>}
+              <Badge tone="neutral">{item.unit}</Badge>
+              {(item.category.length ? item.category : ['Uncategorized']).map(c => <Badge key={c} tone="neutral">{c}</Badge>)}
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close product details" className="p-2 -mr-1 -mt-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all cursor-pointer"><X size={18} /></button>
+          <IconButton aria-label="Product details band karein" icon={<X />} onClick={onClose} className="-mr-1 -mt-1" />
         </div>
 
-        <div className="flex items-center gap-2 mt-4">
-          <button type="button" onClick={() => onSellInPos()} disabled={!canSell}
-            className="flex-1 flex items-center justify-center gap-2 bg-lime-600 hover:bg-lime-700 dark:bg-lime-500 dark:hover:bg-lime-400 text-white dark:text-slate-950 disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:cursor-not-allowed px-4 py-2.5 rounded-xl text-sm font-bold shadow-xs transition-all active:scale-[0.98] cursor-pointer">
-            <ShoppingCart size={16} />{sellLabel}{canSell && <ArrowRight size={15} />}
-          </button>
-          {canEdit && (
-            <button type="button" onClick={onEdit} title="Edit item details"
-              className="flex items-center gap-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 px-3.5 py-2.5 rounded-xl text-sm font-bold border border-slate-200 dark:border-slate-700 transition-all active:scale-95 cursor-pointer">
-              <Edit size={15} /><span className="hidden sm:inline">Edit</span>
-            </button>
+        <div className="mt-4 flex items-center gap-2">
+          <Button className="flex-1" leftIcon={<ShoppingCart />} rightIcon={canSell ? <ArrowRight /> : undefined} onClick={() => onSellInPos()} disabled={!canSell}>
+            {sellLabel}
+          </Button>
+          {canEdit && <Button variant="secondary" leftIcon={<Pencil />} onClick={onEdit} aria-label="Edit product"><span className="hidden sm:inline">Edit</span></Button>}
+          {(canEdit || canDelete) && !item.isActive && (
+            <Button variant="soft" leftIcon={<RotateCcw />} onClick={onReactivate} aria-label="Reactivate product"><span className="hidden sm:inline">Reactivate</span></Button>
           )}
-          {!item.isActive ? (
-            <button type="button" onClick={onReactivate} title="Reactivate product"
-              className="flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-800 dark:text-amber-300 px-3.5 py-2.5 rounded-xl text-sm font-bold border border-amber-200 dark:border-amber-800/60 transition-all active:scale-95 cursor-pointer">
-              <RotateCcw size={15} /><span className="hidden sm:inline">Reactivate</span>
-            </button>
-          ) : item.isSystem ? (
-            <button type="button" onClick={onDeactivate} title="Deactivate product"
-              className="flex items-center gap-1.5 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 dark:text-slate-300 hover:text-rose-700 dark:hover:text-rose-400 px-3.5 py-2.5 rounded-xl text-sm font-bold border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900 transition-all active:scale-95 cursor-pointer">
-              <Archive size={15} /><span className="hidden sm:inline">Deactivate</span>
-            </button>
-          ) : null}
+          {canDelete && item.isActive && item.isSystem && (
+            <Button variant="secondary" leftIcon={<Archive />} onClick={onDeactivate} aria-label="Deactivate product"><span className="hidden sm:inline">Deactivate</span></Button>
+          )}
           {canDelete && !item.isSystem && (
-            <button aria-label="Delete product" type="button" onClick={onDelete} title="Delete product"
-              className="p-2.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900 rounded-xl transition-all cursor-pointer"><Trash2 size={16} /></button>
+            <IconButton variant="secondary" aria-label="Product delete karein" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={onDelete} />
           )}
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-5 sm:p-6 space-y-4 bg-slate-50/50 dark:bg-slate-950">
-        <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Package size={11} className="text-blue-500" />In stock</span>
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${tone.pill}`}>{tone.text}</span>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
+        <div className="grid grid-cols-2 gap-3">
+          <Metric
+            label="Stock"
+            value={<>{formatQty(picture.totalBase, 3)} <span className="text-xs font-semibold text-fg-subtle">{item.unit}</span></>}
+            sub={<>{packedVariants.length > 0 ? `loose ${formatQty(stock, 3)} · ${packsReady || 'koi pack nahi'} · ` : ''}alert {formatQty(reorder)} par</>}
+          >
+            <div className="mt-2 flex items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
+                <div className={cn('h-full rounded-full', s.bar)} style={{ width: `${stockPct}%` }} />
+              </div>
+              <Badge tone={s.tone}>{s.text}</Badge>
             </div>
-            <div className="mt-1.5 flex items-baseline gap-1">
-              <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{formatQty(picture.totalBase, 3)}</span>
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">{item.unit}</span>
-            </div>
-            <div className="mt-2 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden" aria-hidden="true"><div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${stockPct}%` }} /></div>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1.5 block">
-              {packedVariants.length > 0 ? `loose ${formatQty(stock, 3)} · ${packsReady || 'no packs'} · ` : ''}reorder at {formatQty(reorder)}
-            </span>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Tag size={11} className="text-emerald-500" />Selling price</span>
-            <div className="mt-1.5"><span className="text-xl font-black text-slate-900 dark:text-white font-mono">{priceHeadline.value}</span></div>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">{priceHeadline.sub}</span>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><Briefcase size={11} className="text-slate-400" />Landed cost</span>
-            <div className="mt-1.5"><span className="text-xl font-black text-slate-700 dark:text-slate-300 font-mono">{formatCurrency(cost)}</span></div>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">per {item.unit}</span>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1"><TrendingUp size={11} className="text-emerald-500" />Profit</span>
-            {profitBasis ? (
-              <>
-                <div className="mt-1.5"><span className={`text-xl font-black font-mono ${profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{profit >= 0 ? '+' : ''}{formatCurrency(profit)}</span></div>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">{marginPct.toFixed(1)}% margin · {markupPct.toFixed(0)}% markup <span className="text-slate-500 dark:text-slate-400">/ {profitBasis.per}</span></span>
-              </>
-            ) : (
-              <>
-                <div className="mt-1.5"><span className="text-xl font-black text-slate-300 dark:text-slate-600 font-mono">N/A</span></div>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold mt-1 block">Needs a selling price</span>
-              </>
-            )}
-          </div>
+          </Metric>
+          <Metric label="Selling price" value={priceHeadline.value} sub={priceHeadline.sub} />
+          <Metric label="Landed cost" value={<Money amount={cost} />} sub={`per ${item.unit}`} />
+          <Metric
+            label="Profit"
+            value={profitBasis
+              ? <span className={profit < 0 ? 'text-danger-fg' : 'text-success-fg'}>{profit >= 0 ? '+' : '-'}{formatCurrency(Math.abs(profit))}</span>
+              : <span className="text-fg-faint">—</span>}
+            sub={profitBasis
+              ? <>{marginPct !== null ? `${marginPct.toFixed(1)}% margin` : ''}{markupPct !== null ? ` · ${markupPct.toFixed(0)}% markup` : ''} / {profitBasis.per}</>
+              : 'Selling price chahiye'}
+          />
         </div>
 
-        {/* Where the stock sits, pile by pile */}
-        <Section
-          icon={<Boxes size={13} className="text-indigo-500 dark:text-indigo-400" />}
-          title="Stock by unit"
-          aside={<span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{formatCurrency(picture.costValue)} at cost</span>}
-        >
-          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+        <Section icon={<Boxes />} title="Stock by unit" aside={<span className="text-xs text-fg-subtle"><Money amount={picture.costValue} className="font-semibold text-fg-muted" /> at cost</span>}>
+          <div className="divide-y divide-line/70 overflow-hidden rounded-control border border-line text-sm">
             {picture.piles.map(pile => (
-              <div key={pile.id} className={`p-2.5 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 ${pile.isActive || pile.kind === 'loose' ? '' : 'opacity-60'}`}>
+              <div key={pile.id} className={cn('flex items-center justify-between gap-3 px-3 py-2.5', !(pile.isActive || pile.kind === 'loose') && 'opacity-60')}>
                 <div className="min-w-0">
-                  <span className="font-bold text-slate-800 dark:text-slate-200 block truncate">
+                  <span className="block truncate font-semibold text-fg">
                     {pile.kind === 'loose' ? `Loose (${item.unit})` : `${pile.name} · ${formatQty(pile.contains, 3)} ${item.unit}`}
                   </span>
-                  <span className="text-[10px] text-slate-400">
-                    {pile.kind === 'loose' && (looseAllowed ? 'Base' : 'Base · not sold loose')}
-                    {pile.kind === 'multi' && 'From loose'}
-                    {pile.kind === 'packed' && (pile.isActive ? 'Own stock' : 'Own stock · hidden')}
-                    {pile.kind === 'orphan' && 'Old count'}
+                  <span className="text-[11px] text-fg-subtle">
+                    {pile.kind === 'loose' && (looseAllowed ? 'Base' : 'Base · loose nahi bikta')}
+                    {pile.kind === 'multi' && 'Loose se'}
+                    {pile.kind === 'packed' && (pile.isActive ? 'Apna stock' : 'Apna stock · hidden')}
+                    {pile.kind === 'orphan' && 'Purana count'}
                   </span>
                 </div>
-                <div className="text-right shrink-0">
-                  <span className={`font-mono font-black block ${pile.count < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}`}>
+                <div className="shrink-0 text-right">
+                  <span className={cn('block font-bold tabular-nums', pile.count < 0 ? 'text-danger-fg' : 'text-fg')}>
                     {pile.kind === 'loose' && `${formatQty(pile.count, 3)} ${item.unit}`}
                     {pile.kind === 'multi' && `≈ ${formatQty(pile.count, 2)} ${pile.name}`}
                     {(pile.kind === 'packed' || pile.kind === 'orphan') && `${formatQty(pile.count, 3)} packs`}
                   </span>
-                  {pile.kind === 'packed' && <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">= {formatQty(pile.baseQty, 3)} {item.unit}</span>}
+                  {pile.kind === 'packed' && <span className="text-[11px] text-fg-subtle">= {formatQty(pile.baseQty, 3)} {item.unit}</span>}
                 </div>
               </div>
             ))}
-            <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
+            <div className="flex items-center justify-between bg-surface-2 px-3 py-2.5 text-xs font-bold text-fg-muted">
               <span>Total</span>
-              <span className="font-mono">{formatQty(picture.totalBase, 3)} {item.unit}</span>
+              <span className="tabular-nums">{formatQty(picture.totalBase, 3)} {item.unit}</span>
             </div>
           </div>
           {picture.warnings.length > 0 && (
-            <ul className="mt-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 px-3 py-2 space-y-1" aria-label="Product warnings">
+            <ul className="mt-3 space-y-1 rounded-control bg-warning-soft px-3 py-2.5" aria-label="Product warnings">
               {picture.warnings.map(w => (
-                <li key={w} className="flex items-start gap-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-300">
-                  <AlertTriangle size={12} className="shrink-0 mt-0.5" />{w}
+                <li key={w} className="flex items-start gap-1.5 text-xs font-medium text-warning-fg">
+                  <AlertTriangle className="mt-0.5 size-3 shrink-0" />{w}
                 </li>
               ))}
             </ul>
@@ -275,63 +230,80 @@ export const ItemDetailView: React.FC<Props> = ({
         </Section>
 
         {isSale && (
-          <section className="rounded-2xl border border-lime-200/90 dark:border-lime-500/20 bg-gradient-to-br from-lime-50/80 via-white to-emerald-50/40 dark:from-slate-900 dark:via-slate-900 dark:to-slate-850 p-4 sm:p-5 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <h4 className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-1.5"><Zap size={14} className="text-lime-600 dark:text-lime-400" />Quick sell in POS</h4>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-0.5">Same buttons the cashier sees. Tap one to open POS with it ready.</p>
-              </div>
+          <Section
+            icon={<Zap />}
+            title="Quick sell in POS"
+            aside={
               <div className="flex items-center gap-1.5">
-                <span className="pos-sort-badge text-[10px] px-2.5 py-1" title="Position in the POS product grid">{item.sort_order === 1 ? 'Grid #1' : `Grid #${item.sort_order ?? 999}`}</span>
-                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border ${qtyFirst ? 'bg-lime-100 text-lime-800 border-lime-300 dark:bg-lime-950/50 dark:text-lime-300 dark:border-lime-800/60' : 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800/60'}`} title="Which entry mode the POS dialog opens with">
-                  Opens with {looseAllowed ? (qtyFirst ? 'Quantity' : 'Cash') : 'Packs'}
-                </span>
+                <Badge tone="brand" className="font-mono" title="POS grid mein position">#{item.sort_order ?? 999}</Badge>
+                <Badge tone="neutral" title="POS dialog is mode mein khulta hai">{looseAllowed ? (qtyFirst ? 'Quantity pehle' : 'Cash pehle') : 'Packs'}</Badge>
               </div>
-            </div>
+            }
+          >
+            <p className="-mt-1 mb-3 text-xs text-fg-subtle">Wahi buttons jo cashier dekhta hai. Dabane par POS isi entry ke saath khulta hai.</p>
 
             {looseAllowed && rate > 0 && (
-              <div>
-                <div className="grid grid-cols-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 gap-1 mb-3" role="tablist" aria-label="Quick button type">
-                  {(qtyFirst ? ['qty', 'amount'] as const : ['amount', 'qty'] as const).map(key => (
-                    <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
-                      className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${tab === key ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
-                      {key === 'amount' ? <Banknote size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Scale size={14} className="text-lime-600 dark:text-lime-400" />}
-                      {key === 'amount' ? 'Cash' : 'Quantity'}
-                      {key === 'amount' && <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${preview.usingDefaultCash ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400' : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'}`}>{preview.usingDefaultCash ? 'auto' : 'custom'}</span>}
-                    </button>
-                  ))}
+              <div className="space-y-3">
+                <SegmentedControl
+                  aria-label="Quick button type"
+                  size="sm"
+                  fullWidth
+                  value={tab}
+                  onChange={setTab}
+                  options={(qtyFirst ? ['qty', 'amount'] as const : ['amount', 'qty'] as const).map(key => ({
+                    value: key,
+                    label: key === 'amount' ? `Cash${preview.usingDefaultCash ? ' (auto)' : ''}` : 'Quantity',
+                    icon: key === 'amount' ? <Banknote /> : <Scale />,
+                  }))}
+                />
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4" role="group" aria-label={tab === 'amount' ? 'Quick cash buttons' : 'Quick quantity buttons'}>
+                  {tab === 'amount'
+                    ? preview.cash.map(c => (
+                      <button key={c.amount} type="button" disabled={!canSell} onClick={() => onSellInPos({ mode: 'amount', value: String(c.amount) })}
+                        title={`${item.name}: ${c.label} POS mein`} className={quickButton}>
+                        <span className="text-[13px] font-bold tabular-nums text-fg">{c.label}</span>
+                        <span className="mt-0.5 text-[11px] text-fg-subtle">≈ {c.converted}</span>
+                      </button>
+                    ))
+                    : preview.qty.map(q => (
+                      <button key={q.qty} type="button" disabled={!canSell} onClick={() => onSellInPos({ mode: 'qty', value: String(q.qty) })}
+                        title={`${item.name}: ${q.title} POS mein`} className={quickButton}>
+                        <span className="text-[13px] font-bold tabular-nums text-fg">{q.title}</span>
+                        <span className="mt-0.5 text-[11px] text-fg-subtle">{q.converted}</span>
+                        {q.hint && <span className="text-[10px] font-semibold text-brand-fg">{q.hint}</span>}
+                      </button>
+                    ))}
                 </div>
-                {tab === 'amount' ? cashGroup : qtyGroup}
                 {tab === 'amount' && preview.usingDefaultCash && (
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium mt-2">Auto amounts based on the rate. Use Edit → POS Quick Cash Buttons to set your own.</p>
+                  <p className="text-[11px] text-fg-subtle">Rate ke hisaab se auto raqam. Apni raqam ke liye Edit → POS setup → Quick cash buttons.</p>
                 )}
               </div>
             )}
 
             {looseAllowed && rate <= 0 && (
-              <p className="flex items-center gap-2 text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-lg px-3 py-2">
-                <AlertTriangle size={14} className="shrink-0" />Set a loose selling rate to enable cash and quantity buttons.
+              <p className="flex items-center gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg">
+                <AlertTriangle className="size-3.5 shrink-0" />Cash aur quantity buttons ke liye loose selling rate set karein.
               </p>
             )}
 
             {!looseAllowed && (
-              <p className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-400 bg-white/80 dark:bg-slate-800/80 border border-dashed border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2">
-                <Boxes size={14} className="shrink-0 text-indigo-500 dark:text-indigo-400" />Sold by pack only. Use the pack buttons below.
+              <p className="flex items-center gap-2 rounded-control border border-dashed border-line-strong px-3 py-2 text-xs font-medium text-fg-muted">
+                <Boxes className="size-3.5 shrink-0" />Sirf packs mein bikta hai. Neeche pack buttons use karein.
               </p>
             )}
 
             {activeVariants.length > 0 && (
-              <div className="space-y-2.5">
-                <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1.5"><Boxes size={13} className="text-indigo-600 dark:text-indigo-400" />Sell units</span>
+              <div className="mt-4 space-y-2.5">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"><Boxes className="size-3.5" />Sell units</span>
                 {looseAllowed && (
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 flex items-center justify-between gap-3">
+                  <div className="flex items-center justify-between gap-3 rounded-control border border-line px-3 py-2.5">
                     <div>
-                      <span className="font-bold text-slate-900 dark:text-white text-sm block">1 {item.unit}</span>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400">Loose · main stock</span>
+                      <span className="block text-sm font-semibold text-fg">1 {item.unit}</span>
+                      <span className="text-[11px] text-fg-subtle">Loose · main stock</span>
                     </div>
                     <div className="text-right">
-                      <span className="font-mono font-black text-slate-900 dark:text-white text-sm block">{rate > 0 ? formatCurrency(rate) : 'No price'}</span>
-                      <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{formatQty(stock)} {item.unit} in stock</span>
+                      <span className="block text-sm font-bold tabular-nums text-fg">{rate > 0 ? formatCurrency(rate) : 'No price'}</span>
+                      <span className="text-[11px] text-fg-subtle">{formatQty(stock)} {item.unit} stock</span>
                     </div>
                   </div>
                 )}
@@ -344,43 +316,35 @@ export const ItemDetailView: React.FC<Props> = ({
                   const differs = rate > 0 && Math.abs(each - rate) > 0.009;
                   const vOut = ready <= 0 && !allowNegativeStock;
                   return (
-                    <div key={v.id} className="rounded-xl border border-indigo-100 dark:border-indigo-950/60 bg-white dark:bg-slate-900 p-3">
+                    <div key={v.id} className="rounded-control border border-line p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-slate-900 dark:text-white text-sm truncate">{oneUnitLabel(v.name, contains, item.unit)}</span>
-                            {fromBase ? (
-                              <span className="text-[9px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 px-1.5 py-0.2 rounded font-bold uppercase tracking-wider">
-                                Multi-Unit
-                              </span>
-                            ) : (
-                              <span className="text-[9px] bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 px-1.5 py-0.2 rounded font-bold uppercase tracking-wider">
-                                Packaged Stock
-                              </span>
-                            )}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-sm font-semibold text-fg">{oneUnitLabel(v.name, contains, item.unit)}</span>
+                            {fromBase ? <Badge tone="info">Multi-unit</Badge> : <Badge tone="warning">Packaged stock</Badge>}
                           </div>
-                          <span className="text-xs text-slate-500 dark:text-slate-400 block mt-0.5">
+                          <span className="mt-0.5 block text-xs text-fg-subtle">
                             {formatCurrency(each)}/{item.unit}
                             {differs ? ` · loose ${formatCurrency(rate)}/${item.unit}` : ''}
-                            {fromBase ? ' · shares main stock pool' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · independent shelf stock')}
+                            {fromBase ? ' · main stock se' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · alag shelf stock')}
                           </span>
                         </div>
-                        <div className="text-right shrink-0">
-                          <span className="font-mono font-black text-slate-900 dark:text-white text-sm block">{price > 0 ? formatCurrency(price) : 'No price'}</span>
-                          <span className={`text-[10px] font-bold ${ready <= 0 ? 'text-rose-600 dark:text-rose-400' : ready <= 5 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(ready, 1)} ${v.name} available` : `${formatQty(ready)} ${v.name} in stock`}
+                        <div className="shrink-0 text-right">
+                          <span className="block text-sm font-bold tabular-nums text-fg">{price > 0 ? formatCurrency(price) : 'No price'}</span>
+                          <span className={cn('text-[11px] font-semibold', ready <= 0 ? 'text-danger-fg' : ready <= 5 ? 'text-warning-fg' : 'text-success-fg')}>
+                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(ready, 1)} ${v.name} available` : `${formatQty(ready)} ${v.name} stock`}
                           </span>
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-1.5 mt-2.5">
+                      <div className="mt-2.5 flex flex-wrap gap-1.5">
                         {packCounts.map(n => {
                           const disabled = !canSell || price <= 0 || vOut || (!allowNegativeStock && n > ready + 0.001);
                           return (
                             <button key={n} type="button" disabled={disabled} onClick={() => onSellInPos({ mode: 'qty', value: String(n), variantId: v.id })}
-                              title={`Sell ${n} ${v.name} = ${formatQty(n * contains, 3)} ${item.unit}`}
-                              className="min-w-[3.25rem] px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/40 text-center transition-all enabled:hover:bg-indigo-100 dark:enabled:hover:bg-indigo-900/40 enabled:hover:border-indigo-400 enabled:active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
-                              <span className="text-xs font-black text-indigo-800 dark:text-indigo-300 block">{n} {v.name}</span>
-                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">{formatCurrency(price * n)}</span>
+                              title={`${n} ${v.name} = ${formatQty(n * contains, 3)} ${item.unit}`}
+                              className={cn(quickButton, 'min-w-[3.5rem] px-2.5 py-1.5')}>
+                              <span className="text-xs font-bold text-fg">{n} {v.name}</span>
+                              <span className="text-[11px] tabular-nums text-fg-subtle">{formatCurrency(price * n)}</span>
                             </button>
                           );
                         })}
@@ -390,46 +354,46 @@ export const ItemDetailView: React.FC<Props> = ({
                 })}
               </div>
             )}
-          </section>
+          </Section>
         )}
 
-        <Section icon={<Layers size={13} className="text-slate-500 dark:text-slate-400" />} title="Details">
+        <Section icon={<Briefcase />} title="Details">
           <Row label="Used as">
-            {item.item_type.map(t => (
-              <span key={t} className={`px-2 py-0.5 rounded-lg text-[11px] font-bold border ${t === 'Sale product' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800/60' : t === 'Raw material' ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800/60' : 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-800/60'}`}>{t}</span>
-            ))}
+            {item.item_type.map(t => <Badge key={t} tone={TYPE_TONE[t] || 'neutral'}>{t}</Badge>)}
           </Row>
           <Row label="Sourcing">
-            {item.source === 'Supplier' && <Truck size={14} className="text-blue-500" />}
-            {item.source === 'Production' && <Factory size={14} className="text-amber-500" />}
-            {(!item.source || item.source === 'Both') && <Briefcase size={14} className="text-emerald-500" />}
-            <span>{item.source === 'Supplier' ? 'Vendor / purchase' : item.source === 'Production' ? 'In-house production' : 'Purchase or production'}</span>
+            <span className="inline-flex items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:text-fg-subtle">
+              {item.source === 'Supplier' ? <Truck /> : item.source === 'Production' ? <Factory /> : <Briefcase />}
+              {item.source === 'Supplier' ? 'Vendor se purchase' : item.source === 'Production' ? 'In-house production' : 'Purchase ya production'}
+            </span>
           </Row>
           <Row label="Sale policy">
-            {looseAllowed
-              ? <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><Check size={13} />Loose and packs</span>
-              : <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"><ShieldAlert size={13} />Packs only</span>}
+            {looseAllowed ? <Badge tone="success">Loose aur packs</Badge> : <Badge tone="warning">Sirf packs</Badge>}
           </Row>
-          <Row label="Reorder level">{formatQty(reorder)} {item.unit}</Row>
+          <Row label="Low stock alert">{formatQty(reorder)} {item.unit}</Row>
         </Section>
 
         {item.recipe && item.recipe.length > 0 && (
           <Section
-            icon={<ChefHat size={14} className="text-amber-600 dark:text-amber-400" />}
-            title="Recipe & bill of materials"
-            aside={item.recipe_base_quantity ? <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">{formatQty(item.recipe_base_quantity)} {item.recipe_base_item_id && item.recipe_base_item_id !== 'MILK_BASE' ? (materialName?.(item.recipe_base_item_id) || 'base') : 'L milk'} → {formatQty(item.recipe_expected_output || 0)} {item.unit}</span> : undefined}
+            icon={<ChefHat />}
+            title="Recipe"
+            aside={item.recipe_base_quantity ? (
+              <span className="text-[11px] font-semibold text-fg-subtle">
+                {formatQty(item.recipe_base_quantity)} {item.recipe_base_item_id && item.recipe_base_item_id !== 'MILK_BASE' ? (materialName?.(item.recipe_base_item_id) || 'base') : 'L milk'} → {formatQty(item.recipe_expected_output || 0)} {item.unit}
+              </span>
+            ) : undefined}
           >
-            <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+            <ol className="divide-y divide-line/70 overflow-hidden rounded-control border border-line text-sm">
               {item.recipe.map((ing, idx) => (
-                <div key={idx} className="p-2.5 bg-white dark:bg-slate-900 flex items-center justify-between">
-                  <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                    <span className="w-5 h-5 rounded bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 text-[10px] font-bold flex items-center justify-center">{idx + 1}</span>
-                    {materialName?.(ing.item_id) || ing.item_name}
+                <li key={`${ing.item_id}-${idx}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <span className="flex min-w-0 items-center gap-2 font-semibold text-fg">
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded bg-surface-2 text-[10px] font-bold text-fg-muted">{idx + 1}</span>
+                    <span className="truncate">{materialName?.(ing.item_id) || ing.item_name}</span>
                   </span>
-                  <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{formatQty(ing.quantity)} {ing.unit}</span>
-                </div>
+                  <span className="shrink-0 font-semibold tabular-nums text-fg-muted">{formatQty(ing.quantity)} {ing.unit}</span>
+                </li>
               ))}
-            </div>
+            </ol>
           </Section>
         )}
       </div>
