@@ -140,6 +140,19 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
   }, [catalog, stockByItem, customers, draft.customer_id]);
 
   const amounts = orderAmounts(draft.items || [], Number(draft.discount) || 0, Number(draft.advance_paid) || 0);
+  // orderAmounts quietly caps the advance at the order total. Money must never change silently, so an
+  // advance above the total, or below what is already posted to the customer khata, is shown and blocks saving.
+  const typedAdvance = roundCurrency(Number(draft.advance_paid) || 0);
+  const postedAdvance = existing ? roundCurrency(Number(existing.advance_posted || 0)) : 0;
+  const advanceProblem = typedAdvance < 0
+    ? 'Advance manfi (negative) nahi ho sakta.'
+    : postedAdvance > 0 && amounts.total < postedAdvance
+      ? `Order total ${formatCurrency(amounts.total)} ho gaya hai, lekin ${formatCurrency(postedAdvance)} advance pehle hi customer ke khaate mein post ho chuka hai. Total itna kam nahi ho sakta: products ya discount theek karein. Zyada advance wapas karne ka tareeqa app mein abhi nahi hai.`
+      : postedAdvance > 0 && typedAdvance < postedAdvance
+        ? `${formatCurrency(postedAdvance)} advance pehle hi customer ke khaate mein post ho chuka hai. Advance us se kam nahi ho sakta.`
+        : typedAdvance > amounts.total
+          ? `Advance ${formatCurrency(typedAdvance)} order total ${formatCurrency(amounts.total)} se zyada hai. Advance kam karein ya products barhayein; zyada raqam khud se kam nahi ki jayegi.`
+          : '';
 
   const changeCustomer = (id: string) => {
     const customer = customers.find(row => row.id === id);
@@ -199,6 +212,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
       const lines = (draft.items || []).map(line => ({ ...line, qty: roundQuantity(line.qty), price: roundCurrency(line.price) }));
       if (!lines.length) throw new Error('Add at least one product to the order.');
       if (lines.some(line => !catalog.some(row => row.item.id === line.itemId && row.variant?.id === line.variantId))) throw new Error('An ordered product is inactive or unavailable. Replace it before saving.');
+      if (advanceProblem) throw new Error(advanceProblem);
       const calculated = orderAmounts(lines, Number(draft.discount) || 0, Number(draft.advance_paid) || 0);
       const payload = {
         customer_id: customer.id,
@@ -423,14 +437,17 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
           </Card>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Advanced Payment">
+            <Field
+              label="Advanced Payment"
+              error={advanceProblem || undefined}
+              hint={!advanceProblem && postedAdvance > 0 ? `${formatCurrency(postedAdvance)} khaate mein post ho chuka hai.` : undefined}
+            >
               {control => (
                 <Input
                   {...control}
                   type="number"
                   inputMode="decimal"
                   min="0"
-                  max={amounts.total || undefined}
                   step="0.01"
                   placeholder="0.00"
                   suffix="Rs"
@@ -488,10 +505,12 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
                 <span className="text-xs font-bold uppercase tracking-wider text-fg">Order Total</span>
                 <Money amount={amounts.total} className="text-lg font-bold text-fg" />
               </div>
-              {amounts.advance_paid > 0 && (
-                <div className="flex items-center justify-between border-t border-line pt-2 text-xs font-semibold text-success-fg">
-                  <span className="flex items-center gap-1.5"><Banknote size={14} aria-hidden="true" /> Advanced Payment</span>
-                  <Money amount={-amounts.advance_paid} className="text-sm font-bold" />
+              {typedAdvance > 0 && (
+                <div className={cn('flex items-center justify-between border-t border-line pt-2 text-xs font-semibold', advanceProblem ? 'text-danger-fg' : 'text-success-fg')}>
+                  <span className="flex items-center gap-1.5">
+                    {advanceProblem ? <AlertCircle size={14} aria-hidden="true" /> : <Banknote size={14} aria-hidden="true" />} Advanced Payment
+                  </span>
+                  <Money amount={-typedAdvance} className="text-sm font-bold" />
                 </div>
               )}
               <div className="flex items-center justify-between border-t border-line-strong pt-2.5">
