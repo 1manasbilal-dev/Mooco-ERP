@@ -6017,7 +6017,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast('No active shift found.', 'warning');
       return false;
     }
-    const canReceiveAsHead = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canReceiveAsHead = canApproveCashControl();
     const receiveIntoAccountId = canReceiveAsHead && data.receiveIntoAccountId && data.receiveIntoAccountId !== resolveDrawerAccountId(activeShiftSession.drawer_id)
       ? data.receiveIntoAccountId
       : undefined;
@@ -6226,7 +6226,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const resolveCashVariance = async (varianceId: string, status: 'Approved' | 'Adjusted' | 'Rejected', notes: string): Promise<boolean> => {
-    const canApproveCash = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canApproveCash = canApproveCashControl();
     if (!currentUser || !canApproveCash) {
       showToast('Only a manager/owner can resolve a cash difference.', 'error');
       return false;
@@ -6256,7 +6256,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Pending handover from the head — the next shift auto-accepts it at start
   // (counted = declared, no variance, no separate verification step needed).
   const addDrawerOpeningCash = async (drawerId: string, amount: number, note?: string, sourceAccountId?: string | null): Promise<boolean> => {
-    const canApprove = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canApprove = canApproveCashControl();
     if (!currentUser || !canApprove) {
       showToast('Only a manager/owner can add opening cash to a drawer.', 'error');
       return false;
@@ -6392,7 +6392,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     action: 'Accept' | 'Resolve' | 'Cancel',
     notes: string = ''
   ): Promise<boolean> => {
-    const canApprove = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canApprove = canApproveCashControl();
     if (!currentUser || !canApprove) {
       showToast('Only a manager/owner can acknowledge/resolve handovers.', 'error');
       return false;
@@ -6420,7 +6420,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const upsertCashDrawer = async (drawer: { id?: string; name: string; code: string; location?: string; account_id?: string | null; default_float: number; is_active: boolean }): Promise<boolean> => {
-    const canManage = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canManage = canApproveCashControl();
     if (!currentUser || !canManage) {
       showToast('Only a manager/owner can manage drawer setup.', 'error');
       return false;
@@ -6458,7 +6458,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     businessDayId: string,
     counts: { itemId: string; variantId?: string; counted: number }[]
   ): Promise<{ adjusted: number; skipped: number; no_change: number } | null> => {
-    const canCloseDay = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canCloseDay = canApproveCashControl();
     if (!currentUser || !canCloseDay) {
       showToast('Only a manager/owner can apply the day-close stock count.', 'error');
       return null;
@@ -6497,7 +6497,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // day_closings and marks business_days.cash_closed_at. This is a record
   // only: sales stay open until Lock Day sets business_days.status = Closed.
   const closeDayCash = async (businessDayId: string, cashClose: Record<string, unknown>, notes: string = ''): Promise<boolean> => {
-    const canCloseDay = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canCloseDay = canApproveCashControl();
     if (!currentUser || !canCloseDay) {
       showToast('Only a manager/owner can close the cash.', 'error');
       return false;
@@ -6550,7 +6550,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const closeBusinessDay = async (businessDayId: string, notes: string = '', cashClose?: Record<string, unknown>): Promise<boolean> => {
-    const canCloseDay = currentUser?.role_id === 'role_super_admin' || currentUser?.role_id === 'role_manager' || currentRole?.permissions?.includes('cash_control:approve' as any) || (currentUser?.permissions || []).includes('cash_control:approve');
+    const canCloseDay = canApproveCashControl();
     if (!currentUser || !canCloseDay) {
       showToast('Only a manager/owner can close the day.', 'error');
       return false;
@@ -6632,7 +6632,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const reopenBusinessDay = async (businessDayId: string, reason: string): Promise<boolean> => {
-    if (!currentUser || currentUser.role_id !== 'role_super_admin') {
+    // The same right the Reopen button checks (the Owner, or a cash_control:reopen grant); owner-only
+    // here refused a reopen the screen offered.
+    if (!currentUser || !canPerform('cash_control', 'reopen')) {
       showToast('Only the Owner / Super Admin can reopen a business day.', 'error');
       return false;
     }
@@ -6847,6 +6849,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return businessDayOf(dateStr) <= lockDate;
   }, [lockDate]);
 
+  // Head / approver rights in Cash Control (receive remittances, resolve differences and handovers,
+  // drawers, day closing): the Owner, the Manager role, or whoever canPerform lets approve, i.e. an
+  // explicit cash_control:approve or the full module outside the cashier profile (see canPerform).
+  const canApproveCashControl = () => currentUser?.role_id === 'role_manager' || canPerform('cash_control', 'approve');
+
+  // The same rights the screens check, enforced here as well: a hidden button is not a permission,
+  // and any caller (another screen, a shortcut, the console) reaches these actions.
+  const requireRight = (moduleKey: string, action: string, what: string): boolean => {
+    if (canPerform(moduleKey, action)) return true;
+    showToast(`Aap ko ${what} ki ijazat nahi hai.`, 'error');
+    return false;
+  };
+
   // Shared guard for anything that writes a dated entry: refuses dates inside the closed books.
   const guardOpenPeriod = (dateStr?: string): boolean => {
     if (!dateStr || !isPeriodLocked(dateStr)) return true;
@@ -6946,6 +6961,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateCustomer = async (id: string, u: Partial<Customer>) => {
+    if (!requireRight('customers', 'edit', 'customer ki tafseel badalne')) return false;
+    return updateCustomerRecord(id, u);
+  };
+
+  // Internal: archive / reactivate check their own (delete / edit) right before calling this.
+  const updateCustomerRecord = async (id: string, u: Partial<Customer>) => {
     try {
       // The khata balance moves only through ledger entries (sale, payment, charge, return). A profile
       // edit that sets it would change the balance with no customer_transactions row behind it.
@@ -7160,6 +7181,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   
   const addExpense = async (e: Omit<ExpenseEntry, 'id'>) => {
+    if (!requireRight('expenses', 'create', 'kharcha darj karne')) return false;
     try {
       const id = `exp_${generateUUID()}`;
       const { date, category, amount, paidAmount, paymentStatus, description, account_id, account_name, vendor_id, vendor_name, ...extraDetails } = e as any;
@@ -7277,7 +7299,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const deleteExpense = async (id: string) => { 
+  const deleteExpense = async (id: string) => {
+    if (!requireRight('expenses', 'delete', 'kharcha delete karne')) return false;
     try {
       const exp = expenses.find(e => e.id === id);
       if (exp) {
@@ -7371,6 +7394,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // One edit per expense at a time (also across tabs): two saves moved the money twice.
   const updateExpense = async (id: string, updates: Partial<ExpenseEntry>): Promise<boolean> => {
+    if (!requireRight('expenses', 'edit', 'kharcha badalne')) return false;
     const result = await actionLock.runExclusiveAcrossTabs(`update_expense_${id}`, () => updateExpenseUnlocked(id, updates));
     if (result === null) {
       showToast('Is kharche ki pichli tabdeeli abhi save ho rahi hai.', 'warning');
@@ -7531,6 +7555,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deleteRecurringExpense = async (id: string) => { await supabase.from('recurring_expenses').delete().eq('id', id); fetchData(['recurringExpenses']); return true; };
   
   const addExpenseVendor = async (v: Omit<ExpenseVendor, 'id' | 'total_paid'> & { id?: string }): Promise<string | false> => {
+    if (!requireRight('expenses', 'create', 'vendor banane')) return false;
     try {
       const id = (v as any).id || `ev_${generateUUID()}`;
       const { name, service_type, phone, contact_person, address, notes, isActive, opening_balance, bank_name, account_number, iban, ...extraDetails } = v as any;
@@ -7589,6 +7614,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateExpenseVendor = async (id: string, updates: Partial<ExpenseVendor>) => {
+    if (!requireRight('expenses', 'edit', 'vendor badalne')) return false;
     try {
       const existing = expenseVendors.find(v => v.id === id);
       if (!existing) return false;
@@ -7643,11 +7669,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteExpenseVendor = async (id: string) => {
+    if (!requireRight('expenses', 'delete', 'vendor delete karne')) return false;
     try {
       const vendor = expenseVendors.find(v => v.id === id);
-      setExpenseVendors(prev => prev.filter(v => v.id !== id));
+      // A vendor with bills, payments or a balance keeps its history: archive it instead.
+      const assessment = getDeleteAssessment('vendor', id);
+      if (!assessment.canHardDelete) {
+        showToast(`Vendor delete nahi ho sakta: ${assessment.blockingReasons[0] || 'history maujood hai'} Inactive kar dein.`, 'warning');
+        return false;
+      }
       const { error } = await supabase.from('expense_vendors').delete().eq('id', id);
       if (error) throw error;
+      setExpenseVendors(prev => prev.filter(v => v.id !== id));
 
       showToast(`Vendor "${vendor?.name || ''}" deleted successfully`, "info");
       fetchData(['expenseVendors']);
@@ -7669,6 +7702,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     referenceNo?: string,
     transactionType: 'payment' | 'refund' = 'payment'
   ): Promise<boolean> => {
+    if (!requireRight('expenses', 'create', 'vendor payment darj karne')) return false;
     try {
       if (!guardOpenPeriod(date)) return false;
       if (date && isDayLocked(date)) {
@@ -7833,6 +7867,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteExpenseVendorTransaction = async (id: string): Promise<boolean> => {
+    if (!requireRight('expenses', 'delete', 'vendor entry delete karne')) return false;
     try {
       const tx = expenseVendorTransactions.find(t => t.id === id);
       if (tx && !guardOpenPeriod(tx.date)) return false;
@@ -8405,6 +8440,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     id: string,
     action: 'hard_delete' | 'deactivate' | 'write_off_bad_debt'
   ): Promise<boolean> => {
+    if (!requireRight('customers', 'delete', 'customer archive / delete karne')) return false;
     try {
       const cust = customers.find(c => c.id === id);
       if (!cust) return false;
@@ -8490,14 +8526,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return true;
         });        if (writeOffResult === null) return false;
 
-        await updateCustomer(id, { isActive: false });
+        await updateCustomerRecord(id, { isActive: false });
         showToast(`Customer "${cust.name}" balance written off and marked Inactive!`, 'success');
         fetchData(['customers', 'customerTransactions', 'expenses']);
         return true;
       }
 
       if (action === 'deactivate') {
-        await updateCustomer(id, { isActive: false });
+        await updateCustomerRecord(id, { isActive: false });
         showToast(`Customer "${cust.name}" marked Inactive (Archived). Ledger and balance sheet preserved.`, 'info');
         fetchData(['customers']);
         return true;
@@ -8744,9 +8780,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     entityType: 'customer' | 'supplier' | 'item' | 'account' | 'vendor',
     id: string
   ): Promise<boolean> => {
+    const right: Record<typeof entityType, [string, string]> = {
+      customer: ['customers', 'edit'], supplier: ['suppliers', 'edit'], item: ['items', 'edit'],
+      account: ['bank_cash', 'create'], vendor: ['expenses', 'edit']
+    };
+    if (!requireRight(right[entityType][0], right[entityType][1], 'dobara active karne')) return false;
     try {
       if (entityType === 'customer') {
-        await updateCustomer(id, { isActive: true });
+        await updateCustomerRecord(id, { isActive: true });
         showToast("Customer reactivated successfully!", 'success');
       } else if (entityType === 'supplier') {
         await updateSupplier(id, { isActive: true });
@@ -9196,25 +9237,24 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const canPerform = useCallback((moduleKey: string, action: string = 'view'): boolean => {
     if (!currentUser) return false;
     if (currentUser.role_id === 'role_super_admin') return true;
-    // Per-user extra accesses take priority, then the role's permissions.
+    // Per-user extra accesses and the role's permissions both count.
     const userPerms = (currentUser.permissions || []) as string[];
-    if (userPerms.includes(moduleKey)) return true;
-    if (userPerms.includes(`${moduleKey}:${action}`)) return true;
-    if (action === 'view' && userPerms.some(p => typeof p === 'string' && p.startsWith(`${moduleKey}:`))) return true;
-    if (moduleKey === 'cash_control' && userPerms.includes('retail_stock')) return action === 'view';
-    if (!currentRole) return false;
-    const perms = currentRole.permissions || [];
-    if (moduleKey === 'cash_control' && perms.includes('retail_stock')) return action === 'view';
-    // A full module permission grants all actions.
-    if (perms.includes(moduleKey as any)) return true;
-    // Exact action match, e.g. 'customers:edit'.
+    const rolePerms = (currentRole?.permissions || []) as string[];
     const actionKey = `${moduleKey}:${action}`;
-    if (perms.includes(actionKey as any)) return true;
-    // View is permitted if the user has any action in that module.
-    if (action === 'view' && perms.some(p => typeof p === 'string' && p.startsWith(`${moduleKey}:`))) {
-      return true;
-    }
-    return false;
+    // An exact action grant (e.g. 'cash_control:approve') always counts. It used to be refused for a
+    // role that also carried the legacy 'retail_stock' (checked first), which took rights away.
+    if (userPerms.includes(actionKey) || rolePerms.includes(actionKey)) return true;
+    // A module granted to the user personally grants all its actions (as before).
+    if (userPerms.includes(moduleKey)) return true;
+    // View is permitted with any action in the module.
+    const anyAction = (list: string[]) => list.some(p => typeof p === 'string' && p.startsWith(`${moduleKey}:`));
+    if (action === 'view' && (anyAction(userPerms) || anyAction(rolePerms))) return true;
+    // The counter (cashier) profile: 'retail_stock' with Cash Control runs shifts and sees Cash Control,
+    // but approving, reopening and drawer setup need an explicit grant above. Production cashier roles
+    // carry both 'cash_control' and 'retail_stock', so the role's full module must not hand them those.
+    if (moduleKey === 'cash_control' && (userPerms.includes('retail_stock') || rolePerms.includes('retail_stock'))) return action === 'view';
+    // A full module permission on the role grants all actions.
+    return rolePerms.includes(moduleKey);
   }, [currentUser, currentRole]);
 
   // A user row as returned by the secure auth RPCs (no PIN / hash fields).
