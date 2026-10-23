@@ -1,11 +1,14 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useDairy } from '../../context/DairyContext';
-import { 
+import {
   baseUnitWarning,
-  getAllAvailableUnits, 
-  detectUnitGroupId 
+  getAllAvailableUnits,
+  detectUnitGroupId
 } from '../../lib/unitConversion';
-import { Check, Plus, ChevronDown, Search, Scale, Droplets, Package, Sparkles } from 'lucide-react';
+import { Check, ChevronDown, Droplets, Package, Plus, Scale, Search, Sparkles } from 'lucide-react';
+import type { UnitDefinition } from '../../types';
+import { Button, Input } from '../ui';
+import { cn } from '../../lib/cn';
 
 interface UnitSelectorProps {
   value: string;
@@ -14,466 +17,264 @@ interface UnitSelectorProps {
   labelClass?: string;
 }
 
+type GroupKey = 'mass' | 'volume' | 'count' | 'custom';
+
+const GROUPS: { key: GroupKey; label: string; icon: React.ReactNode; match: (u: UnitDefinition) => boolean }[] = [
+  { key: 'mass', label: 'Weight', icon: <Scale />, match: u => u.type === 'Mass' },
+  { key: 'volume', label: 'Liquid / volume', icon: <Droplets />, match: u => u.type === 'Volume' },
+  { key: 'count', label: 'Count / packaging', icon: <Package />, match: u => u.type === 'Count' },
+  { key: 'custom', label: 'Apne units', icon: <Sparkles />, match: u => !u.isSystem },
+];
+
+const EMPTY_UNITS: UnitDefinition[] = [];
+
+/** Base unit picker: grouped standard units with search, or a typed custom unit. */
 export const UnitSelector: React.FC<UnitSelectorProps> = ({
   value,
   onChange,
   disabled = false,
-  labelClass = 'text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1'
+  labelClass = 'mb-1.5 block text-xs font-semibold text-fg-muted'
 }) => {
   const { settings } = useDairy();
-  const customUnits = settings?.inventory?.customUnits || [];
-
+  const customUnits = settings?.inventory?.customUnits || EMPTY_UNITS;
   const allUnits = useMemo(() => getAllAvailableUnits(customUnits), [customUnits]);
 
-  const volumeUnits = useMemo(() => allUnits.filter(u => u.type === 'Volume'), [allUnits]);
-  const massUnits = useMemo(() => allUnits.filter(u => u.type === 'Mass'), [allUnits]);
-  const countUnits = useMemo(() => allUnits.filter(u => u.type === 'Count'), [allUnits]);
-  const userCustomUnits = useMemo(() => allUnits.filter(u => !u.isSystem), [allUnits]);
-
-  const isExistingUnit = useMemo(() => {
-    if (!value) return false;
-    const clean = value.toLowerCase().trim();
-    return allUnits.some(u => u.symbol.toLowerCase() === clean);
-  }, [value, allUnits]);
-
-  const selectedUnitDef = useMemo(() => {
-    if (!value) return null;
-    const clean = value.toLowerCase().trim();
-    return allUnits.find(u => u.symbol.toLowerCase() === clean);
-  }, [value, allUnits]);
+  const clean = (value || '').toLowerCase().trim();
+  const selectedUnitDef = useMemo(() => (clean ? allUnits.find(u => u.symbol.toLowerCase() === clean) : undefined), [clean, allUnits]);
 
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isCustomMode, setIsCustomMode] = useState<boolean>(Boolean(value && !isExistingUnit));
+  const [isCustomMode, setIsCustomMode] = useState<boolean>(Boolean(value && !selectedUnitDef));
   const [customInputValue, setCustomInputValue] = useState<string>(value || '');
-
-  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({
-    mass: false,
-    volume: false,
-    count: false,
-    custom: false
-  });
-
-  const toggleCategory = (catKey: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCollapsedCategories(prev => ({ ...prev, [catKey]: !prev[catKey] }));
-  };
-
+  // What to go back to when a custom unit is cancelled.
+  const beforeCustomRef = useRef<string>(value || '');
   const containerRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
+    if (!isOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setIsOpen(false);
     };
-    if (isOpen) {
-      document.addEventListener('mousedown', handleOutsideClick);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
   }, [isOpen]);
 
   useEffect(() => {
-    if (value) {
-      const match = allUnits.some(u => u.symbol.toLowerCase() === value.toLowerCase().trim());
-      if (!match) {
-        setIsCustomMode(true);
-        setCustomInputValue(value);
-      }
+    if (value && !allUnits.some(u => u.symbol.toLowerCase() === value.toLowerCase().trim())) {
+      setIsCustomMode(true);
+      // Keep what is being typed (a trailing space before the next word), unless the value really changed.
+      setCustomInputValue(prev => (prev.trim() === value.trim() ? prev : value));
     }
   }, [value, allUnits]);
+
+  const emit = (symbol: string) => onChange(symbol, symbol ? detectUnitGroupId(symbol, customUnits) : '');
 
   const handleSelectUnit = (symbol: string) => {
     if (disabled) return;
     setIsCustomMode(false);
     setIsOpen(false);
     setSearchTerm('');
-    const detectedGroup = detectUnitGroupId(symbol, customUnits);
-    onChange(symbol, detectedGroup);
+    emit(symbol);
+  };
+
+  const startCustom = () => {
+    if (disabled) return;
+    beforeCustomRef.current = value || '';
+    setIsOpen(false);
+    setIsCustomMode(true);
+    setCustomInputValue('');
+  };
+
+  const leaveCustom = (restore: boolean) => {
+    setIsCustomMode(false);
+    if (restore) {
+      const previous = beforeCustomRef.current;
+      const previousIsStandard = allUnits.some(u => u.symbol.toLowerCase() === previous.toLowerCase().trim());
+      emit(previousIsStandard ? previous : '');
+    }
   };
 
   const handleCustomInputChange = (typed: string) => {
     if (disabled) return;
     setCustomInputValue(typed);
-    const clean = typed.trim();
-    if (clean) {
-      const detectedGroup = detectUnitGroupId(clean, customUnits);
-      onChange(clean, detectedGroup);
-    }
+    // An emptied box clears the unit, so a stale first letter is never saved.
+    emit(typed.trim());
   };
 
-  const filterList = (list: typeof allUnits) => {
-    if (!searchTerm.trim()) return list;
-    const q = searchTerm.toLowerCase().trim();
-    return list.filter(u => 
-      u.name.toLowerCase().includes(q) || 
-      u.symbol.toLowerCase().includes(q) ||
-      (u.description && u.description.toLowerCase().includes(q))
-    );
-  };
+  const q = searchTerm.toLowerCase().trim();
+  const groups = useMemo(() => GROUPS.map(group => ({
+    ...group,
+    units: allUnits.filter(group.match).filter(u => !q
+      || u.name.toLowerCase().includes(q)
+      || u.symbol.toLowerCase().includes(q)
+      || (u.description || '').toLowerCase().includes(q)),
+  })).filter(group => group.units.length > 0), [allUnits, q]);
 
-  const filteredMass = filterList(massUnits);
-  const filteredVolume = filterList(volumeUnits);
-  const filteredCount = filterList(countUnits);
-  const filteredCustom = filterList(userCustomUnits);
+  const warning = value ? baseUnitWarning(value, customUnits) : '';
 
   return (
     <div className="space-y-1.5" ref={containerRef}>
       <div className="flex items-center justify-between">
         <label className={labelClass}>
-          Base Measurement Unit *
+          Base unit<span className="ml-0.5 text-danger" aria-hidden="true">*</span>
         </label>
-        {isCustomMode && (
-          <button
-            type="button"
-            onClick={() => {
-              setIsCustomMode(false);
-              handleSelectUnit('pcs');
-            }}
-            className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-          >
-            ← Standard Units
+        {isCustomMode && !disabled && (
+          <button type="button" onClick={() => leaveCustom(true)} className="cursor-pointer text-xs font-semibold text-brand-fg hover:underline">
+            Standard units
           </button>
         )}
       </div>
 
       {!isCustomMode ? (
-        <div className="relative">
+        <div
+          className="relative"
+          onKeyDown={event => {
+            // Esc closes the list only; it must not close the form behind it.
+            if (event.key === 'Escape' && isOpen) {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsOpen(false);
+            }
+          }}
+        >
           <div className="flex items-center gap-2">
             <button
               type="button"
               disabled={disabled}
+              aria-haspopup="listbox"
+              aria-expanded={isOpen}
+              aria-controls={isOpen ? listId : undefined}
               onClick={() => setIsOpen(!isOpen)}
-              className={`flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold transition-all cursor-pointer text-left shadow-2xs ${
-                isOpen
-                  ? 'border-lime-500 ring-2 ring-lime-500/20 bg-white dark:bg-slate-800 text-slate-900 dark:text-white'
-                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 text-slate-800 dark:text-white'
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={cn(
+                'ds-control flex h-10 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-control border bg-surface px-3 text-left text-sm shadow-e1 transition-[border-color,box-shadow] duration-150',
+                'hover:border-line-strong focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring/20 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle',
+                isOpen ? 'border-brand-accent ring-4 ring-ring/20' : 'border-line',
+              )}
             >
-              <div className="flex items-center gap-2 min-w-0">
+              <span className="flex min-w-0 items-center gap-2">
                 {selectedUnitDef ? (
                   <>
-                    <span className="px-2 py-0.5 rounded-md bg-lime-100 dark:bg-lime-950/70 text-lime-800 dark:text-lime-300 font-mono font-bold text-xs shrink-0">
-                      {selectedUnitDef.symbol}
-                    </span>
-                    <span className="font-bold truncate text-slate-800 dark:text-slate-100">
-                      {selectedUnitDef.name}
-                    </span>
+                    <span className="shrink-0 rounded-md bg-brand-soft px-1.5 py-0.5 font-mono text-xs font-bold text-brand-fg">{selectedUnitDef.symbol}</span>
+                    <span className="truncate font-semibold text-fg">{selectedUnitDef.name}</span>
                   </>
                 ) : value ? (
                   <>
-                    <span className="px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 font-mono font-bold text-xs shrink-0">
-                      {value}
-                    </span>
-                    <span className="font-bold truncate text-slate-800 dark:text-slate-100">
-                      Custom: {value}
-                    </span>
+                    <span className="shrink-0 rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-xs font-bold text-fg">{value}</span>
+                    <span className="truncate font-semibold text-fg">Custom: {value}</span>
                   </>
                 ) : (
-                  <span className="text-slate-400 dark:text-slate-500">
-                    Choose measurement unit (Weight, Liquid, Count)...
-                  </span>
+                  <span className="truncate text-fg-faint">Unit chunein (kg, L, pcs...)</span>
                 )}
-              </div>
-              <ChevronDown 
-                size={16} 
-                className={`text-slate-400 transition-transform duration-200 shrink-0 ml-2 ${
-                  isOpen ? 'rotate-180 text-lime-600 dark:text-lime-400' : ''
-                }`} 
-              />
+              </span>
+              <ChevronDown className={cn('size-4 shrink-0 text-fg-faint transition-transform duration-150', isOpen && 'rotate-180')} />
             </button>
-
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => {
-                setIsOpen(false);
-                setIsCustomMode(true);
-                setCustomInputValue('');
-              }}
-              className="px-3.5 py-2.5 rounded-xl border border-dashed border-indigo-300 dark:border-indigo-700 hover:border-indigo-500 bg-indigo-50/70 hover:bg-indigo-100/80 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0 active:scale-95 shadow-2xs"
-              title="Create custom unit"
-            >
-              <Plus size={14} className="stroke-[2.5]" />
-              <span>+ Custom</span>
-            </button>
+            <Button variant="secondary" leftIcon={<Plus />} disabled={disabled} onClick={startCustom} title="Apna unit likhein">
+              Custom
+            </Button>
           </div>
 
           {isOpen && (
-            <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
-              <div className="p-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850">
+            <div className="absolute inset-x-0 top-full z-50 mt-2 overflow-hidden rounded-card border border-line bg-surface shadow-e3 animate-in fade-in slide-in-from-top-1 duration-150">
+              <div className="border-b border-line bg-surface-2/60 p-2">
                 <div className="relative">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-fg-faint" />
                   <input
                     type="text"
                     value={searchTerm}
                     onChange={e => setSearchTerm(e.target.value)}
-                    placeholder="Search unit (e.g. kg, liter, dozen)..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-white outline-none focus:border-lime-500"
+                    placeholder="Unit dhoondein (kg, liter, dozen)..."
+                    aria-label="Unit dhoondein"
+                    className="ds-control h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-brand-accent"
                     autoFocus
                   />
                 </div>
               </div>
 
-              <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 p-1.5">
-                {filteredMass.length > 0 && (
-                  <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={(e) => toggleCategory('mass', e)}
-                      className="w-full px-2.5 py-1.5 flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <Scale size={13} className="text-amber-600 dark:text-amber-400" />
-                        Weight & Mass ({filteredMass.length})
-                      </span>
-                      <ChevronDown 
-                        size={13} 
-                        className={`transition-transform ${collapsedCategories.mass && !searchTerm ? '-rotate-90' : ''}`} 
-                      />
-                    </button>
-
-                    {(!collapsedCategories.mass || searchTerm) && (
-                      <div className="mt-1 space-y-0.5">
-                        {filteredMass.map(u => {
-                          const isSelected = (value || '').toLowerCase().trim() === u.symbol.toLowerCase();
-                          return (
-                            <button
-                              key={u.id}
-                              type="button"
-                              onClick={() => handleSelectUnit(u.symbol)}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-lime-50 dark:bg-lime-950/60 text-lime-900 dark:text-lime-200 font-bold border border-lime-200 dark:border-lime-800/60'
-                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">
-                                  {u.symbol}
-                                </span>
-                                <span>{u.name}</span>
-                              </div>
-                              {isSelected && <Check size={14} className="text-lime-600 dark:text-lime-400 stroke-[3]" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+              <div id={listId} role="listbox" aria-label="Units" className="max-h-72 overflow-y-auto p-1.5">
+                {groups.length === 0 && (
+                  <p className="px-3 py-6 text-center text-xs text-fg-subtle">Koi unit nahi mila. "Custom" se apna unit likhein.</p>
                 )}
-
-                {filteredVolume.length > 0 && (
-                  <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={(e) => toggleCategory('volume', e)}
-                      className="w-full px-2.5 py-1.5 flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <Droplets size={13} className="text-blue-600 dark:text-blue-400" />
-                        Liquids & Volume ({filteredVolume.length})
-                      </span>
-                      <ChevronDown 
-                        size={13} 
-                        className={`transition-transform ${collapsedCategories.volume && !searchTerm ? '-rotate-90' : ''}`} 
-                      />
-                    </button>
-
-                    {(!collapsedCategories.volume || searchTerm) && (
-                      <div className="mt-1 space-y-0.5">
-                        {filteredVolume.map(u => {
-                          const isSelected = (value || '').toLowerCase().trim() === u.symbol.toLowerCase();
-                          return (
-                            <button
-                              key={u.id}
-                              type="button"
-                              onClick={() => handleSelectUnit(u.symbol)}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-lime-50 dark:bg-lime-950/60 text-lime-900 dark:text-lime-200 font-bold border border-lime-200 dark:border-lime-800/60'
-                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">
-                                  {u.symbol}
-                                </span>
-                                <span>{u.name}</span>
-                              </div>
-                              {isSelected && <Check size={14} className="text-lime-600 dark:text-lime-400 stroke-[3]" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                {groups.map(group => (
+                  <div key={group.key} role="group" aria-label={group.label} className="py-1">
+                    <p className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle [&_svg]:size-3.5">
+                      {group.icon}{group.label}
+                    </p>
+                    {group.units.map(u => {
+                      const isSelected = clean === u.symbol.toLowerCase();
+                      return (
+                        <button
+                          key={`${group.key}-${u.id}`}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          onClick={() => handleSelectUnit(u.symbol)}
+                          className={cn(
+                            'flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            isSelected ? 'bg-brand-soft font-semibold text-brand-fg' : 'text-fg-muted hover:bg-surface-2 hover:text-fg',
+                          )}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="w-12 shrink-0 font-mono text-xs font-bold text-fg">{u.symbol}</span>
+                            <span className="truncate">{u.name}</span>
+                          </span>
+                          {isSelected && <Check className="size-4 shrink-0" />}
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-
-                {filteredCount.length > 0 && (
-                  <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={(e) => toggleCategory('count', e)}
-                      className="w-full px-2.5 py-1.5 flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <Package size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        Count & Packaging ({filteredCount.length})
-                      </span>
-                      <ChevronDown 
-                        size={13} 
-                        className={`transition-transform ${collapsedCategories.count && !searchTerm ? '-rotate-90' : ''}`} 
-                      />
-                    </button>
-
-                    {(!collapsedCategories.count || searchTerm) && (
-                      <div className="mt-1 space-y-0.5">
-                        {filteredCount.map(u => {
-                          const isSelected = (value || '').toLowerCase().trim() === u.symbol.toLowerCase();
-                          return (
-                            <button
-                              key={u.id}
-                              type="button"
-                              onClick={() => handleSelectUnit(u.symbol)}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-lime-50 dark:bg-lime-950/60 text-lime-900 dark:text-lime-200 font-bold border border-lime-200 dark:border-lime-800/60'
-                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">
-                                  {u.symbol}
-                                </span>
-                                <span>{u.name}</span>
-                              </div>
-                              {isSelected && <Check size={14} className="text-lime-600 dark:text-lime-400 stroke-[3]" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {filteredCustom.length > 0 && (
-                  <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={(e) => toggleCategory('custom', e)}
-                      className="w-full px-2.5 py-1.5 flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <Sparkles size={13} className="text-purple-600 dark:text-purple-400" />
-                        Custom Store Units ({filteredCustom.length})
-                      </span>
-                      <ChevronDown 
-                        size={13} 
-                        className={`transition-transform ${collapsedCategories.custom && !searchTerm ? '-rotate-90' : ''}`} 
-                      />
-                    </button>
-
-                    {(!collapsedCategories.custom || searchTerm) && (
-                      <div className="mt-1 space-y-0.5">
-                        {filteredCustom.map(u => {
-                          const isSelected = (value || '').toLowerCase().trim() === u.symbol.toLowerCase();
-                          return (
-                            <button
-                              key={u.id}
-                              type="button"
-                              onClick={() => handleSelectUnit(u.symbol)}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-lime-50 dark:bg-lime-950/60 text-lime-900 dark:text-lime-200 font-bold border border-lime-200 dark:border-lime-800/60'
-                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-bold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">
-                                  {u.symbol}
-                                </span>
-                                <span>{u.name}</span>
-                              </div>
-                              {isSelected && <Check size={14} className="text-lime-600 dark:text-lime-400 stroke-[3]" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
+                ))}
               </div>
 
-              <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-850">
+              <div className="border-t border-line p-1.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsOpen(false);
-                    setIsCustomMode(true);
-                    setCustomInputValue('');
-                  }}
-                  className="w-full py-2 px-3 rounded-xl text-xs font-bold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  onClick={startCustom}
+                  className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-brand-fg transition-colors hover:bg-brand-soft"
                 >
-                  <Plus size={14} className="stroke-[2.5]" />
-                  <span>+ Create Custom Unit...</span>
+                  <Plus className="size-3.5" />Apna unit likhein...
                 </button>
               </div>
             </div>
           )}
         </div>
       ) : (
-        <div className="flex items-center gap-2 animate-in fade-in duration-150">
-          <div className="relative flex-1">
-            <input
-              type="text"
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <Input
               disabled={disabled}
               value={customInputValue}
               onChange={e => handleCustomInputChange(e.target.value)}
-              placeholder="Type custom unit (e.g. egg, plate, tray, cup, bori)..."
-              className="w-full rounded-xl border-2 border-indigo-500 bg-white dark:bg-slate-900 px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-900 dark:text-white shadow-2xs outline-none focus:ring-2 focus:ring-indigo-500/20"
-              autoFocus
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); if (customInputValue.trim()) setIsCustomMode(false); }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); leaveCustom(true); }
+              }}
+              placeholder="Unit likhein (egg, plate, tray, cup, bori)..."
+              aria-label="Custom unit"
+              maxLength={20}
+              autoFocus={!disabled}
             />
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (!customInputValue.trim()) {
-                setIsCustomMode(false);
-                handleSelectUnit('pcs');
-              } else {
-                setIsCustomMode(false);
-              }
-            }}
-            className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer shrink-0 active:scale-95"
-          >
-            <Check size={14} className="stroke-[3]" />
-            <span>Done</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setIsCustomMode(false);
-              handleSelectUnit('pcs');
-            }}
-            className="px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-600 dark:text-slate-300 font-semibold text-xs cursor-pointer shrink-0"
-          >
-            Cancel
-          </button>
+          {!disabled && (
+            <>
+              <Button
+                leftIcon={<Check />}
+                disabled={!customInputValue.trim()}
+                onClick={() => setIsCustomMode(false)}
+              >
+                Done
+              </Button>
+              <Button variant="ghost" onClick={() => leaveCustom(true)}>Cancel</Button>
+            </>
+          )}
         </div>
       )}
 
-      {value && baseUnitWarning(value, customUnits) && (
-        <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
-          {baseUnitWarning(value, customUnits)}
-        </p>
-      )}
-      <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-        {isCustomMode 
-          ? 'Pack sizes go in the Units & Packaging tab.'
-          : 'The smallest unit you count or weigh, e.g. kg, L or pcs.'}
+      {warning && <p className="text-xs font-medium text-warning-fg">{warning}</p>}
+      <p className="text-xs text-fg-subtle">
+        {isCustomMode
+          ? 'Pack sizes (dozen, cup) Sell units tab mein add karein.'
+          : 'Sab se chhota unit jo aap ginte ya tolte hain, e.g. kg, L ya pcs.'}
       </p>
     </div>
   );
