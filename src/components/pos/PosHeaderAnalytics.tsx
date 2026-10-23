@@ -1,8 +1,12 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { 
-  TrendingUp, Receipt, Zap, PauseCircle, User, Printer, Keyboard, 
-  ChevronDown, Clock, ArrowRight, Wallet, CreditCard, RotateCcw
+import React, { memo, useState, useRef, useEffect, useMemo } from 'react';
+import {
+  TrendingUp, Receipt, Zap, PauseCircle, User, Printer, Keyboard,
+  ChevronDown, Clock, ArrowRight, Wallet, CreditCard, RotateCcw, CloudOff, RefreshCw, AlertTriangle
 } from 'lucide-react';
+import { isDateOnlyOrMidnight, formatCurrency } from '../../lib/formatters';
+import { syncService, type SyncState } from '../../lib/syncService';
+import { cn } from '../../lib/cn';
+import { Badge, IconButton, Money } from '../ui';
 
 interface PosHeaderAnalyticsProps {
   todaySummary: {
@@ -27,7 +31,7 @@ interface PosHeaderAnalyticsProps {
   onOpenReceipt?: (sale: any) => void;
 }
 
-import { isDateOnlyOrMidnight, formatCurrency } from '../../lib/formatters';
+const RECENT_LIMIT = 5;
 
 const formatRelativeTime = (dateStr?: string | Date): string => {
   if (!dateStr) return '';
@@ -40,9 +44,7 @@ const formatRelativeTime = (dateStr?: string | Date): string => {
       return 'Today';
     }
 
-    const now = new Date();
-    const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
-    if (diffSec < 0) return 'Just now';
+    const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
     if (diffSec < 45) return 'Just now';
     if (diffSec < 90) return '1m ago';
     if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
@@ -55,7 +57,6 @@ const formatRelativeTime = (dateStr?: string | Date): string => {
 
 const formatSaleProductsName = (items?: any[], defaultFallback = 'Sale'): string => {
   if (!items || !Array.isArray(items) || items.length === 0) return defaultFallback;
-
   if (items.length === 1) {
     const it = items[0];
     const name = it.name || 'Product';
@@ -63,15 +64,40 @@ const formatSaleProductsName = (items?: any[], defaultFallback = 'Sale'): string
     const qty = it.qty !== undefined && Number(it.qty) !== 1 ? `${it.qty}x ` : '';
     return `${qty}${name}${variant}`.trim();
   }
-
-  if (items.length === 2) {
-    return `${items[0].name}, ${items[1].name}`;
-  }
-
+  if (items.length === 2) return `${items[0].name}, ${items[1].name}`;
   return `${items[0].name} +${items.length - 1} more`;
 };
 
-export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
+const saleTime = (sale: any) => new Date(sale?.date || sale?.created_at || 0).getTime() || 0;
+
+/** The newest few bills in one pass, without sorting the whole sales list on every update. */
+const latestSales = (sales: any[] | undefined, limit: number) => {
+  const top: any[] = [];
+  for (const sale of sales || []) {
+    if (!sale || (sale.total === undefined && sale.total_amount === undefined)) continue;
+    const time = saleTime(sale);
+    if (top.length === limit && time <= saleTime(top[top.length - 1])) continue;
+    let index = top.findIndex(item => time > saleTime(item));
+    if (index === -1) index = top.length;
+    top.splice(index, 0, sale);
+    if (top.length > limit) top.pop();
+  }
+  return top;
+};
+
+const MODE_TONE: Record<string, 'success' | 'info' | 'warning'> = { Cash: 'success', Online: 'info', Credit: 'warning' };
+
+/** Offline / unsynced bills, so the cashier knows sales are safe on this device. */
+function useSyncState() {
+  const [state, setState] = useState<SyncState>(() => syncService.getState());
+  useEffect(() => syncService.subscribe(setState), []);
+  return state;
+}
+
+const chip = 'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-control border border-line bg-surface px-2.5 text-xs text-fg shadow-e1 transition-colors duration-150 hover:border-line-strong hover:bg-surface-2';
+const popover = 'absolute left-0 right-0 top-full z-50 mt-1.5 rounded-card border border-line bg-surface p-2 shadow-e2 animate-fade-up sm:right-auto';
+
+export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
   todaySummary,
   activeShiftSession,
   setIsShiftModalOpen,
@@ -84,11 +110,13 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
   mobileTab,
   sales,
   onOpenReceipt
-}) => {
+}: PosHeaderAnalyticsProps) {
   const [todayDropdownOpen, setTodayDropdownOpen] = useState(false);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const todayDropdownRef = useRef<HTMLDivElement>(null);
   const recentDropdownRef = useRef<HTMLDivElement>(null);
+  const sync = useSyncState();
+  const unsynced = sync.pendingCount + sync.failedCount;
 
   // Re-render every 25s so relative times stay current
   const [, setTick] = useState(0);
@@ -98,359 +126,258 @@ export const PosHeaderAnalytics: React.FC<PosHeaderAnalyticsProps> = ({
   }, []);
 
   useEffect(() => {
+    if (!todayDropdownOpen && !recentDropdownOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (todayDropdownRef.current && !todayDropdownRef.current.contains(e.target as Node)) {
-        setTodayDropdownOpen(false);
-      }
-      if (recentDropdownRef.current && !recentDropdownRef.current.contains(e.target as Node)) {
-        setRecentDropdownOpen(false);
-      }
+      if (todayDropdownRef.current && !todayDropdownRef.current.contains(e.target as Node)) setTodayDropdownOpen(false);
+      if (recentDropdownRef.current && !recentDropdownRef.current.contains(e.target as Node)) setRecentDropdownOpen(false);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setTodayDropdownOpen(false); setRecentDropdownOpen(false); }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [todayDropdownOpen, recentDropdownOpen]);
 
-  const recentSales = useMemo(() => {
-    if (!sales || !Array.isArray(sales)) return [];
-    return [...sales]
-      .filter(s => s && (s.total !== undefined || s.total_amount !== undefined))
-      .sort((a, b) => {
-        const timeA = new Date(a.date || a.created_at || 0).getTime();
-        const timeB = new Date(b.date || b.created_at || 0).getTime();
-        return timeB - timeA;
-      })
-      .slice(0, 5);
-  }, [sales]);
-
+  const recentSales = useMemo(() => latestSales(sales, RECENT_LIMIT), [sales]);
   const latestSale = recentSales[0];
+  const latestTime = latestSale ? formatRelativeTime(latestSale.date || latestSale.created_at) : '';
+  const shiftStarted = activeShiftSession?.started_at && !Number.isNaN(new Date(activeShiftSession.started_at).getTime())
+    ? new Date(activeShiftSession.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+  const otherCashierShift = activeShiftSession && activeShiftSession.user_id !== currentUser?.id;
 
   return (
-    <div className={`${mobileTab === 'cart' ? 'hidden lg:flex' : 'flex'} bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-xl p-2 sm:px-3 sm:py-2 shadow-xs items-center justify-between gap-2.5 shrink-0 select-none relative z-30`}>
-      
-      <div className="flex items-center gap-2 flex-1 py-0.5 min-w-0">
-        
-        <div className="relative shrink-0" ref={todayDropdownRef}>
+    <div className={cn(mobileTab === 'cart' ? 'hidden lg:flex' : 'flex', 'relative z-30 shrink-0 select-none items-center justify-between gap-2 rounded-card border border-line bg-surface p-1.5 shadow-e1')}>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:overflow-visible">
+        {/* Today */}
+        <div className="shrink-0 sm:relative" ref={todayDropdownRef}>
           <button
             type="button"
-            onClick={() => {
-              setTodayDropdownOpen(prev => !prev);
-              setRecentDropdownOpen(false);
-            }}
-            className="flex items-center gap-2 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-lg text-xs transition-all shadow-xs cursor-pointer group"
-            title="Click to view Cash / Online / Credit breakdown"
+            aria-expanded={todayDropdownOpen}
+            onClick={() => { setTodayDropdownOpen(prev => !prev); setRecentDropdownOpen(false); }}
+            className={cn(chip, todayDropdownOpen && 'border-brand-accent ring-2 ring-ring/20')}
+            title="Cash / Online / Credit breakdown dekhein"
           >
-            <div className="w-5 h-5 rounded-md bg-lime-500/10 dark:bg-lime-400/10 flex items-center justify-center text-lime-600 dark:text-lime-400 shrink-0">
-              <TrendingUp size={13} />
-            </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Today:</span>
-              <span className="text-xs font-black font-mono text-slate-900 dark:text-slate-100">
-                {formatCurrency(todaySummary.totalRevenue)}
-              </span>
-              <span className="text-[10px] font-mono px-1 py-0.2 bg-slate-200/70 dark:bg-slate-700/60 rounded text-slate-600 dark:text-slate-300 font-bold">
-                {todaySummary.totalCount} bills
-              </span>
-            </div>
-            <ChevronDown size={11} className={`text-slate-400 transition-transform ${todayDropdownOpen ? 'rotate-180' : ''}`} />
+            <span className="hidden size-6 items-center justify-center rounded-md bg-brand-soft text-brand-fg sm:flex" aria-hidden="true"><TrendingUp className="size-3.5" /></span>
+            <span className="hidden text-[11px] font-semibold text-fg-subtle sm:inline">Today</span>
+            <Money amount={todaySummary.totalRevenue} className="text-[13px] font-bold sm:hidden" compact />
+            <Money amount={todaySummary.totalRevenue} className="hidden text-[13px] font-bold sm:inline" />
+            <span className="rounded-md bg-surface-2 px-1.5 text-[11px] font-semibold tabular-nums leading-5 text-fg-muted">{todaySummary.totalCount}<span className="hidden sm:inline"> bills</span></span>
+            <ChevronDown className={cn('hidden size-3.5 text-fg-faint transition-transform sm:block', todayDropdownOpen && 'rotate-180')} aria-hidden="true" />
           </button>
 
           {todayDropdownOpen && (
-            <div className="absolute left-0 mt-1.5 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl z-50 p-2.5 animate-in fade-in zoom-in-95 duration-100">
-              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-slate-800 px-1">
-                <span className="text-xs font-black text-slate-800 dark:text-slate-100">Today's Inflow</span>
-                <span className="text-[10px] font-mono text-slate-400 font-bold">{todaySummary.totalCount} Bills Total</span>
+            <div className={cn(popover, 'sm:w-72')}>
+              <div className="mb-1.5 flex items-center justify-between border-b border-line px-1.5 pb-2">
+                <span className="text-[13px] font-bold text-fg">Today's inflow</span>
+                <span className="text-[11px] font-semibold tabular-nums text-fg-subtle">{todaySummary.totalCount} bills</span>
               </div>
-              <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/40">
-                  <span className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-bold text-[11px]">
-                    <Wallet size={12} /> Cash:
-                  </span>
-                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.cashTotal)}</strong>
-                </div>
-                <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-sky-50/70 dark:bg-sky-950/30 border border-sky-100 dark:border-sky-900/40">
-                  <span className="flex items-center gap-1.5 text-sky-800 dark:text-sky-300 font-bold text-[11px]">
-                    <CreditCard size={12} /> Online / Bank:
-                  </span>
-                  <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.onlineTotal)}</strong>
-                </div>
-                {todaySummary.creditTotal > 0 && (
-                  <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-purple-50/70 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900/40">
-                    <span className="flex items-center gap-1.5 text-purple-800 dark:text-purple-300 font-bold text-[11px]">
-                      <User size={12} /> Credit (Udhar):
-                    </span>
-                    <strong className="font-mono text-slate-900 dark:text-slate-100 text-xs">{formatCurrency(todaySummary.creditTotal)}</strong>
-                  </div>
-                )}
+              <dl className="space-y-0.5 text-[13px]">
+                <SummaryRow icon={<Wallet />} label="Cash" amount={todaySummary.cashTotal} tone="success" />
+                <SummaryRow icon={<CreditCard />} label="Online / Bank" amount={todaySummary.onlineTotal} tone="info" />
+                {todaySummary.creditTotal > 0 && <SummaryRow icon={<User />} label="Credit (Udhar)" amount={todaySummary.creditTotal} tone="warning" />}
                 {Boolean(todaySummary.returnedTotal && todaySummary.returnedTotal > 0) && (
-                  <div className="flex justify-between items-center py-1.5 px-2 rounded-lg bg-rose-50/70 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/40 text-rose-700 dark:text-rose-300">
-                    <span className="flex items-center gap-1.5 font-bold text-[11px]">
-                      <RotateCcw size={12} /> Returns ({todaySummary.returnedCount}):
-                    </span>
-                    <strong className="font-mono text-xs">- {formatCurrency(todaySummary.returnedTotal)}</strong>
-                  </div>
+                  <SummaryRow icon={<RotateCcw />} label={`Returns (${todaySummary.returnedCount})`} amount={-(todaySummary.returnedTotal || 0)} tone="danger" />
                 )}
-              </div>
+                <div className="mt-1 flex items-center justify-between border-t border-line px-1.5 pt-2">
+                  <dt className="font-semibold text-fg-muted">Net sale</dt>
+                  <dd><Money amount={todaySummary.totalRevenue} className="font-bold text-fg" /></dd>
+                </div>
+              </dl>
             </div>
           )}
         </div>
 
-        <div className="relative shrink-0" ref={recentDropdownRef}>
+        {/* Recent bills */}
+        <div className="min-w-0 sm:relative" ref={recentDropdownRef}>
           <button
             type="button"
-            onClick={() => {
-              setRecentDropdownOpen(prev => !prev);
-              setTodayDropdownOpen(false);
-            }}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition-all shadow-xs cursor-pointer select-none group ${
-              recentDropdownOpen
-                ? 'bg-lime-50 dark:bg-lime-950/40 border-lime-500/80 ring-2 ring-lime-500/20 text-slate-900 dark:text-white'
-                : latestSale
-                  ? 'bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-700/80 hover:border-slate-300'
-                  : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-400'
-            }`}
-            title="Click to open recent sales dropdown (Last 5 transactions)"
+            aria-expanded={recentDropdownOpen}
+            onClick={() => { setRecentDropdownOpen(prev => !prev); setTodayDropdownOpen(false); }}
+            className={cn(chip, 'max-w-full min-w-0', recentDropdownOpen && 'border-brand-accent ring-2 ring-ring/20')}
+            title="Last 5 bills — kholein aur reprint karein"
+            aria-label={latestSale ? 'Recent sales' : 'Recent sales: none yet'}
           >
-            <Receipt size={13} className="text-lime-600 dark:text-lime-400 shrink-0" />
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Last:</span>
-
+            <Receipt className="size-4 shrink-0 text-brand-fg" aria-hidden="true" />
+            <span className="hidden text-[11px] font-semibold text-fg-subtle md:inline">Last</span>
             {latestSale ? (
-              <div className="flex items-center gap-1.5">
-                <span 
-                  className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate max-w-[120px] sm:max-w-[190px]"
-                  title={latestSale.items?.map((i: any) => `${i.qty || 1}x ${i.name}${i.variantName ? ` (${i.variantName})` : ''}`).join(', ') || latestSale.bill_number}
-                >
+              <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
+                <span className="max-w-[120px] truncate font-semibold xl:max-w-[200px]" title={latestSale.items?.map((i: any) => `${i.qty || 1}x ${i.name}${i.variantName ? ` (${i.variantName})` : ''}`).join(', ') || latestSale.bill_number}>
                   {formatSaleProductsName(latestSale.items, latestSale.bill_number || 'Sale')}
                 </span>
-                <span className="font-mono font-black text-xs text-emerald-600 dark:text-emerald-400">
-                  {formatCurrency(Number(latestSale.total || 0))}
-                </span>
-                <span className="text-[9px] px-1 py-0.2 rounded font-bold bg-slate-200/80 dark:bg-slate-700/80 text-slate-600 dark:text-slate-300 uppercase">
-                  {latestSale.payment_mode || 'Cash'}
-                </span>
-                {formatRelativeTime(latestSale.date || latestSale.created_at) && (
-                  <span className="hidden md:inline-flex items-center gap-0.5 text-[10px] text-slate-400">
-                    <Clock size={9} />
-                    {formatRelativeTime(latestSale.date || latestSale.created_at)}
-                  </span>
-                )}
-              </div>
-            ) : (
-              <span className="text-[11px] text-slate-400">None yet</span>
-            )}
-
-            <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-slate-200 dark:border-slate-700">
-              <span className="text-[9px] font-mono px-1 py-0.2 bg-lime-100 dark:bg-lime-950/80 text-lime-800 dark:text-lime-300 rounded font-bold">
-                5
+                <Money amount={Number(latestSale.total ?? latestSale.total_amount ?? 0)} className="font-bold text-success-fg" />
+                {latestTime && <span className="hidden items-center gap-0.5 text-[11px] text-fg-subtle lg:inline-flex"><Clock className="size-3" aria-hidden="true" />{latestTime}</span>}
               </span>
-              <ChevronDown size={12} className={`text-slate-400 transition-transform ${recentDropdownOpen ? 'rotate-180 text-lime-600' : 'group-hover:text-slate-600'}`} />
-            </div>
+            ) : (
+              <span className="hidden text-[11px] text-fg-subtle sm:inline">None yet</span>
+            )}
+            <ChevronDown className={cn('size-3.5 shrink-0 text-fg-faint transition-transform', recentDropdownOpen && 'rotate-180')} aria-hidden="true" />
           </button>
 
           {recentDropdownOpen && (
-            <div className="absolute left-0 mt-1.5 w-84 sm:w-[420px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-50 p-2.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-slate-800 px-1">
-                <div className="flex items-center gap-1.5 text-xs font-black text-slate-800 dark:text-slate-100">
-                  <Receipt size={14} className="text-lime-600 dark:text-lime-400" />
-                  <span>Recent Sales (آخری 5 بل)</span>
-                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-lime-100 dark:bg-lime-950/60 text-lime-800 dark:text-lime-300 font-mono">
-                    {recentSales.length} of 5
-                  </span>
-                </div>
-                <button 
-                  type="button" 
+            <div className={cn(popover, 'sm:w-[420px]')}>
+              <div className="mb-1.5 flex items-center justify-between border-b border-line px-1.5 pb-2">
+                <span className="flex items-center gap-1.5 text-[13px] font-bold text-fg">
+                  <Receipt className="size-4 text-brand-fg" aria-hidden="true" />
+                  Recent sales <span className="font-normal text-fg-subtle">(آخری 5 بل)</span>
+                </span>
+                <button
+                  type="button"
                   onClick={() => { setRecentDropdownOpen(false); navigate('/sales-history'); }}
-                  className="flex items-center gap-1 text-[11px] font-bold text-lime-700 dark:text-lime-400 hover:text-lime-800 hover:underline cursor-pointer"
+                  className="flex h-8 cursor-pointer items-center gap-1 rounded-lg px-2 text-xs font-semibold text-brand-fg hover:bg-brand-soft"
                 >
-                  <span>All Sales</span>
-                  <ArrowRight size={11} />
+                  All sales <ArrowRight className="size-3.5" aria-hidden="true" />
                 </button>
               </div>
 
               {recentSales.length === 0 ? (
-                <div className="py-6 text-center text-xs text-slate-400 font-medium">
-                  No sales recorded yet today
-                </div>
+                <p className="py-6 text-center text-xs text-fg-subtle">No sales recorded yet today</p>
               ) : (
-                <div className="space-y-1.5 max-h-[360px] overflow-y-auto pr-0.5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 pb-0.5 flex items-center justify-between">
-                    <span>Click any sale to open & reprint bill:</span>
-                    <span className="text-[9px] text-lime-600 font-semibold lowercase">click to open</span>
-                  </div>
+                <ul className="max-h-[360px] space-y-1 overflow-y-auto">
                   {recentSales.map((sale, idx) => {
-                    const isLatest = idx === 0;
                     const billNo = sale.bill_number || sale.invoice_no || sale.id?.slice(-6) || 'INV';
-                    const customerName = sale.customer_name || 'Walk-in Customer';
-                    const totalAmt = Number(sale.total ?? sale.total_amount ?? 0);
                     const mode = sale.payment_mode || sale.payment_method || 'Cash';
                     const isReturned = sale.status === 'Returned';
                     const relativeTime = formatRelativeTime(sale.date || sale.created_at);
-
                     return (
-                      <div
-                        key={sale.id || idx}
-                        onClick={() => {
-                          setRecentDropdownOpen(false);
-                          if (onOpenReceipt) onOpenReceipt(sale);
-                        }}
-                        className={`flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer group active:scale-[0.99] ${
-                          isLatest
-                            ? 'bg-lime-50/70 hover:bg-lime-100 dark:bg-lime-950/30 dark:hover:bg-lime-950/60 border-lime-200 dark:border-lime-800/80 shadow-2xs hover:border-lime-400'
-                            : 'bg-slate-50/80 hover:bg-white dark:bg-slate-800/60 dark:hover:bg-slate-800 border-slate-200/80 dark:border-slate-800 hover:border-lime-300 dark:hover:border-lime-700 shadow-2xs'
-                        }`}
-                        title="Click to open receipt and print"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                          <div className="flex flex-col items-center justify-center shrink-0">
-                            {isLatest ? (
-                              <span className="flex items-center gap-1 text-[9px] font-black uppercase text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950 px-1.5 py-0.5 rounded-md border border-emerald-300 dark:border-emerald-700">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                #1 Latest
-                              </span>
-                            ) : (
-                              <span className="w-6 h-6 rounded-md bg-slate-200/70 dark:bg-slate-800 flex items-center justify-center text-[10px] font-black text-slate-600 dark:text-slate-300 font-mono">
-                                #{idx + 1}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span 
-                                className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate max-w-[150px] sm:max-w-[210px] group-hover:text-lime-600 dark:group-hover:text-lime-400 transition-colors"
-                                title={sale.items?.map((i: any) => `${i.qty || 1}x ${i.name}${i.variantName ? ` (${i.variantName})` : ''}`).join(', ') || billNo}
-                              >
-                                {formatSaleProductsName(sale.items, billNo)}
-                              </span>
-                              {isReturned ? (
-                                <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300 uppercase">Returned</span>
-                              ) : mode === 'Cash' ? (
-                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">Cash</span>
-                              ) : mode === 'Online' ? (
-                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">Online</span>
-                              ) : (
-                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">Credit</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                              <span className="font-mono text-[10px] text-slate-400 font-semibold">{billNo}</span>
-                              <span>•</span>
-                              <User size={10} className="shrink-0 opacity-60" />
-                              <span className="truncate max-w-[110px] sm:max-w-[140px] font-medium">{customerName}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2.5 shrink-0">
-                          <div className="text-right">
-                            <div className="font-mono font-black text-xs sm:text-sm text-slate-900 dark:text-slate-50">
-                              {formatCurrency(totalAmt)}
-                            </div>
-                            {relativeTime && (
-                              <div className="flex items-center justify-end gap-1 text-[10px] text-slate-400 mt-0.5">
-                                <Clock size={9} />
-                                <span>{relativeTime}</span>
-                              </div>
-                            )}
-                          </div>
-                          <div
-                            className="p-1.5 text-lime-600 dark:text-lime-400 group-hover:bg-lime-500 group-hover:text-white dark:group-hover:text-slate-950 rounded-lg transition-all"
-                            title="Open bill receipt"
-                          >
-                            <Printer size={14} />
-                          </div>
-                        </div>
-                      </div>
+                      <li key={sale.id || idx}>
+                        <button
+                          type="button"
+                          onClick={() => { setRecentDropdownOpen(false); onOpenReceipt?.(sale); }}
+                          className={cn(
+                            'group flex w-full cursor-pointer items-center justify-between gap-3 rounded-control p-2.5 text-left transition-colors',
+                            idx === 0 ? 'bg-brand-soft/60 hover:bg-brand-soft' : 'hover:bg-surface-2',
+                          )}
+                          title="Receipt kholein aur print karein"
+                        >
+                          <span className="min-w-0">
+                            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                              <span className="max-w-[210px] truncate text-[13px] font-semibold text-fg">{formatSaleProductsName(sale.items, billNo)}</span>
+                              {isReturned ? <Badge tone="danger">Returned</Badge> : <Badge tone={MODE_TONE[mode] || 'neutral'}>{mode}</Badge>}
+                            </span>
+                            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-fg-subtle">
+                              <span className="font-mono font-semibold">{billNo}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">{sale.customer_name || 'Walk-in Customer'}</span>
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-2.5">
+                            <span className="text-right">
+                              <Money amount={Number(sale.total ?? sale.total_amount ?? 0)} className="block text-[13px] font-bold text-fg" />
+                              {relativeTime && <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-fg-subtle"><Clock className="size-3" aria-hidden="true" />{relativeTime}</span>}
+                            </span>
+                            <Printer className="size-4 text-fg-faint group-hover:text-brand-fg" aria-hidden="true" />
+                          </span>
+                        </button>
+                      </li>
                     );
                   })}
-                </div>
+                </ul>
               )}
             </div>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 shrink-0">
-        
+      <div className="flex shrink-0 items-center gap-1.5">
+        {(!sync.isOnline || unsynced > 0) && (
+          <span
+            role="status"
+            className={cn(
+              'flex h-10 items-center gap-1.5 rounded-control px-2.5 text-xs font-semibold ring-1 ring-inset',
+              !sync.isOnline ? 'bg-warning-soft text-warning-fg ring-warning/25' : sync.failedCount > 0 ? 'bg-danger-soft text-danger-fg ring-danger/20' : 'bg-info-soft text-info-fg ring-info/20',
+            )}
+            title={!sync.isOnline
+              ? `Internet nahi hai. Bills isi device par save ho rahe hain${unsynced ? ` (${unsynced} sync baqi)` : ''}; internet aate hi sync honge.`
+              : sync.failedCount > 0 ? `${sync.failedCount} entries sync nahi ho sakin — header ke sync badge se dekhein.` : `${unsynced} entries sync ho rahi hain.`}
+          >
+            {!sync.isOnline ? <CloudOff className="size-4" aria-hidden="true" /> : sync.failedCount > 0 ? <AlertTriangle className="size-4" aria-hidden="true" /> : <RefreshCw className={cn('size-4', sync.isSyncing && 'animate-spin')} aria-hidden="true" />}
+            <span className="hidden sm:inline">{!sync.isOnline ? 'Offline' : sync.failedCount > 0 ? 'Sync error' : 'Syncing'}</span>
+            {unsynced > 0 && <span className="tabular-nums">{unsynced}</span>}
+          </span>
+        )}
+
         {activeShiftSession ? (
           <button
             type="button"
             onClick={() => setIsShiftModalOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 hover:bg-lime-50 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-lime-400 dark:hover:border-lime-600 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
-            title={`Shift open${activeShiftSession.user_id !== currentUser?.id ? ` (${activeShiftSession.user_name})` : ''} · opening ${formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))} — click to see cash or close the shift`}
+            className={chip}
+            aria-label={otherCashierShift ? `${activeShiftSession.user_name || 'Cashier'}'s shift is open` : 'Shift open'}
+            title={`Shift open${otherCashierShift ? ` (${activeShiftSession.user_name})` : ''} · opening ${formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))} — cash dekhein ya shift band karein`}
           >
-            <span className="w-2 h-2 rounded-full bg-lime-500 animate-pulse shrink-0" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-100 max-w-[110px] truncate">
-              {activeShiftSession.user_id !== currentUser?.id
-                ? `${activeShiftSession.user_name || 'Cashier'}'s shift`
-                : 'Shift open'}
+            <span className="size-2 shrink-0 rounded-full bg-brand-accent" aria-hidden="true" />
+            <Clock className="size-4 text-fg-subtle sm:hidden" aria-hidden="true" />
+            <span className="hidden max-w-[110px] truncate font-semibold sm:inline">
+              {otherCashierShift ? `${activeShiftSession.user_name || 'Cashier'}'s shift` : 'Shift open'}
             </span>
-            {activeShiftSession.started_at && !Number.isNaN(new Date(activeShiftSession.started_at).getTime()) && (
-              <span className="hidden sm:inline text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                since {new Date(activeShiftSession.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-            <span className="hidden md:inline text-[10px] font-bold text-lime-700 dark:text-lime-400">Cash &amp; close</span>
+            {shiftStarted && <span className="hidden text-[11px] tabular-nums text-fg-subtle xl:inline">since {shiftStarted}</span>}
+            <span className="hidden text-[11px] font-semibold text-brand-fg 2xl:inline">Cash &amp; close</span>
           </button>
         ) : (
           <button
             type="button"
             onClick={() => setIsShiftModalOpen(true)}
-            className="flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-all shadow-xs cursor-pointer"
+            className="flex h-10 shrink-0 cursor-pointer items-center gap-1.5 rounded-control bg-warning px-3 text-xs font-bold text-white shadow-e1 transition-colors hover:bg-warning/90"
             title="Start a Shift"
           >
-            <Zap size={13} className="fill-current" />
+            <Zap className="size-4 fill-current" aria-hidden="true" />
             <span>Start Shift</span>
           </button>
         )}
 
-        <button 
+        <button
           type="button"
           onClick={() => setHeldOrdersModalOpen(true)}
-          className="relative px-2 py-1 bg-slate-50 hover:bg-amber-50 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1 transition-all shadow-xs cursor-pointer"
-          title="Held / Parked Bills (F8)"
+          className={chip}
+          title="Held / parked bills"
+          aria-label={`Parked bills: ${heldOrdersCount}`}
         >
-          <PauseCircle size={13} className="text-amber-500 shrink-0" />
-          <span className="hidden sm:inline">Parked</span>
-          {heldOrdersCount > 0 ? (
-            <span className="px-1.5 py-0.2 bg-amber-500 text-slate-950 font-black rounded-full text-[10px] animate-pulse font-mono">
-              {heldOrdersCount}
-            </span>
-          ) : (
-            <span className="text-[10px] text-slate-400 font-mono">0</span>
-          )}
-          <kbd className="hidden md:inline-block text-[9px] bg-slate-200/80 dark:bg-slate-700 text-slate-500 dark:text-slate-400 px-1 rounded font-mono">F8</kbd>
+          <PauseCircle className="size-4 shrink-0 text-warning-fg" aria-hidden="true" />
+          <span className="hidden font-semibold sm:inline">Parked</span>
+          <span className={cn('min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold tabular-nums leading-5', heldOrdersCount > 0 ? 'bg-warning text-white' : 'bg-surface-2 text-fg-subtle')}>
+            {heldOrdersCount}
+          </span>
         </button>
 
-        <button 
+        <button
           type="button"
           onClick={() => setIsUserSwitcherOpen(true)}
-          className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 transition-all shadow-xs cursor-pointer"
+          className={chip}
           title="Switch Current Logged-in Staff"
+          aria-label={`Staff: ${currentUser?.name || 'Staff'} — switch user`}
         >
-          <User size={13} className="text-lime-600 dark:text-lime-400 shrink-0" />
-          <span className="max-w-[70px] truncate font-bold text-slate-800 dark:text-slate-100">{currentUser?.name?.split(' ')[0] || 'Staff'}</span>
+          <User className="size-4 shrink-0 text-brand-fg" aria-hidden="true" />
+          <span className="hidden max-w-[80px] truncate font-semibold md:inline">{currentUser?.name?.split(' ')[0] || 'Staff'}</span>
         </button>
 
-        <div className="hidden sm:flex items-center gap-0.5 border-l border-slate-200 dark:border-slate-700 pl-1">
-          <button aria-label="POS & Printer Settings" 
-            type="button"
-            onClick={() => navigate('/settings')}
-            className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-            title="POS & Printer Settings"
-          >
-            <Printer size={13} />
-          </button>
-          <button aria-label="Keyboard Shortcuts Guide" 
-            type="button"
-            onClick={() => setShortcutsModalOpen(true)}
-            className="p-1.5 text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-            title="Keyboard Shortcuts Guide"
-          >
-            <Keyboard size={13} />
-          </button>
+        <div className="hidden items-center gap-0.5 border-l border-line pl-1 sm:flex">
+          <IconButton aria-label="POS & Printer Settings" icon={<Printer />} onClick={() => navigate('/settings')} />
+          <IconButton aria-label="Keyboard Shortcuts Guide" icon={<Keyboard />} onClick={() => setShortcutsModalOpen(true)} />
         </div>
-
       </div>
     </div>
   );
-};
+});
+
+const SUMMARY_TONE = {
+  success: 'bg-success-soft text-success-fg',
+  info: 'bg-info-soft text-info-fg',
+  warning: 'bg-warning-soft text-warning-fg',
+  danger: 'bg-danger-soft text-danger-fg',
+} as const;
+
+function SummaryRow({ icon, label, amount, tone }: { icon: React.ReactNode; label: string; amount: number; tone: keyof typeof SUMMARY_TONE }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg px-1.5 py-1.5">
+      <dt className="flex items-center gap-2 font-medium text-fg-muted">
+        <span className={cn('flex size-6 items-center justify-center rounded-md [&_svg]:size-3.5', SUMMARY_TONE[tone])} aria-hidden="true">{icon}</span>
+        {label}
+      </dt>
+      <dd><Money amount={amount} className={cn('font-semibold', tone === 'danger' ? 'text-danger-fg' : 'text-fg')} /></dd>
+    </div>
+  );
+}

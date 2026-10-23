@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { User, UserPlus, X, ChevronDown, Check, PauseCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { formatCurrency } from '../../lib/formatters';
+import { cn } from '../../lib/cn';
+import { Button, IconButton, Kbd, Money } from '../ui';
 
-const MotionDiv = motion.div as any;
+/** Long customer lists render only the best matches; typing narrows them down. */
+const MAX_VISIBLE_CUSTOMERS = 60;
 
 interface PosCustomerSelectProps {
   customerContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -20,9 +21,11 @@ interface PosCustomerSelectProps {
   cartLength: number;
   handleHoldOrder: () => void;
   paymentMode?: string;
+  /** Holding is paused while a sale is being saved. */
+  locked?: boolean;
 }
 
-export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
+export const PosCustomerSelect = memo(function PosCustomerSelect({
   customerContainerRef,
   customerSearchInputRef,
   customerSearch,
@@ -36,30 +39,43 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
   setNewCustomerModalOpen,
   cartLength,
   handleHoldOrder,
-  paymentMode
-}) => {
-  const selectedCustomer = (customers || []).find(c => c.id === selectedCustomerId);
+  paymentMode,
+  locked = false
+}: PosCustomerSelectProps) {
+  const selectedCustomer = useMemo(() => (customers || []).find(c => c.id === selectedCustomerId), [customers, selectedCustomerId]);
+  const visibleCustomers = customerDropdownOpen ? filteredCustomers.slice(0, MAX_VISIBLE_CUSTOMERS) : [];
+  const hiddenCount = Math.max(0, filteredCustomers.length - visibleCustomers.length);
+  const selectedBalance = Number(selectedCustomer?.balance || 0);
+
+  const choose = (id: string) => {
+    setSelectedCustomerId(id);
+    setCustomerSearch('');
+    setCustomerDropdownOpen(false);
+  };
 
   return (
-    <div className="pos-customer-select p-2.5 bg-slate-50/70 dark:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2" ref={customerContainerRef}>
-      <div className="relative flex-1">
-        <div className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-          <User size={15} />
-        </div>
+    <div className="pos-customer-select flex items-center gap-2 border-b border-line bg-surface-2/60 p-2.5" ref={customerContainerRef}>
+      <div className="relative min-w-0 flex-1">
+        <User className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-faint" aria-hidden="true" />
         <input
           ref={customerSearchInputRef}
           type="text"
+          role="combobox"
+          aria-expanded={customerDropdownOpen}
+          aria-controls="pos-customer-options"
+          aria-autocomplete="list"
           aria-label="Search or select customer"
-          placeholder="Select or Search Customer... [F4]"
-          className="w-full pl-8 pr-7 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-lime-500/20 focus:border-lime-500 transition-all shadow-sm"
+          placeholder="Customer search karein..."
+          autoComplete="off"
+          className={cn(
+            'ds-control h-11 w-full rounded-control border border-line bg-surface pl-9 text-sm font-semibold text-fg shadow-e1 outline-none transition-[border-color,box-shadow] duration-150',
+            'placeholder:font-normal placeholder:text-fg-faint hover:border-line-strong focus:border-brand-accent focus:ring-4 focus:ring-ring/20',
+            selectedCustomerId ? 'pr-12 sm:pr-36' : 'pr-10 md:pr-16',
+          )}
           value={customerDropdownOpen ? customerSearch : (selectedCustomer ? selectedCustomer.name : 'Walk-in Customer')}
           onFocus={() => {
             setCustomerDropdownOpen(true);
-            if (!selectedCustomerId) {
-              setCustomerSearch('');
-            } else {
-              setCustomerSearch(selectedCustomer?.name || '');
-            }
+            setCustomerSearch(selectedCustomerId ? (selectedCustomer?.name || '') : '');
           }}
           onChange={e => {
             setCustomerSearch(e.target.value);
@@ -68,137 +84,119 @@ export const PosCustomerSelect: React.FC<PosCustomerSelectProps> = ({
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              if (filteredCustomers.length > 0) {
-                setSelectedCustomerId(filteredCustomers[0].id);
-                setCustomerSearch('');
-                setCustomerDropdownOpen(false);
-              }
+              if (filteredCustomers.length > 0) choose(filteredCustomers[0].id);
             }
           }}
         />
         {selectedCustomerId ? (
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 z-10">
-            {paymentMode === 'Credit' && (
-              <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded text-[10px] font-bold tracking-wide">
-                📒 Khata
+          <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1">
+            {paymentMode === 'Credit' ? (
+              <span className="hidden h-6 items-center rounded-full bg-warning-soft px-2 text-[11px] font-bold text-warning-fg ring-1 ring-inset ring-warning/25 sm:inline-flex">Khata</span>
+            ) : selectedBalance !== 0 && !customerDropdownOpen ? (
+              <span className="hidden h-6 items-center gap-1 rounded-full bg-surface-2 px-2 text-[11px] font-semibold ring-1 ring-inset ring-line sm:inline-flex" title={selectedBalance > 0 ? 'Customer ka purana due' : 'Customer ka advance'}>
+                <span className="text-fg-subtle">{selectedBalance > 0 ? 'Due' : 'Adv'}</span>
+                <Money amount={Math.abs(selectedBalance)} tone="plain" className={selectedBalance > 0 ? 'text-danger-fg' : 'text-success-fg'} />
               </span>
-            )}
-            <button aria-label="Reset to Walk-in Customer"
-              type="button"
-              onClick={() => {
-                setSelectedCustomerId('');
-                setCustomerSearch('');
-              }}
-              className="text-slate-400 hover:text-red-500 transition-colors p-0.5 cursor-pointer"
-              title="Reset to Walk-in Customer"
-            >
-              <X size={13} />
-            </button>
+            ) : null}
+            <IconButton
+              size="sm"
+              aria-label="Reset to Walk-in Customer"
+              icon={<X />}
+              onClick={() => { setSelectedCustomerId(''); setCustomerSearch(''); }}
+              className="text-fg-faint hover:bg-danger-soft hover:text-danger-fg"
+            />
           </div>
         ) : (
-          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-            <ChevronDown size={14} />
+          <div className="pointer-events-none absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5 text-fg-faint">
+            <Kbd className="hidden md:inline-flex">F4</Kbd>
+            <ChevronDown className="size-4" aria-hidden="true" />
           </div>
         )}
 
-        <AnimatePresence>
-          {customerDropdownOpen && (
-            <MotionDiv
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              className="absolute left-0 right-0 z-50 mt-1 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden max-h-56 overflow-y-auto"
-            >
-              <div className="p-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedCustomerId('');
-                    setCustomerSearch('');
-                    setCustomerDropdownOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors cursor-pointer ${
-                    !selectedCustomerId 
-                      ? 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 font-bold' 
-                      : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-slate-400"></span>
-                    Walk-in Customer (General)
-                  </span>
-                  {!selectedCustomerId && <Check size={13} className="text-lime-600 dark:text-lime-400" />}
-                </button>
+        {customerDropdownOpen && (
+          <div
+            id="pos-customer-options"
+            role="listbox"
+            aria-label="Customers"
+            className="absolute left-0 right-0 z-50 mt-1.5 max-h-72 overflow-y-auto rounded-card border border-line bg-surface p-1 shadow-e2 animate-fade-up"
+          >
+            <CustomerOption selected={!selectedCustomerId} onSelect={() => choose('')}>
+              <span className="flex items-center gap-2 font-semibold text-fg">
+                <span className="size-2 rounded-full bg-fg-faint" aria-hidden="true" />
+                Walk-in Customer (General)
+              </span>
+            </CustomerOption>
 
-                {filteredCustomers.length > 0 ? (
-                  filteredCustomers.map(c => {
-                    const isSelected = selectedCustomerId === c.id;
-                    const bal = Number(c.balance || 0);
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCustomerId(c.id);
-                          setCustomerSearch('');
-                          setCustomerDropdownOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs text-left transition-colors cursor-pointer ${
-                          isSelected 
-                            ? 'bg-lime-50 dark:bg-lime-950/40 text-lime-700 dark:text-lime-300 font-bold' 
-                            : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        }`}
-                      >
-                        <div className="flex flex-col min-w-0 pr-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-slate-800 dark:text-slate-100 truncate">
-                              {c.name}
-                            </span>
-                            {bal > 0 ? (
-                              <span className="text-xs font-bold px-1.5 py-0.2 rounded bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 font-mono">
-                                Due {formatCurrency(bal)}
-                              </span>
-                            ) : bal < 0 ? (
-                              <span className="text-xs font-bold px-1.5 py-0.2 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-mono">
-                                Adv {formatCurrency(Math.abs(bal))}
-                              </span>
-                            ) : null}
-                          </div>
-                          <span className="text-[10px] text-slate-400 truncate">Ph: {c.phone || 'N/A'}{c.city ? ` • ${c.city}` : ''}</span>
-                        </div>
-                        {isSelected && <Check size={13} className="text-lime-600 dark:text-lime-400 shrink-0" />}
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="p-3 text-center text-xs text-slate-400">
-                    No customer found matching "{customerSearch}"
-                  </div>
-                )}
-              </div>
-            </MotionDiv>
-          )}
-        </AnimatePresence>
+            {visibleCustomers.length > 0 ? (
+              visibleCustomers.map(c => {
+                const bal = Number(c.balance || 0);
+                return (
+                  <CustomerOption key={c.id} selected={selectedCustomerId === c.id} onSelect={() => choose(c.id)}>
+                    <span className="flex min-w-0 flex-col pr-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-semibold text-fg">{c.name}</span>
+                        {bal !== 0 && (
+                          <span className={cn('inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11px] font-semibold ring-1 ring-inset', bal > 0 ? 'bg-danger-soft text-danger-fg ring-danger/20' : 'bg-success-soft text-success-fg ring-success/20')}>
+                            {bal > 0 ? 'Due' : 'Adv'} <Money amount={Math.abs(bal)} />
+                          </span>
+                        )}
+                      </span>
+                      <span className="truncate text-[11px] text-fg-subtle">Ph: {c.phone || 'N/A'}{c.city ? ` · ${c.city}` : ''}</span>
+                    </span>
+                  </CustomerOption>
+                );
+              })
+            ) : (
+              <p className="p-3 text-center text-xs text-fg-subtle">No customer found matching "{customerSearch}"</p>
+            )}
+            {hiddenCount > 0 && (
+              <p className="px-3 py-2 text-center text-[11px] text-fg-subtle">+{hiddenCount} aur customers — naam ya phone likh kar search karein</p>
+            )}
+          </div>
+        )}
       </div>
 
-      <button aria-label="Quick Add Customer"
-        type="button"
+      <IconButton
+        variant="primary"
+        size="lg"
+        aria-label="Quick Add Customer"
+        icon={<UserPlus />}
         onClick={() => setNewCustomerModalOpen(true)}
-        className="p-1.5 bg-lime-600 hover:bg-lime-700 text-white rounded-lg shadow-sm transition-all active:scale-95 flex items-center justify-center shrink-0 cursor-pointer"
-        title="Quick Add Customer"
-      >
-        <UserPlus size={15} />
-      </button>
+        className="size-11"
+      />
 
       {cartLength > 0 && (
-        <button 
-          onClick={handleHoldOrder} 
-          className="px-2 py-1.5 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-lg text-xs font-bold hover:bg-amber-100 dark:hover:bg-amber-900/50 flex items-center gap-1 transition-all shrink-0 shadow-sm cursor-pointer"
-          title="Hold Current Order (F8)"
+        <Button
+          variant="secondary"
+          size="lg"
+          className="h-11 px-3 text-warning-fg"
+          leftIcon={<PauseCircle />}
+          disabled={locked}
+          onClick={handleHoldOrder}
+          title="Hold / park current order (F8)"
         >
-          <PauseCircle size={13} /> Hold
-        </button>
+          Hold
+          <Kbd className="hidden md:inline-flex">F8</Kbd>
+        </Button>
       )}
     </div>
   );
-};
+});
+
+function CustomerOption({ selected, onSelect, children }: { selected: boolean; onSelect: () => void; children: React.ReactNode; key?: React.Key }) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      onClick={onSelect}
+      className={cn(
+        'flex min-h-11 w-full cursor-pointer items-center justify-between rounded-[10px] px-3 py-1.5 text-left text-[13px] transition-colors',
+        selected ? 'bg-brand-soft' : 'hover:bg-surface-2',
+      )}
+    >
+      {children}
+      {selected && <Check className="size-4 shrink-0 text-brand-fg" aria-hidden="true" />}
+    </button>
+  );
+}

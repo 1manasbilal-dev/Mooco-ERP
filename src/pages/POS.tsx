@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useMemo, useEffect, useRef, useCallback, useDeferredValue } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
@@ -9,29 +9,82 @@ import { checkoutCustomerOrder, getCustomerOrder } from '../lib/customerOrders';
 import { CustomerOrder } from '../types';
 import { stepWholeQuantity } from '../lib/posQuickEntry';
 import { cartLineContains, cartLineUsesMainStock, qtyAfterUnitSwitch, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../lib/sellUnits';
-import { ShoppingCart, ClipboardCheck, ArrowLeft, Loader2, AlertCircle, Banknote } from 'lucide-react';
-import { PosShiftModal } from '../components/PosShiftModal';
+import { ShoppingCart, ClipboardCheck, ArrowLeft, AlertCircle, Banknote, Lock, Clock, Printer, ArrowRight, RefreshCw } from 'lucide-react';
 import { HeldOrder, AvailableProduct, PosNewCustomerData, LastCompletedSale } from '../components/pos/PosTypes';
 import { PosHeaderAnalytics } from '../components/pos/PosHeaderAnalytics';
 import { PosProductGrid } from '../components/pos/PosProductGrid';
 import { PosCustomerSelect } from '../components/pos/PosCustomerSelect';
 import { PosCart } from '../components/pos/PosCart';
 import { PosPaymentPanel } from '../components/pos/PosPaymentPanel';
-import { 
-  PosQuickAmountModal, 
-  PosHeldOrdersModal, 
-  PosShortcutsModal, 
-  PosReceiptModal, 
-  PosNewCustomerModal, 
-  PosEditItemModal 
-} from '../components/pos/PosModals';
 import { confirmAction } from '../components/ui/ConfirmDialog';
 import { useManagerApproval } from '../components/ui/ManagerApproval';
+import { Button, Card, Money, Skeleton } from '../components/ui';
+import '../styles/pos.css';
+
+// Dialogs load after the counter is on screen (and are fetched while the cashier is idle),
+// so they are not part of the POS first chunk. A failed fetch is retried once.
+const lazyRetry = <T,>(load: () => Promise<T>) => () => load().catch(() => new Promise<T>((resolve, reject) => {
+  window.setTimeout(() => { load().then(resolve, reject); }, 800);
+}));
+const loadQuickModal = () => import('../components/pos/PosQuickAmountModal');
+const loadPosModals = () => import('../components/pos/PosModals');
+const loadShiftModal = () => import('../components/PosShiftModal');
+const PosQuickAmountModal = lazy(lazyRetry(loadQuickModal));
+const PosHeldOrdersModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosHeldOrdersModal }))));
+const PosShortcutsModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosShortcutsModal }))));
+const PosReceiptModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosReceiptModal }))));
+const PosNewCustomerModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosNewCustomerModal }))));
+const PosEditItemModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosEditItemModal }))));
+const PosShiftModal = lazy(lazyRetry(() => loadShiftModal().then(m => ({ default: m.PosShiftModal }))));
 
 /** Packs of one packed variant already sitting in the cart, excluding one line. Packed twin of reservedBaseQty. */
 const reservedPackedQty = (cart: any[], productId: string, variantId: string, exceptCartItemId?: string): number => cleanQty(cart
   .filter(line => line.id === productId && line.variantId === variantId && line.cartItemId !== exceptCartItemId && !cartLineUsesMainStock(line))
   .reduce((sum, line) => sum + (Number(line.qty) || 0), 0));
+
+const getLineTotal = (item: any) => {
+  if (item.customTotal !== undefined && item.customTotal !== null && !isNaN(item.customTotal)) {
+    return roundCurrency(item.customTotal);
+  }
+  return roundCurrency(item.price * item.qty);
+};
+
+// Pre-packed piles are counted, so their quantity is a whole number. Multi-unit packs may be 0.5 Dozen.
+const packedQtyIsWhole = (qty: number) => Math.abs(qty - Math.round(qty)) < 0.001;
+
+// Bill timestamps are UTC; "today" is the Pakistan day they were punched. One formatter, reused for every bill.
+const pakistanDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' });
+
+const readDraft = (): any => {
+  try {
+    const draft = sessionStorage.getItem('mooco_pos_cart_draft');
+    return draft ? JSON.parse(draft) : null;
+  } catch {
+    return null;
+  }
+};
+
+const isCounterDesktop = () => window.matchMedia('(min-width: 1024px) and (pointer: fine)').matches;
+
+/** Stable function identity that always runs the latest render's handler, so memoised children are not re-rendered. */
+function useLatestCallback<T extends (...args: any[]) => any>(handler: T): T {
+  const ref = useRef(handler);
+  ref.current = handler;
+  const [stable] = useState(() => ((...args: any[]) => ref.current(...args)) as T);
+  return stable;
+}
+
+const EMPTY_CUSTOMER: PosNewCustomerData = {
+  name: '',
+  phone: '',
+  is_phone_whatsapp: true,
+  whatsapp: '',
+  city: '',
+  address: '',
+  balanceType: 'None',
+  balanceAmount: '',
+  notes: ''
+};
 
 const POS: React.FC = () => {
   const {
@@ -39,8 +92,8 @@ const POS: React.FC = () => {
     currentUser, activeShiftSession, isDayLocked, getBusinessDate, setIsUserSwitcherOpen, retryLoading, canPerform, hasPermission
   } = useDairy();
   const { showToast } = useToast();
-  const { requestApproval, approvalDialog } = useManagerApproval(); 
-  const navigate = useNavigate(); 
+  const { requestApproval, approvalDialog } = useManagerApproval();
+  const navigate = useNavigate();
   const location = useLocation();
   const bookingId = new URLSearchParams(location.search).get('order');
   const [booking, setBooking] = useState<CustomerOrder | null>(null);
@@ -52,42 +105,18 @@ const POS: React.FC = () => {
   const counterState = useRef<any>(null);
   const cartRef = useRef<any[]>([]);
 
-  const isTodayLocked = isDayLocked(getBusinessDate()); 
-  
+  const isTodayLocked = isDayLocked(getBusinessDate());
+
   const [cart, setCart] = useState<any[]>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (Array.isArray(parsed.cart)) return parsed.cart;
-      }
-    } catch {}
-    return [];
+    const draft = readDraft();
+    return Array.isArray(draft?.cart) ? draft.cart : [];
   });
   cartRef.current = cart;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isSubmittingRef = useRef(false);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.selectedCustomerId) return parsed.selectedCustomerId;
-      }
-    } catch {}
-    return '';
-  });
-  const [paymentMode, setPaymentMode] = useState<string>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.paymentMode) return parsed.paymentMode;
-      }
-    } catch {}
-    return 'Cash';
-  });
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => readDraft()?.selectedCustomerId || '');
+  const [paymentMode, setPaymentMode] = useState<string>(() => readDraft()?.paymentMode || 'Cash');
   const [searchProduct, setSearchProduct] = useState('');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog');
@@ -95,6 +124,23 @@ const POS: React.FC = () => {
   const showProductCategories = settings.sales?.showPosCategories !== false;
   useEffect(() => { if (!showProductSearch) setSearchProduct(''); }, [showProductSearch]);
   useEffect(() => { if (!showProductCategories) setSelectedCategories([]); }, [showProductCategories]);
+
+  // Default payment mode: Always default to 'Cash' on every new entry or customer selection.
+  // If the user explicitly selects Online or Credit, it only applies to that current bill.
+  // A restored bill (parked, booking, counter cart) keeps its own customer and mode; the flag is only
+  // raised when that restore really changes them, so a stale flag never skips a later reset.
+  const prevCustomerIdRef = useRef<string>(selectedCustomerId);
+  const isRecallingRef = useRef(false);
+  const currentSelection = useRef({ customerId: selectedCustomerId, paymentMode });
+  currentSelection.current = { customerId: selectedCustomerId, paymentMode };
+  const markRestoring = (customerId: string, mode: string) => {
+    isRecallingRef.current = customerId !== currentSelection.current.customerId || mode !== currentSelection.current.paymentMode;
+  };
+
+  const [quickModalOpen, setQuickModalOpen] = useState(false);
+  const [quickProduct, setQuickProduct] = useState<any | null>(null);
+  const [pendingQuick, setPendingQuick] = useState<{ id: string; initial: { mode: 'amount' | 'qty'; value: string; variantId?: string } | null } | null>(null);
+  const [quickInitial, setQuickInitial] = useState<{ mode: 'amount' | 'qty'; value: string; variantId?: string } | null>(null);
 
   // Direct product search or customer from Command Palette or URL
   useEffect(() => {
@@ -133,46 +179,10 @@ const POS: React.FC = () => {
     return () => window.removeEventListener('mooco-select-product', handleSelectProduct);
   }, []);
 
-  const [discountType, setDiscountType] = useState<'flat' | 'percent'>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.discountType) return parsed.discountType;
-      }
-    } catch {}
-    return 'flat';
-  });
-  const [discountValue, setDiscountValue] = useState<string>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.discountValue) return parsed.discountValue;
-      }
-    } catch {}
-    return '';
-  });
-  const [cashReceived, setCashReceived] = useState<string>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.cashReceived) return parsed.cashReceived;
-      }
-    } catch {}
-    return '';
-  });
-  const [customerPaidAmount, setCustomerPaidAmount] = useState<string>(() => {
-    try {
-      const draft = sessionStorage.getItem('mooco_pos_cart_draft');
-      if (draft) {
-        const parsed = JSON.parse(draft);
-        if (parsed.customerPaidAmount) return parsed.customerPaidAmount;
-      }
-    } catch {}
-    return '';
-  });
+  const [discountType, setDiscountType] = useState<'flat' | 'percent'>(() => readDraft()?.discountType || 'flat');
+  const [discountValue, setDiscountValue] = useState<string>(() => readDraft()?.discountValue || '');
+  const [cashReceived, setCashReceived] = useState<string>(() => readDraft()?.cashReceived || '');
+  const [customerPaidAmount, setCustomerPaidAmount] = useState<string>(() => readDraft()?.customerPaidAmount || '');
 
   // Sync active counter draft to sessionStorage so switching tabs never resets state
   useEffect(() => {
@@ -199,7 +209,7 @@ const POS: React.FC = () => {
       setBooking(null); setBookingError(''); setBookingLoading(false);
       if (counterState.current) {
         const saved = counterState.current; counterState.current = null;
-        isRecallingRef.current = true;
+        markRestoring(saved.customerId, saved.paymentMode);
         setCart(saved.cart); setSelectedCustomerId(saved.customerId); setPaymentMode(saved.paymentMode);
         setDiscountType(saved.discountType); setDiscountValue(saved.discountValue);
         setCashReceived(saved.cashReceived); setCustomerPaidAmount(saved.customerPaidAmount); setMobileTab(saved.mobileTab);
@@ -216,9 +226,10 @@ const POS: React.FC = () => {
       if (cancelled) return;
       if (!['Confirmed', 'Ready'].includes(order.status)) throw new Error(order.status === 'Completed' ? 'This order has already been billed. Open its invoice from Customer Orders.' : 'Confirm this order before billing. Cancelled orders cannot be billed.');
       const remainingDue = Math.max(0, order.total - Number(order.advance_paid || 0));
+      const bookingMode = remainingDue === 0 ? 'Cash' : 'Credit';
       // Keep the booking's payment defaults: the customer-change effect would reset them to Cash / blank.
-      isRecallingRef.current = true;
-      setBooking(order); setSelectedCustomerId(order.customer_id); setPaymentMode(remainingDue === 0 ? 'Cash' : 'Credit'); setCustomerPaidAmount(remainingDue === 0 ? '0' : String(remainingDue));
+      markRestoring(order.customer_id, bookingMode);
+      setBooking(order); setSelectedCustomerId(order.customer_id); setPaymentMode(bookingMode); setCustomerPaidAmount(remainingDue === 0 ? '0' : String(remainingDue));
       setDiscountType('flat'); setDiscountValue(String(order.discount)); setMobileTab('cart');
       setCart(order.items.map((line, index) => {
         const product = (items || []).find(i => i.id === line.itemId);
@@ -243,6 +254,9 @@ const POS: React.FC = () => {
   const [heldOrdersModalOpen, setHeldOrdersModalOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  // The shift dialog keeps its own form state, so once loaded it stays mounted (it renders nothing while closed).
+  const [shiftModalLoaded, setShiftModalLoaded] = useState(false);
+  useEffect(() => { if (isShiftModalOpen) setShiftModalLoaded(true); }, [isShiftModalOpen]);
 
   const [completedSaleModalOpen, setCompletedSaleModalOpen] = useState(false);
   const [lastCompletedSale, setLastCompletedSale] = useState<LastCompletedSale | null>(null);
@@ -250,27 +264,12 @@ const POS: React.FC = () => {
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
-  
+
   const productSearchInputRef = useRef<HTMLInputElement>(null);
   const customerSearchInputRef = useRef<HTMLInputElement>(null);
   const customerContainerRef = useRef<HTMLDivElement>(null);
 
-  const [newCustomer, setNewCustomer] = useState<PosNewCustomerData>({
-    name: '',
-    phone: '',
-    is_phone_whatsapp: true,
-    whatsapp: '',
-    city: '',
-    address: '',
-    balanceType: 'None',
-    balanceAmount: '',
-    notes: ''
-  });
-
-  const [quickModalOpen, setQuickModalOpen] = useState(false);
-  const [quickProduct, setQuickProduct] = useState<any | null>(null);
-  const [pendingQuick, setPendingQuick] = useState<{ id: string; initial: { mode: 'amount' | 'qty'; value: string; variantId?: string } | null } | null>(null);
-  const [quickInitial, setQuickInitial] = useState<{ mode: 'amount' | 'qty'; value: string; variantId?: string } | null>(null);
+  const [newCustomer, setNewCustomer] = useState<PosNewCustomerData>(EMPTY_CUSTOMER);
 
   const [editingCartItem, setEditingCartItem] = useState<any | null>(null);
   const [editRate, setEditRate] = useState<string>('');
@@ -278,7 +277,20 @@ const POS: React.FC = () => {
   const [editTotal, setEditTotal] = useState<string>('');
   const [editVariantId, setEditVariantId] = useState<string>('base');
 
+  // Fetch the dialog chunks while the counter is idle, so the first tap on a product opens instantly.
   useEffect(() => {
+    const preload = () => { void loadQuickModal().catch(() => {}); void loadPosModals().catch(() => {}); void loadShiftModal().catch(() => {}); };
+    const idle = window as any;
+    if (typeof idle.requestIdleCallback === 'function') {
+      const id = idle.requestIdleCallback(preload, { timeout: 2500 });
+      return () => idle.cancelIdleCallback(id);
+    }
+    const timer = window.setTimeout(preload, 1200);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!customerDropdownOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
       if (customerContainerRef.current && !customerContainerRef.current.contains(event.target as Node)) {
         setCustomerDropdownOpen(false);
@@ -286,7 +298,7 @@ const POS: React.FC = () => {
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [customerDropdownOpen]);
 
   useEffect(() => {
     try {
@@ -296,9 +308,10 @@ const POS: React.FC = () => {
     }
   }, [heldOrders]);
 
+  const deferredCustomerSearch = useDeferredValue(customerSearch);
   const filteredCustomers = useMemo(() => {
     if (!customers || !Array.isArray(customers)) return [];
-    const query = (customerSearch || '').toLowerCase().trim();
+    const query = (deferredCustomerSearch || '').toLowerCase().trim();
     return customers.filter(c => {
       if (!c || c.isActive === false) return false;
       if (!query) return true;
@@ -307,17 +320,11 @@ const POS: React.FC = () => {
       const routeMatch = (c.route || '').toLowerCase().includes(query);
       return nameMatch || phoneMatch || routeMatch;
     });
-  }, [customers, customerSearch]);
+  }, [customers, deferredCustomerSearch]);
 
   // Today's counter sales, excluding returns and net of refunds
   const todaySummary = useMemo(() => {
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    // Bill timestamps are UTC; compare on the Pakistan day they were punched.
-    const todaySales = (sales || []).filter(s => {
-      const saleDate = typeof s?.date === 'string' ? new Date(s.date).toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }) : '';
-      return saleDate === todayStr;
-    });
-
+    const todayStr = pakistanDay.format(new Date());
     let totalRevenue = 0;
     let totalCount = 0;
     let cashTotal = 0;
@@ -326,11 +333,15 @@ const POS: React.FC = () => {
     let returnedTotal = 0;
     let returnedCount = 0;
 
-    todaySales.forEach(s => {
+    (sales || []).forEach(s => {
+      if (typeof s?.date !== 'string') return;
+      const saleDate = new Date(s.date);
+      if (Number.isNaN(saleDate.getTime()) || pakistanDay.format(saleDate) !== todayStr) return;
+
       const isFullReturn = s?.status === 'Returned';
       const refundAmt = Number(s?.refund_amount) || 0;
-      const billTotal = Number(s?.total_amount || s?.total || 0);
-      const mode = s?.payment_mode || s?.payment_method || 'Cash';
+      const billTotal = Number((s as any)?.total_amount || s?.total || 0);
+      const mode = s?.payment_mode || (s as any)?.payment_method || 'Cash';
 
       if (isFullReturn) {
         returnedCount += 1;
@@ -369,16 +380,11 @@ const POS: React.FC = () => {
     };
   }, [sales]);
 
-  // Default payment mode: Always default to 'Cash' on every new entry or customer selection.
-  // If the user explicitly selects Online or Credit, it only applies to that current bill.
-  const prevCustomerIdRef = useRef<string>(selectedCustomerId);
-  const isRecallingRef = useRef(false);
-
-  const handleSelectCustomer = (customerId: string) => {
+  const handleSelectCustomer = useCallback((customerId: string) => {
     setSelectedCustomerId(customerId);
     setPaymentMode('Cash');
     setCustomerPaidAmount('');
-  };
+  }, []);
 
   useEffect(() => {
     if (isRecallingRef.current) {
@@ -403,14 +409,26 @@ const POS: React.FC = () => {
   }, [selectedCustomerId, paymentMode]);
 
   const allAvailableProducts: AvailableProduct[] = useMemo(() => {
-    const sellableItems = (items || []).filter(i => 
-      i && i.isActive && 
-      Array.isArray(i.item_type) && i.item_type.includes('Sale product') && 
+    const sellableItems = (items || []).filter(i =>
+      i && i.isActive &&
+      Array.isArray(i.item_type) && i.item_type.includes('Sale product') &&
       !i.item_type.includes('Packaging material')
     );
 
+    // First inventory row matching by item id or by name, as a linear find would return, without an O(n²) scan.
+    const firstById = new Map<string, number>();
+    const firstByName = new Map<string, number>();
+    (inventory || []).forEach((inv: any, index) => {
+      if (!inv) return;
+      if (inv.item_id !== undefined && !firstById.has(inv.item_id)) firstById.set(inv.item_id, index);
+      if (inv.name !== undefined && !firstByName.has(inv.name)) firstByName.set(inv.name, index);
+    });
+
     return sellableItems.map(itemDef => {
-      const stockItem = (inventory || []).find(inv => inv?.item_id === itemDef.id || inv?.name === itemDef.name);
+      const byId = firstById.get(itemDef.id);
+      const byName = firstByName.get(itemDef.name);
+      const stockIndex = byId === undefined ? byName : byName === undefined ? byId : Math.min(byId, byName);
+      const stockItem: any = stockIndex === undefined ? undefined : (inventory || [])[stockIndex];
       const vStocks = stockItem?.variant_stocks || itemDef.variant_stocks || {};
       const looseStock = stockItem ? (stockItem.quantity || 0) : (itemDef.stock || 0);
       const totalVariantStock = (itemDef.variants || []).reduce((sum: number, v: any) => sum + (Number(vStocks[v.id]) || 0), 0);
@@ -421,10 +439,10 @@ const POS: React.FC = () => {
         : (totalVariantStock > 0 || settings.inventory.allowNegativeStock);
 
       return {
-        id: itemDef.id, 
-        name: itemDef.name, 
-        price: itemDef.selling_price || 0, 
-        unit: itemDef.unit || 'Unit', 
+        id: itemDef.id,
+        name: itemDef.name,
+        price: itemDef.selling_price || 0,
+        unit: itemDef.unit || 'Unit',
         category: Array.isArray(itemDef.category) ? itemDef.category : [],
         stock: looseStock,
         variants: itemDef.variants || [],
@@ -445,18 +463,20 @@ const POS: React.FC = () => {
     });
   }, [items, inventory, settings.inventory.allowNegativeStock]);
 
-  const availableProducts = useMemo(() => {
+  // The catalog filters on a deferred copy of the search text, so typing stays instant with hundreds of products.
+  // allAvailableProducts is already in display order, so filtering keeps that order.
+  const filterCatalog = useCallback((search: string) => {
+    const query = (search || '').toLowerCase();
     return allAvailableProducts.filter(p => {
-      const matchesSearch = !showProductSearch || (p.name || '').toLowerCase().includes((searchProduct || '').toLowerCase());
+      const matchesSearch = !showProductSearch || (p.name || '').toLowerCase().includes(query);
       const matchesCategory = !showProductCategories || selectedCategories.length === 0 || (Array.isArray(p.category) && p.category.some(cat => selectedCategories.includes(cat)));
       return matchesSearch && matchesCategory;
-    }).sort((a, b) => {
-      const orderA = a.sort_order ?? 999;
-      const orderB = b.sort_order ?? 999;
-      if (orderA !== orderB) return orderA - orderB;
-      return a.name.localeCompare(b.name);
     });
-  }, [allAvailableProducts, searchProduct, selectedCategories, showProductSearch, showProductCategories]);
+  }, [allAvailableProducts, selectedCategories, showProductSearch, showProductCategories]);
+  const deferredProductSearch = useDeferredValue(searchProduct);
+  const availableProducts = useMemo(() => filterCatalog(deferredProductSearch), [filterCatalog, deferredProductSearch]);
+  // Enter in the search box uses the text as typed, not the deferred list.
+  const findFirstMatch = useLatestCallback((search: string) => filterCatalog(search).find(item => item.is_available));
 
   const validCategories = useMemo(() => {
     const list = new Set<string>();
@@ -470,8 +490,17 @@ const POS: React.FC = () => {
     return Array.from(list).sort();
   }, [items]);
 
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    allAvailableProducts.forEach(p => p.category.forEach(cat => { counts[cat] = (counts[cat] || 0) + 1; }));
+    return counts;
+  }, [allAvailableProducts]);
+
   useEffect(() => {
-    setSelectedCategories(previous => previous.filter(category => validCategories.includes(category)));
+    setSelectedCategories(previous => {
+      const next = previous.filter(category => validCategories.includes(category));
+      return next.length === previous.length ? previous : next;
+    });
   }, [validCategories]);
 
   // Open the quick-entry dialog requested from the product detail page.
@@ -489,13 +518,19 @@ const POS: React.FC = () => {
     setQuickModalOpen(true);
   }, [pendingQuick, allAvailableProducts]);
 
-  // Counted in base units, so 2 Dozen + 3 pcs reads 27 pcs, not 5.
+  // Counted in base units, so 2 Dozen + 3 pcs reads 27 pcs, not 5. Keeps its identity while the counts are
+  // unchanged (rate or total edits), so the product grid does not re-render for them.
+  const previousCartQty = useRef<Record<string, number>>({});
   const cartQtyByProductId = useMemo(() => {
     const map: Record<string, number> = {};
     cart.forEach(item => {
       const qty = typeof item.qty === 'number' ? item.qty : 1;
       map[item.id] = cleanQty((map[item.id] || 0) + qty * cartLineContains(item));
     });
+    const previous = previousCartQty.current;
+    const keys = Object.keys(map);
+    if (keys.length === Object.keys(previous).length && keys.every(key => previous[key] === map[key])) return previous;
+    previousCartQty.current = map;
     return map;
   }, [cart]);
 
@@ -505,16 +540,6 @@ const POS: React.FC = () => {
     const main = live?.stock ?? line.stock;
     const packed = variantId ? (live?.variant_stocks?.[variantId] ?? line.variant_stocks?.[variantId]) : 0;
     return { main: Number(main) || 0, packed: Number(packed) || 0 };
-  };
-
-  // Pre-packed piles are counted, so their quantity is a whole number. Multi-unit packs may be 0.5 Dozen.
-  const packedQtyIsWhole = (qty: number) => Math.abs(qty - Math.round(qty)) < 0.001;
-
-  const getLineTotal = (item: any) => {
-    if (item.customTotal !== undefined && item.customTotal !== null && !isNaN(item.customTotal)) {
-      return roundCurrency(item.customTotal);
-    }
-    return roundCurrency(item.price * item.qty);
   };
 
   const subtotal = useMemo(() => {
@@ -572,82 +597,84 @@ const POS: React.FC = () => {
   }, [selectedCustomerId, paymentMode, customerPaidVal, grandTotal, bookingAdvance]);
 
   // Recently used pages stay mounted but hidden, so shortcuts must only act while POS is on screen.
-  // The listener calls the latest checkout/hold handlers through refs, so F9 never submits stale
-  // amounts (e.g. a partial payment typed just before the key press).
+  // The listener is bound once and calls the latest handler, so F9 never submits stale amounts
+  // (e.g. a partial payment typed just before the key press).
   const { activeTabId } = useTabs();
   const pageActiveRef = useRef(true);
   pageActiveRef.current = activeTabId === 'pos';
   const checkoutRef = useRef<() => Promise<boolean>>(async () => false);
   const holdOrderRef = useRef<() => void>(() => {});
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!pageActiveRef.current) return;
-      // Dialogs own their keys; F8/F9 must not hold or submit the cart behind them.
-      const target = e.target as HTMLElement | null;
-      if (e.key !== 'Escape' && (quickModalOpen || newCustomerModalOpen || heldOrdersModalOpen || shortcutsModalOpen || completedSaleModalOpen || isShiftModalOpen || editingCartItem || target?.closest('[role="dialog"], [aria-modal="true"]'))) return;
-      if (e.key === 'F2') {
-        e.preventDefault();
-        setMobileTab('catalog');
-        requestAnimationFrame(() => {
-          if (showProductSearch) { productSearchInputRef.current?.focus(); productSearchInputRef.current?.select(); }
-          else document.querySelector<HTMLButtonElement>('.pos-catalog-panel [data-pos-product]:not(:disabled)')?.focus();
-        });
-      } else if (e.key === 'F4') {
-        e.preventDefault();
-        setMobileTab('cart');
-        requestAnimationFrame(() => customerSearchInputRef.current?.focus());
-        setCustomerDropdownOpen(true);
-      } else if (e.key === 'F8') {
-        e.preventDefault();
-        holdOrderRef.current();
-      } else if (e.key === 'F9') {
-        e.preventDefault();
-        // A held-down key must not fire the sale again and again.
-        if (e.repeat) return;
-        if (!isSubmittingRef.current) {
-          // A typed sum (e.g. paid "500+200") is applied only when its field loses focus.
-          // Blur first and read the sale after that update renders, or the bill saves 500.
-          const active = document.activeElement as HTMLElement | null;
-          if (active && active.tagName === 'INPUT') {
-            active.blur();
-            setTimeout(() => { if (!isSubmittingRef.current) void checkoutRef.current(); }, 0);
-          } else {
-            void checkoutRef.current();
-          }
-        }
-      } else if (e.key === 'Escape') {
-        // A confirm dialog on top (e.g. "close shift?") handles its own Escape.
-        if (document.querySelector('[data-app-modal="true"]')) return;
-        if (customerDropdownOpen) {
-          setCustomerDropdownOpen(false);
-        } else if (editingCartItem) {
-          setEditingCartItem(null);
-        } else if (quickModalOpen) {
-          setQuickModalOpen(false);
-        } else if (newCustomerModalOpen) {
-          setNewCustomerModalOpen(false);
-        } else if (heldOrdersModalOpen) {
-          setHeldOrdersModalOpen(false);
-        } else if (shortcutsModalOpen) {
-          setShortcutsModalOpen(false);
-        } else if (isShiftModalOpen) {
-          setIsShiftModalOpen(false);
-        } else if (completedSaleModalOpen) {
-          setCompletedSaleModalOpen(false);
+  const handleShortcut = (e: KeyboardEvent) => {
+    if (!pageActiveRef.current) return;
+    // Dialogs own their keys; F8/F9 must not hold or submit the cart behind them.
+    const target = e.target as HTMLElement | null;
+    if (e.key !== 'Escape' && (quickModalOpen || newCustomerModalOpen || heldOrdersModalOpen || shortcutsModalOpen || completedSaleModalOpen || isShiftModalOpen || editingCartItem || target?.closest('[role="dialog"], [aria-modal="true"]'))) return;
+    if (e.key === 'F2') {
+      e.preventDefault();
+      setMobileTab('catalog');
+      requestAnimationFrame(() => {
+        if (showProductSearch) { productSearchInputRef.current?.focus(); productSearchInputRef.current?.select(); }
+        else document.querySelector<HTMLButtonElement>('.pos-catalog-panel [data-pos-product]:not(:disabled)')?.focus();
+      });
+    } else if (e.key === 'F4') {
+      e.preventDefault();
+      setMobileTab('cart');
+      requestAnimationFrame(() => customerSearchInputRef.current?.focus());
+      setCustomerDropdownOpen(true);
+    } else if (e.key === 'F8') {
+      e.preventDefault();
+      holdOrderRef.current();
+    } else if (e.key === 'F9') {
+      e.preventDefault();
+      // A held-down key must not fire the sale again and again.
+      if (e.repeat) return;
+      if (!isSubmittingRef.current) {
+        // A typed sum (e.g. paid "500+200") is applied only when its field loses focus.
+        // Blur first and read the sale after that update renders, or the bill saves 500.
+        const active = document.activeElement as HTMLElement | null;
+        if (active && active.tagName === 'INPUT') {
+          active.blur();
+          setTimeout(() => { if (!isSubmittingRef.current) void checkoutRef.current(); }, 0);
+        } else {
+          void checkoutRef.current();
         }
       }
-    };
+    } else if (e.key === 'Escape') {
+      // A confirm dialog on top (e.g. "close shift?") handles its own Escape.
+      if (document.querySelector('[data-app-modal="true"]')) return;
+      if (customerDropdownOpen) {
+        setCustomerDropdownOpen(false);
+      } else if (editingCartItem) {
+        setEditingCartItem(null);
+      } else if (quickModalOpen) {
+        setQuickModalOpen(false);
+      } else if (newCustomerModalOpen) {
+        setNewCustomerModalOpen(false);
+      } else if (heldOrdersModalOpen) {
+        setHeldOrdersModalOpen(false);
+      } else if (shortcutsModalOpen) {
+        setShortcutsModalOpen(false);
+      } else if (isShiftModalOpen) {
+        setIsShiftModalOpen(false);
+      } else if (completedSaleModalOpen) {
+        setCompletedSaleModalOpen(false);
+      }
+    }
+  };
+  const shortcutRef = useRef(handleShortcut);
+  shortcutRef.current = handleShortcut;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => shortcutRef.current(e);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cart, selectedCustomerId, paymentMode, discountType, discountValue, cashReceived, isSubmitting, quickModalOpen, newCustomerModalOpen, heldOrdersModalOpen, shortcutsModalOpen, completedSaleModalOpen, isShiftModalOpen, editingCartItem, showProductSearch, customerDropdownOpen]);
-
-  const addToCart = (product: any, qty = 1, variantName?: string, priceOverride?: number, stockDeduction?: number, variantId?: string, customTotal?: number): boolean => {
+  const addToCart = useLatestCallback((product: any, qty = 1, variantName?: string, priceOverride?: number, stockDeduction?: number, variantId?: string, customTotal?: number): boolean => {
     const matched = variantId && variantId !== 'base' ? (product.variants || []).find((v: any) => v.id === variantId) : null;
     const contains = matched ? sellUnitContains(matched) : (stockDeduction !== undefined ? stockDeduction : 1);
     const fromBase = !matched || matched.deduct_from_base === true;
-    const cartItemId = `${product.id}_${variantId || 'base'}_${priceOverride}`; 
+    const cartItemId = `${product.id}_${variantId || 'base'}_${priceOverride}`;
     const existing = cart.find(item => item.cartItemId === cartItemId);
     const finalPrice = priceOverride !== undefined ? priceOverride : product.price;
     const finalDeduction = contains;
@@ -670,16 +697,16 @@ const POS: React.FC = () => {
     const itemUnit = variantId ? (variantName || 'Pack') : (product.unit || 'Unit');
 
     if (existing) {
-      setCart(cart.map(item => item.cartItemId === cartItemId ? { 
-        ...item, 
-        qty: Number((item.qty + qty).toFixed(3)), 
+      setCart(cart.map(item => item.cartItemId === cartItemId ? {
+        ...item,
+        qty: Number((item.qty + qty).toFixed(3)),
         customTotal: customTotal !== undefined || item.customTotal !== undefined
           ? roundCurrency((item.customTotal ?? roundCurrency(item.price * item.qty)) + (customTotal ?? roundCurrency(finalPrice * qty)))
           : undefined
       } : item));
     } else {
-      setCart([...cart, { 
-        ...product, 
+      setCart([...cart, {
+        ...product,
         cartItemId,
         qty: qty,
         originalPrice: finalPrice,
@@ -695,7 +722,7 @@ const POS: React.FC = () => {
       }]);
     }
     return true;
-  };
+  });
 
   const enoughStock = (item: any, nextQty: number) => {
     const fromBase = cartLineUsesMainStock(item);
@@ -711,7 +738,7 @@ const POS: React.FC = () => {
     return true;
   };
 
-  const updateQty = (cartItemId: string, delta: number) => {
+  const updateQty = useLatestCallback((cartItemId: string, delta: number) => {
     setCart(cart.map(item => {
       if (item.cartItemId === cartItemId) {
         const newQty = stepWholeQuantity(item.qty, delta);
@@ -721,9 +748,9 @@ const POS: React.FC = () => {
       }
       return item;
     }).filter(Boolean));
-  };
+  });
 
-  const setDirectQty = (cartItemId: string, rawVal: string) => {
+  const setDirectQty = useLatestCallback((cartItemId: string, rawVal: string) => {
     const parsed = parseFloat(rawVal);
     setCart(cart.map(item => {
       if (item.cartItemId === cartItemId) {
@@ -739,9 +766,9 @@ const POS: React.FC = () => {
       }
       return item;
     }));
-  };
+  });
 
-  const updateRate = (cartItemId: string, rawVal: string) => {
+  const updateRate = useLatestCallback((cartItemId: string, rawVal: string) => {
     const parsed = parseFloat(rawVal);
     setCart(cart.map(item => {
       if (item.cartItemId === cartItemId) {
@@ -750,9 +777,9 @@ const POS: React.FC = () => {
       }
       return item;
     }));
-  };
+  });
 
-  const updateLineTotal = (cartItemId: string, rawVal: string) => {
+  const updateLineTotal = useLatestCallback((cartItemId: string, rawVal: string) => {
     const parsedTotal = parseFloat(rawVal);
     setCart(cart.map(item => {
       if (item.cartItemId === cartItemId) {
@@ -777,22 +804,32 @@ const POS: React.FC = () => {
       }
       return item;
     }));
-  };
+  });
+
+  const removeLine = useCallback((cartItemId: string) => {
+    setCart(previous => previous.filter(line => line.cartItemId !== cartItemId));
+  }, []);
+
+  const swipeRemoveLine = useLatestCallback((item: any) => {
+    removeLine(item.cartItemId);
+    showToast(`${item.name} cart se hata diya`, 'info');
+  });
 
   // Quick entry keeps its draft local so changing amounts does not rerender the catalog.
-  const openQuickModal = (product: AvailableProduct) => {
+  const openQuickModal = useCallback((product: AvailableProduct) => {
     setQuickInitial(null);
     setQuickProduct(product);
     setQuickModalOpen(true);
-  };
-  const openEditItemModal = (item: any) => {
+  }, []);
+
+  const openEditItemModal = useLatestCallback((item: any) => {
     setEditingCartItem(item);
     setEditRate(item.price.toString());
     setEditQty(item.qty.toString());
     const initialTotal = item.customTotal !== undefined ? item.customTotal : getLineTotal(item);
     setEditTotal(initialTotal.toString());
     setEditVariantId(item.variantId || 'base');
-  };
+  });
 
   const handleEditRateChange = (newRateStr: string) => {
     setEditRate(newRateStr);
@@ -947,8 +984,16 @@ const POS: React.FC = () => {
     setEditingCartItem(null);
   };
 
-  const handleHoldOrder = () => {
+  const handleRemoveEditedItem = (item: any) => {
+    removeLine(item.cartItemId);
+    showToast(`${item.name} removed from cart`, 'info');
+    setEditingCartItem(null);
+  };
+
+  const handleHoldOrder = useLatestCallback(() => {
     if (bookingId) { showToast('Customer orders remain saved in Customer Orders. Finish billing or return to orders.', 'info'); return; }
+    // F8 while a sale is saving would park a copy of a bill that is being sold.
+    if (isSubmittingRef.current) return;
     if (cart.length === 0) {
       showToast("Cart is empty", "warning");
       return;
@@ -978,19 +1023,19 @@ const POS: React.FC = () => {
     setCashReceived('');
     setCustomerPaidAmount('');
     showToast(`Order held for ${customerName}`, "success");
-  };
+  });
 
-  const handleClearCart = () => {
+  const handleClearCart = useCallback(() => {
     setCart([]);
     setSelectedCustomerId('');
     setPaymentMode('Cash');
     setDiscountValue('');
     setCashReceived('');
     setCustomerPaidAmount('');
-  };
+  }, []);
 
   const handleRecallOrder = async (held: HeldOrder) => {
-    if (bookingId) return;
+    if (bookingId || isSubmittingRef.current) return;
     if (cart.length > 0) {
       const confirmReplace = await confirmAction({
         tone: 'warning',
@@ -1001,7 +1046,7 @@ const POS: React.FC = () => {
       });
       if (!confirmReplace) return;
     }
-    isRecallingRef.current = true;
+    markRestoring(held.selectedCustomerId, held.paymentMode);
     setCart(held.cart);
     setSelectedCustomerId(held.selectedCustomerId);
     setPaymentMode(held.paymentMode);
@@ -1020,8 +1065,8 @@ const POS: React.FC = () => {
     showToast("Held order removed", "info");
   };
 
-  const handleCheckout = async (): Promise<boolean> => {
-    if (cart.length === 0 || isSubmitting || isSubmittingRef.current) return false;
+  const runCheckout = async (): Promise<boolean> => {
+    if (cart.length === 0) return false;
     if (bookingId && (!booking || !hasPermission('customer_orders') || !canPerform('pos', 'create'))) return false;
     if (cart.some(line => !(Number(line.qty) > 0))) {
       showToast('Qty 0 wali line hata dein ya qty likhein', 'warning');
@@ -1090,7 +1135,6 @@ const POS: React.FC = () => {
       return false;
     }
 
-    isSubmittingRef.current = true;
     setIsSubmitting(true);
 
     const customer = (customers || []).find(c => c.id === selectedCustomerId);
@@ -1190,14 +1234,14 @@ const POS: React.FC = () => {
 
       setLastCompletedSale(completedRecord);
       setCompletedSaleModalOpen(true);
-      
+
       if (dueAmount > 0) {
         showToast(`Sale completed! ${formatCurrency(actualPaid)} paid, ${formatCurrency(dueAmount)} added to ${customerName}'s ledger`, 'success');
       } else {
         showToast(`Sale completed! ${formatCurrency(grandTotal)}`, 'success');
       }
 
-      setCart([]); 
+      setCart([]);
       setSelectedCustomerId('');
       setPaymentMode('Cash');
       setDiscountValue('');
@@ -1210,15 +1254,24 @@ const POS: React.FC = () => {
       return false;
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => {
-        isSubmittingRef.current = false;
-      }, 350);
+    }
+  };
+
+  // One sale at a time: the guard is taken before validation, so a second click or F9 while the
+  // discount approval PIN is open cannot start another save of the same cart.
+  const handleCheckout = async (): Promise<boolean> => {
+    if (isSubmittingRef.current || isSubmitting) return false;
+    isSubmittingRef.current = true;
+    try {
+      return await runCheckout();
+    } finally {
+      window.setTimeout(() => { isSubmittingRef.current = false; }, 350);
     }
   };
   checkoutRef.current = handleCheckout;
   holdOrderRef.current = handleHoldOrder;
 
-  const handleOpenSaleReceipt = (sale: any) => {
+  const handleOpenSaleReceipt = useCallback((sale: any) => {
     if (!sale) return;
     if (sale.invoiceNo && sale.grandTotal !== undefined && sale.items) {
       setLastCompletedSale(sale);
@@ -1236,7 +1289,7 @@ const POS: React.FC = () => {
     const cashGivenAmt = Number(sale.details?.cash_given ?? (sale.paid_amount ?? totalAmt));
     const changeReturnAmt = Number(sale.details?.change_return ?? 0);
 
-    const completedRecord: LastCompletedSale = {
+    setLastCompletedSale({
       invoiceNo: sale.bill_number || sale.invoice_no || sale.id || 'INV',
       date: dateFormatted,
       time: timeFormatted,
@@ -1251,21 +1304,28 @@ const POS: React.FC = () => {
       paymentMode: sale.payment_mode || sale.payment_method || 'Cash',
       cashGiven: cashGivenAmt,
       changeReturn: changeReturnAmt
-    };
-
-    setLastCompletedSale(completedRecord);
+    });
     setCompletedSaleModalOpen(true);
+  }, []);
+
+  // After the receipt, the counter is ready for the next customer.
+  const closeReceipt = () => {
+    setCompletedSaleModalOpen(false);
+    if (!bookingId && showProductSearch && isCounterDesktop()) {
+      requestAnimationFrame(() => productSearchInputRef.current?.focus());
+    }
   };
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingCustomer) return;
     if (!newCustomer.name.trim()) {
       showToast("Customer name is required", 'warning');
       return;
     }
 
-    const finalWhatsApp = newCustomer.is_phone_whatsapp 
-      ? newCustomer.phone.trim() 
+    const finalWhatsApp = newCustomer.is_phone_whatsapp
+      ? newCustomer.phone.trim()
       : newCustomer.whatsapp.trim();
 
     let finalBalance = 0;
@@ -1275,7 +1335,7 @@ const POS: React.FC = () => {
     } else if (newCustomer.balanceType === 'Advance') {
       finalBalance = -parsedAmount;
     }
-    
+
     const customerPayload = {
       name: newCustomer.name.trim(),
       phone: newCustomer.phone.trim(),
@@ -1298,18 +1358,7 @@ const POS: React.FC = () => {
         }
         setNewCustomerModalOpen(false);
         showToast(`Customer "${newCustomer.name}" registered & selected in cart!`, 'success');
-        
-        setNewCustomer({
-          name: '',
-          phone: '',
-          is_phone_whatsapp: true,
-          whatsapp: '',
-          city: '',
-          address: '',
-          balanceType: 'None',
-          balanceAmount: '',
-          notes: ''
-        });
+        setNewCustomer(EMPTY_CUSTOMER);
       }
     } catch (err: any) {
       showToast("Error creating customer: " + (err?.message || "Failed"), "error");
@@ -1318,18 +1367,104 @@ const POS: React.FC = () => {
     }
   };
 
-  if (bookingId) return <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 text-slate-900 dark:text-slate-100 sm:p-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-black"><ClipboardCheck size={20} className="text-lime-600" />Customer Order Billing</h2><p className="mt-1 text-xs text-slate-500">{booking?.order_number || 'Loading booking'} · Products and prices are saved with the order.</p></div><button type="button" disabled={isSubmitting} onClick={() => { setCompletedSaleModalOpen(false); navigate('/customer-orders'); }} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900"><ArrowLeft size={16} />Customer Orders</button></div>
-    {bookingLoading ? <div role="status" className="flex items-center justify-center gap-2 p-10 text-sm text-slate-500"><Loader2 size={20} className="animate-spin" />Loading order…</div> : bookingError ? <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"><p className="flex items-center gap-2"><AlertCircle size={18} />{bookingError}</p><button type="button" onClick={() => setBookingReload(value => value + 1)} className="mt-4 font-bold underline">Reload order</button></div> : booking && <>
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><h3 className="font-bold">{booking.customer_name}</h3><p className="mt-1 text-xs text-slate-500">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>{booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-slate-500">{booking.address}</p>}{booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{booking.notes}</p>}{Number(booking.advance_paid || 0) > 0 && <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs dark:border-emerald-900/60 dark:bg-emerald-950/40"><div className="flex items-center justify-between font-bold text-emerald-800 dark:text-emerald-300"><span className="flex items-center gap-1.5"><Banknote size={15} /> Advance Paid on Booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span><span className="font-mono text-sm font-black">{formatCurrency(Number(booking.advance_paid))}</span></div><div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300"><span>Remaining Balance to Collect:</span><span className="font-mono font-bold text-amber-700 dark:text-amber-400">{formatCurrency(Math.max(0, Number(booking.total) - Number(booking.advance_paid)))}</span></div></div>}<div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{booking.items.map((line, index) => <div key={index} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p><p className="mt-1 text-xs text-slate-500">{line.qty} {line.unit} × {formatCurrency(line.price)}</p></div><span className="text-sm font-bold">{formatCurrency(roundCurrency(line.qty * line.price))}</span></div>)}</div></div>
-      {booking.status === 'Completed' ? <div role="status" className="rounded-xl bg-lime-50 p-5 text-sm font-bold text-lime-800 dark:bg-lime-950/30 dark:text-lime-300">Order billed successfully. Invoice, stock, cash and khata are saved.<button type="button" className="ml-3 underline" onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</button></div> : <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800"><p className="bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-900">Choose payment below. Edit products or discount from Customer Orders before billing.</p><PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} amountDue={roundCurrency(Math.max(0, grandTotal - bookingAdvance))} lockDiscount onStartShift={() => setIsShiftModalOpen(true)} isDayLocked={isTodayLocked} /></div>}
-    </>}
-    <PosReceiptModal open={completedSaleModalOpen} onClose={() => setCompletedSaleModalOpen(false)} lastCompletedSale={lastCompletedSale} settings={settings} />
-    <PosShiftModal isOpen={isShiftModalOpen} onClose={() => setIsShiftModalOpen(false)} />
-  </div>;
+  const closeShiftModal = useCallback(() => setIsShiftModalOpen(false), []);
+  const openShiftModal = useCallback(() => setIsShiftModalOpen(true), []);
+  const shiftModal = shiftModalLoaded && (
+    <Suspense fallback={null}>
+      <PosShiftModal isOpen={isShiftModalOpen} onClose={closeShiftModal} />
+    </Suspense>
+  );
+  const receiptModal = completedSaleModalOpen && (
+    <Suspense fallback={null}>
+      <PosReceiptModal open onClose={closeReceipt} lastCompletedSale={lastCompletedSale} settings={settings} />
+    </Suspense>
+  );
+  const noOpenShift = !activeShiftSession || activeShiftSession.status !== 'Active';
+
+  if (bookingId) {
+    const advance = Number(booking?.advance_paid || 0);
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-3 text-fg sm:p-5">
+        {approvalDialog}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight text-fg">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-brand-soft text-brand-fg"><ClipboardCheck className="size-[18px]" aria-hidden="true" /></span>
+              Customer order billing
+            </h2>
+            <p className="mt-1 text-xs text-fg-subtle">
+              <span className="font-mono font-semibold text-fg-muted">{booking?.order_number || 'Loading booking'}</span> · Products and prices are saved with the order.
+            </p>
+          </div>
+          <Button variant="secondary" leftIcon={<ArrowLeft />} disabled={isSubmitting} onClick={() => { setCompletedSaleModalOpen(false); navigate('/customer-orders'); }}>
+            Customer Orders
+          </Button>
+        </div>
+
+        {bookingLoading ? (
+          <Card className="space-y-3 p-5" role="status" aria-label="Loading order">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-72" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </Card>
+        ) : bookingError ? (
+          <div role="alert" className="rounded-card border border-warning/30 bg-warning-soft p-5 text-sm text-warning-fg">
+            <p className="flex items-center gap-2 font-semibold"><AlertCircle className="size-[18px] shrink-0" aria-hidden="true" />{bookingError}</p>
+            <Button variant="secondary" size="sm" className="mt-4" leftIcon={<RefreshCw />} onClick={() => setBookingReload(value => value + 1)}>Reload order</Button>
+          </div>
+        ) : booking && (
+          <>
+            <Card className="p-4 sm:p-5">
+              <h3 className="text-[15px] font-bold text-fg">{booking.customer_name}</h3>
+              <p className="mt-1 text-xs text-fg-subtle">{booking.customer_phone} · {booking.fulfillment} · {booking.due_date} {booking.due_time}</p>
+              {booking.fulfillment === 'Delivery' && <p className="mt-2 text-xs text-fg-subtle">{booking.address}</p>}
+              {booking.notes && <p className="mt-3 whitespace-pre-wrap text-sm text-fg-muted">{booking.notes}</p>}
+              {advance > 0 && (
+                <div className="mt-3 space-y-1 rounded-control bg-success-soft p-3 text-xs ring-1 ring-inset ring-success/20">
+                  <div className="flex items-center justify-between gap-3 font-semibold text-success-fg">
+                    <span className="flex items-center gap-1.5"><Banknote className="size-4" aria-hidden="true" /> Advance paid on booking ({booking.payment_mode || 'Cash'}){booking.payment_notes ? ` · ${booking.payment_notes}` : ''}</span>
+                    <Money amount={advance} className="text-sm font-bold" />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-fg-muted">
+                    <span>Remaining balance to collect</span>
+                    <Money amount={Math.max(0, Number(booking.total) - advance)} className="font-bold text-warning-fg" />
+                  </div>
+                </div>
+              )}
+              <ul className="mt-3 divide-y divide-line">
+                {booking.items.map((line, index) => (
+                  <li key={index} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-fg">{line.name}{line.variantName ? ` · ${line.variantName}` : ''}</p>
+                      <p className="mt-0.5 text-xs tabular-nums text-fg-subtle">{formatQty(line.qty, 3)} {line.unit} × {formatCurrency(line.price)}</p>
+                    </div>
+                    <Money amount={roundCurrency(line.qty * line.price)} className="text-sm font-bold text-fg" />
+                  </li>
+                ))}
+              </ul>
+            </Card>
+            {booking.status === 'Completed' ? (
+              <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-card bg-success-soft p-5 text-sm font-semibold text-success-fg ring-1 ring-inset ring-success/20">
+                <span>Order billed successfully. Invoice, stock, cash and khata are saved.</span>
+                <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</Button>
+              </div>
+            ) : (
+              <Card className="pos-checkout-section overflow-hidden">
+                <p className="border-b border-line bg-surface-2 px-4 py-3 text-xs text-fg-subtle">Choose payment below. Edit products or discount from Customer Orders before billing.</p>
+                <PosPaymentPanel cart={cart} paymentMode={paymentMode} setPaymentMode={setPaymentMode} selectedCustomerId={selectedCustomerId} customerPaidAmount={customerPaidAmount} setCustomerPaidAmount={setCustomerPaidAmount} customerDueAmount={customerDueAmount} customerChangeReturn={customerChangeReturn} cashReceived={cashReceived} setCashReceived={setCashReceived} cashGiven={cashGiven} discountType={discountType} setDiscountType={() => {}} discountValue={discountValue} setDiscountValue={() => {}} subtotal={subtotal} discountAmount={discountAmount} totalItemDiscount={totalItemDiscount} grandTotal={grandTotal} isSubmitting={isSubmitting} activeShiftSession={activeShiftSession} handleCheckout={handleCheckout} amountDue={roundCurrency(Math.max(0, grandTotal - bookingAdvance))} lockDiscount onStartShift={openShiftModal} isDayLocked={isTodayLocked} />
+              </Card>
+            )}
+          </>
+        )}
+        {receiptModal}
+        {shiftModal}
+      </div>
+    );
+  }
 
   return (
-    <div data-pos-view={mobileTab} className="pos-workspace flex flex-col h-full gap-3 pb-2 relative overflow-hidden">
+    <div data-pos-view={mobileTab} className="pos-workspace relative flex h-full flex-col gap-3 overflow-hidden pb-2">
       {approvalDialog}
       <PosHeaderAnalytics
         todaySummary={todaySummary}
@@ -1342,15 +1477,18 @@ const POS: React.FC = () => {
         navigate={navigate}
         setShortcutsModalOpen={setShortcutsModalOpen}
         mobileTab={mobileTab}
-        sales={sales || []}
+        sales={sales}
         onOpenReceipt={handleOpenSaleReceipt}
       />
 
       {/* Selling needs an open shift; say so before the cashier builds a cart, not at checkout. */}
-      {(isTodayLocked || !activeShiftSession || activeShiftSession.status !== 'Active') && (
-        <div role="status" className={`${mobileTab === 'cart' ? 'hidden lg:flex' : 'flex'} items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs shrink-0 ${isTodayLocked ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300' : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200'}`}>
+      {(isTodayLocked || noOpenShift) && (
+        <div
+          role="status"
+          className={`${mobileTab === 'cart' ? 'hidden lg:flex' : 'flex'} shrink-0 items-center justify-between gap-3 rounded-control px-3 py-2 text-xs ring-1 ring-inset ${isTodayLocked ? 'bg-danger-soft text-danger-fg ring-danger/20' : 'bg-warning-soft text-warning-fg ring-warning/25'}`}
+        >
           <span className="flex items-center gap-2 font-semibold">
-            <AlertCircle size={15} className="shrink-0" />
+            {isTodayLocked ? <Lock className="size-4 shrink-0" aria-hidden="true" /> : <Clock className="size-4 shrink-0" aria-hidden="true" />}
             {isTodayLocked
               ? `Business day ${getBusinessDate()} band ho chuka hai — sale nahi ho sakti. Owner se day reopen karwayein.`
               : 'Shift start nahi hui. Sale se pehle drawer ki cash gin kar shift start karein.'}
@@ -1358,8 +1496,8 @@ const POS: React.FC = () => {
           {!isTodayLocked && (
             <button
               type="button"
-              onClick={() => setIsShiftModalOpen(true)}
-              className="shrink-0 rounded-lg bg-amber-400 px-3 py-1.5 font-black text-slate-950 hover:bg-amber-300 cursor-pointer"
+              onClick={openShiftModal}
+              className="h-9 shrink-0 cursor-pointer rounded-lg bg-warning px-3 font-bold text-white shadow-e1 transition-colors hover:bg-warning/90"
             >
               Start Shift
             </button>
@@ -1367,7 +1505,7 @@ const POS: React.FC = () => {
         </div>
       )}
 
-      <div className="flex flex-col lg:flex-row flex-1 min-h-0 gap-3 overflow-hidden relative">
+      <div className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row">
         <PosProductGrid
           searchProduct={searchProduct}
           setSearchProduct={setSearchProduct}
@@ -1375,8 +1513,10 @@ const POS: React.FC = () => {
           selectedCategories={selectedCategories}
           setSelectedCategories={setSelectedCategories}
           validCategories={validCategories}
+          categoryCounts={categoryCounts}
+          allCount={allAvailableProducts.length}
           availableProducts={availableProducts}
-          items={items || []}
+          findFirstMatch={findFirstMatch}
           cartQtyByProductId={cartQtyByProductId}
           openQuickModal={openQuickModal}
           addToCart={addToCart}
@@ -1385,9 +1525,12 @@ const POS: React.FC = () => {
           showCategories={showProductCategories}
         />
 
-        <div className={`pos-checkout-panel flex-[1.1] w-full min-w-0 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl flex-col h-full min-h-0 overflow-hidden ${
-          mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'
-        }`}>
+        <section
+          aria-label="Bill"
+          className={`pos-checkout-panel pos-checkout-section h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-card border border-line bg-surface shadow-e1 ${
+            mobileTab === 'cart' ? 'flex lg:flex-1' : 'hidden lg:flex lg:w-[44%] lg:min-w-[400px] lg:max-w-[580px] lg:shrink-0'
+          }`}
+        >
           <PosCustomerSelect
             customerContainerRef={customerContainerRef}
             customerSearchInputRef={customerSearchInputRef}
@@ -1403,21 +1546,23 @@ const POS: React.FC = () => {
             cartLength={cart.length}
             handleHoldOrder={handleHoldOrder}
             paymentMode={paymentMode}
+            locked={isSubmitting}
           />
 
           <PosCart
             expanded={mobileTab === 'cart'}
             cart={cart}
-            setCart={setCart}
             onClearCart={handleClearCart}
+            onSwipeRemove={swipeRemoveLine}
             setMobileTab={setMobileTab}
             updateQty={updateQty}
             setDirectQty={setDirectQty}
             updateRate={updateRate}
             updateLineTotal={updateLineTotal}
             openEditItemModal={openEditItemModal}
+            removeLine={removeLine}
             getLineTotal={getLineTotal}
-            showToast={showToast}
+            locked={isSubmitting}
           />
 
           <PosPaymentPanel
@@ -1443,100 +1588,104 @@ const POS: React.FC = () => {
             isSubmitting={isSubmitting}
             activeShiftSession={activeShiftSession}
             handleCheckout={handleCheckout}
-            onStartShift={() => setIsShiftModalOpen(true)}
+            onStartShift={openShiftModal}
             isDayLocked={isTodayLocked}
           />
-        </div>
+        </section>
       </div>
 
       {cart.length > 0 && mobileTab === 'catalog' && (
-        <div className="pos-mobile-cart-pill lg:hidden fixed bottom-3 inset-x-3 z-40">
+        <div className="pos-mobile-cart-pill fixed inset-x-3 bottom-3 z-40 lg:hidden">
           <button
             type="button"
             onClick={() => setMobileTab('cart')}
-            className="w-full bg-gradient-to-r from-lime-600 to-emerald-700 text-white rounded-2xl p-3 shadow-xl shadow-lime-600/25 flex items-center justify-between border border-lime-500/40 active:scale-[0.99] transition-all cursor-pointer"
+            className="flex h-16 w-full cursor-pointer items-center justify-between gap-3 rounded-card bg-brand px-3 text-brand-on shadow-e3 transition-transform active:scale-[.99]"
           >
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center font-bold">
-                <ShoppingCart size={16} />
-              </div>
-              <div className="text-left">
-                <span className="text-xs font-bold block leading-none">View Cart</span>
-                <span className="text-[10px] text-lime-100">{cart.length} item{cart.length !== 1 ? 's' : ''} added</span>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className="text-xs font-mono font-black block">{formatCurrency(grandTotal)}</span>
-              <span className="text-[10px] text-lime-100 uppercase tracking-wider font-bold">Checkout &rarr;</span>
-            </div>
+            <span className="flex items-center gap-2.5">
+              <span className="flex size-10 items-center justify-center rounded-control bg-brand-on/15" aria-hidden="true"><ShoppingCart className="size-5" /></span>
+              <span className="text-left">
+                <span className="block text-sm font-bold leading-tight">View cart</span>
+                <span className="text-xs opacity-80">{cart.length} item{cart.length !== 1 ? 's' : ''} added</span>
+              </span>
+            </span>
+            <span className="flex items-center gap-2 text-right">
+              <Money amount={grandTotal} className="text-lg font-bold" />
+              <ArrowRight className="size-5" aria-hidden="true" />
+            </span>
           </button>
         </div>
       )}
 
-      <PosQuickAmountModal
-        open={quickModalOpen}
-        onClose={() => setQuickModalOpen(false)}
-        quickProduct={quickProduct}
-        initialEntry={quickInitial}
-        cart={cart}
-        allowNegativeStock={settings.inventory.allowNegativeStock}
-        addToCart={addToCart}
-        showToast={showToast}
-        onAdded={() => { if (window.matchMedia('(min-width: 1024px) and (pointer: fine)').matches) { productSearchInputRef.current?.focus(); productSearchInputRef.current?.select(); } }}
-      />
+      {quickModalOpen && quickProduct && (
+        <Suspense fallback={null}>
+          <PosQuickAmountModal
+            open
+            onClose={() => setQuickModalOpen(false)}
+            quickProduct={quickProduct}
+            initialEntry={quickInitial}
+            cart={cart}
+            allowNegativeStock={settings.inventory.allowNegativeStock}
+            addToCart={addToCart}
+            showToast={showToast}
+            onAdded={() => { if (isCounterDesktop()) { productSearchInputRef.current?.focus(); productSearchInputRef.current?.select(); } }}
+          />
+        </Suspense>
+      )}
 
-      <PosHeldOrdersModal
-        open={heldOrdersModalOpen}
-        onClose={() => setHeldOrdersModalOpen(false)}
-        heldOrders={heldOrders}
-        handleRecallOrder={handleRecallOrder}
-        handleDeleteHeldOrder={handleDeleteHeldOrder}
-      />
+      {heldOrdersModalOpen && (
+        <Suspense fallback={null}>
+          <PosHeldOrdersModal
+            open
+            onClose={() => setHeldOrdersModalOpen(false)}
+            heldOrders={heldOrders}
+            handleRecallOrder={handleRecallOrder}
+            handleDeleteHeldOrder={handleDeleteHeldOrder}
+          />
+        </Suspense>
+      )}
 
-      <PosShortcutsModal
-        open={shortcutsModalOpen}
-        onClose={() => setShortcutsModalOpen(false)}
-      />
+      {shortcutsModalOpen && (
+        <Suspense fallback={null}>
+          <PosShortcutsModal open onClose={() => setShortcutsModalOpen(false)} />
+        </Suspense>
+      )}
 
-      <PosReceiptModal
-        open={completedSaleModalOpen}
-        onClose={() => setCompletedSaleModalOpen(false)}
-        lastCompletedSale={lastCompletedSale}
-        settings={settings}
-      />
+      {receiptModal}
 
-      <PosNewCustomerModal
-        open={newCustomerModalOpen}
-        onClose={() => setNewCustomerModalOpen(false)}
-        newCustomer={newCustomer}
-        setNewCustomer={setNewCustomer}
-        handleCreateCustomer={handleCreateCustomer}
-        isCreatingCustomer={isCreatingCustomer}
-      />
+      {newCustomerModalOpen && (
+        <Suspense fallback={null}>
+          <PosNewCustomerModal
+            open
+            onClose={() => setNewCustomerModalOpen(false)}
+            newCustomer={newCustomer}
+            setNewCustomer={setNewCustomer}
+            handleCreateCustomer={handleCreateCustomer}
+            isCreatingCustomer={isCreatingCustomer}
+          />
+        </Suspense>
+      )}
 
-      <PosEditItemModal
-        editingCartItem={editingCartItem}
-        setEditingCartItem={setEditingCartItem}
-        editRate={editRate}
-        handleEditRateChange={handleEditRateChange}
-        editQty={editQty}
-        handleEditQtyChange={handleEditQtyChange}
-        editTotal={editTotal}
-        handleEditTotalChange={handleEditTotalChange}
-        editVariantId={editVariantId}
-        setEditVariantId={setEditVariantId}
-        onSellUnitChange={applySellUnit}
-        items={items || []}
-        cart={cart}
-        setCart={setCart}
-        handleSaveEditItem={handleSaveEditItem}
-        showToast={showToast}
-      />
+      {editingCartItem && (
+        <Suspense fallback={null}>
+          <PosEditItemModal
+            editingCartItem={editingCartItem}
+            setEditingCartItem={setEditingCartItem}
+            editRate={editRate}
+            handleEditRateChange={handleEditRateChange}
+            editQty={editQty}
+            handleEditQtyChange={handleEditQtyChange}
+            editTotal={editTotal}
+            handleEditTotalChange={handleEditTotalChange}
+            editVariantId={editVariantId}
+            onSellUnitChange={applySellUnit}
+            items={items || []}
+            onRemove={handleRemoveEditedItem}
+            handleSaveEditItem={handleSaveEditItem}
+          />
+        </Suspense>
+      )}
 
-      <PosShiftModal
-        isOpen={isShiftModalOpen}
-        onClose={() => setIsShiftModalOpen(false)}
-      />
+      {shiftModal}
     </div>
   );
 };

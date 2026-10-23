@@ -1,7 +1,9 @@
 import React from 'react';
-import { Banknote, Wallet, ChevronDown, Check, Tag, Loader2, BookOpen, Clock } from 'lucide-react';
+import { Banknote, Wallet, Check, Tag, Loader2, BookOpen, Clock, AlertCircle } from 'lucide-react';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { formatCurrency } from '../../lib/formatters';
+import { cn } from '../../lib/cn';
+import { Kbd, Money } from '../ui';
 
 interface PosPaymentPanelProps {
   cart: any[];
@@ -34,6 +36,23 @@ interface PosPaymentPanelProps {
   isDayLocked?: boolean;
 }
 
+const MODES = [
+  { id: 'Cash', label: 'Cash', icon: Banknote },
+  { id: 'Online', label: 'Online / Bank', short: 'Online', icon: Wallet },
+  { id: 'Credit', label: 'Khata / Credit', short: 'Khata', icon: BookOpen },
+] as const;
+
+const TENDER_NOTES = [500, 1000, 2000, 5000];
+
+/** Quick cash buttons: the exact bill plus the notes a customer is likely to hand over for it. */
+const tenderOptions = (total: number): number[] => {
+  const notes = TENDER_NOTES.filter(note => note > total);
+  if (notes.length === 0 && total > 0) notes.push(Math.ceil(total / 1000) * 1000 + (total % 1000 === 0 ? 1000 : 0));
+  return notes.slice(0, 3);
+};
+
+const moneyField = 'ds-control h-11 w-full rounded-control border border-line bg-surface px-3 text-right text-base font-bold tabular-nums text-fg shadow-e1 outline-none transition-[border-color,box-shadow] duration-150 placeholder:font-normal placeholder:text-fg-faint hover:border-line-strong focus:border-brand-accent focus:ring-4 focus:ring-ring/20 disabled:bg-surface-2 disabled:text-fg-subtle';
+
 export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   cart,
   paymentMode,
@@ -65,334 +84,208 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   // "Full paid" fills what is still owed, so a booking advance is never handed back as change.
   const payableNow = amountDue ?? grandTotal;
   const noShift = !activeShiftSession || activeShiftSession.status !== 'Active';
+  const hasItems = cart.length > 0;
   // A walk-in has no khata to carry the unpaid part, so a short cash payment cannot be completed.
   const walkInShort = !selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal
     ? Math.round((grandTotal - cashGiven) * 100) / 100
     : 0;
+  const walkInChange = !selectedCustomerId && paymentMode === 'Cash' && cashGiven >= grandTotal && cashGiven > 0
+    ? Math.round((cashGiven - grandTotal) * 100) / 100
+    : 0;
+  const hasZeroQtyLine = cart.some(line => !(Number(line.qty) > 0));
+  const canPay = hasItems && !isSubmitting && walkInShort === 0 && !noShift && !isDayLocked;
+  const grossBeforeDiscounts = subtotal + totalItemDiscount;
+  const modes = MODES.filter(mode => mode.id !== 'Credit' || selectedCustomerId);
+
+  const chooseMode = (id: string) => {
+    setPaymentMode(id);
+    if (id === 'Credit') setCustomerPaidAmount('0');
+    else if (customerPaidAmount === '0') setCustomerPaidAmount('');
+  };
+
+  const payLabel = isDayLocked
+    ? 'Business day closed — sale band'
+    : noShift
+      ? 'Start Shift First — Sale Blocked'
+      : selectedCustomerId && customerDueAmount > 0
+        ? `Confirm & Post to Ledger (${paymentMode})`
+        : `Confirm & Pay (${paymentMode})`;
 
   return (
-    <div className="pos-payment-panel p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 space-y-2.5 shrink-0 shadow-lg z-10">
-      
-      <div className="md:hidden space-y-2">
-        <div className="grid grid-cols-2 gap-2">
-          <div className="relative">
-            <select
-              value={paymentMode}
-              onChange={e => {
-                const newMode = e.target.value;
-                setPaymentMode(newMode);
-                if (newMode === 'Credit') {
-                  setCustomerPaidAmount('0');
-                } else if (customerPaidAmount === '0') {
-                  setCustomerPaidAmount('');
-                }
-              }}
-              className="w-full pl-2.5 pr-7 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/70 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:border-lime-500 appearance-none transition-colors cursor-pointer"
-            >
-              <option value="Cash">💵 Cash</option>
-              <option value="Online">💳 Online / Bank</option>
-              {selectedCustomerId && <option value="Credit">📒 Khata / Credit (Udhar)</option>}
-            </select>
-            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
-
-          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-1">
-            <button 
+    <div className="pos-payment-panel z-10 shrink-0 space-y-3 border-t border-line bg-surface p-3 shadow-[0_-8px_24px_-12px_rgb(15_23_42/0.18)]">
+      {/* Payment mode */}
+      <div role="radiogroup" aria-label="Payment mode" className={cn('grid gap-1 rounded-control bg-surface-2 p-1 ring-1 ring-inset ring-line/70', modes.length === 3 ? 'grid-cols-3' : 'grid-cols-2')}>
+        {modes.map(mode => {
+          const isSelected = paymentMode === mode.id;
+          const Icon = mode.icon;
+          return (
+            <button
+              key={mode.id}
               type="button"
-              onClick={() => setDiscountType(discountType === 'flat' ? 'percent' : 'flat')}
-              disabled={lockDiscount}
-              className="px-1.5 py-0.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold shadow-xs shrink-0 cursor-pointer"
-              title="Toggle Rs / % Discount"
-            >
-              {discountType === 'flat' ? 'Rs' : '%'}
-            </button>
-            <SmartNumberInput 
-              placeholder="0"
-              aria-label="Sale discount" value={discountValue}
-              disabled={lockDiscount}
-              onChange={setDiscountValue}
-              className="w-full text-right font-mono font-bold text-xs bg-transparent outline-none text-slate-900 dark:text-slate-100"
-            />
-          </div>
-        </div>
-
-        {!selectedCustomerId && paymentMode === 'Cash' && cart.length > 0 && (
-          <div className="p-2 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-600 dark:text-slate-400">Cash Received:</span>
-              <div className="flex items-center gap-1">
-                <span className="text-xs font-bold text-slate-400">Rs</span>
-                <SmartNumberInput
-                  placeholder="0.00"
-                  aria-label="Cash received" value={cashReceived}
-                  onChange={setCashReceived}
-                  className="w-28 px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-bold text-slate-900 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
-                  wrapperClassName="w-auto"
-                />
-              </div>
-            </div>
-            {cashGiven > 0 && (
-              <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200 dark:border-slate-700">
-                <span className="font-semibold text-slate-500 dark:text-slate-400">Change:</span>
-                <span className={`font-mono font-bold ${cashGiven >= grandTotal ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                  {cashGiven >= grandTotal ? `${formatCurrency(Math.abs(cashGiven - grandTotal))}` : `Short ${formatCurrency(Math.abs(cashGiven - grandTotal))}`}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {selectedCustomerId && cart.length > 0 && (
-          <div className="p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1.5 animate-in fade-in">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                <Banknote size={13} className={paymentMode === 'Credit' ? 'text-amber-600' : 'text-emerald-600'} /> 
-                {paymentMode === 'Credit' ? 'Paid (Optional):' : 'Paid Amount:'}
-              </span>
-              <div className="flex items-center gap-1">
-                <span className="text-xs font-mono text-slate-400">Rs</span>
-                <SmartNumberInput
-                  step="any"
-                  placeholder={paymentMode === 'Credit' ? '0' : payableNow.toString()}
-                  aria-label="Customer payment received" value={customerPaidAmount}
-                  onChange={setCustomerPaidAmount}
-                  className="w-28 px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-black text-slate-900 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
-                  wrapperClassName="w-auto"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-200/60 dark:border-slate-700 font-semibold">
-              {customerDueAmount > 0 ? (
-                <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  Khata / Due: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">{formatCurrency(customerDueAmount)}</strong>
-                </span>
-              ) : customerChangeReturn > 0 ? (
-                <span className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  Change: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">{formatCurrency(customerChangeReturn)}</strong>
-                </span>
-              ) : (
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                  <Check size={11} /> Fully Paid (Rs 0 Due)
-                </span>
+              role="radio"
+              aria-checked={isSelected}
+              onClick={() => chooseMode(mode.id)}
+              className={cn(
+                'flex h-10 min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-[9px] px-2 text-[13px] font-semibold transition-colors duration-150',
+                isSelected ? 'bg-surface text-fg shadow-e1' : 'text-fg-subtle hover:text-fg',
               )}
-
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentMode('Credit');
-                    setCustomerPaidAmount('0');
-                  }}
-                  className="text-[10px] text-amber-700 dark:text-amber-400 font-bold hover:underline cursor-pointer"
-                >
-                  Full Khata
-                </button>
-                <span className="text-slate-300 dark:text-slate-600">|</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (paymentMode === 'Credit') setPaymentMode('Cash');
-                    setCustomerPaidAmount(payableNow.toString());
-                  }}
-                  className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer"
-                >
-                  Full (Rs {payableNow})
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+            >
+              <Icon className={cn('size-4 shrink-0', isSelected ? (mode.id === 'Credit' ? 'text-warning-fg' : mode.id === 'Online' ? 'text-info-fg' : 'text-success-fg') : 'text-fg-faint')} aria-hidden="true" />
+              <span className="truncate">
+                {'short' in mode ? <><span className="sm:hidden">{mode.short}</span><span className="hidden sm:inline">{mode.label}</span></> : mode.label}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      <div className="hidden md:block space-y-2.5">
-        <div className={`grid ${selectedCustomerId ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700`}>
-          {[
-            { id: 'Cash', label: 'Cash Payment', icon: Banknote, color: 'text-emerald-600' },
-            { id: 'Online', label: 'Online / Bank', icon: Wallet, color: 'text-blue-600' },
-            ...(selectedCustomerId ? [{ id: 'Credit', label: 'Khata / Credit', icon: BookOpen, color: 'text-amber-600' }] : [])
-          ].map(mode => {
-            const isSelected = paymentMode === mode.id;
-            const Icon = mode.icon;
-            
-            return (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => {
-                  setPaymentMode(mode.id);
-                  if (mode.id === 'Credit') {
-                    setCustomerPaidAmount('0');
-                  } else if (customerPaidAmount === '0') {
-                    setCustomerPaidAmount('');
-                  }
-                }}
-                className={`
-                  py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer
-                  ${isSelected 
-                    ? 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 shadow-sm ring-1 ring-black/5 dark:ring-white/10' 
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}
-                `}
-              >
-                <Icon size={14} className={isSelected ? mode.color : 'text-slate-400'} />
-                {mode.label}
-              </button>
-            );
-          })}
-        </div>
+      {/* Money received */}
+      {hasItems && selectedCustomerId && (
+        <div className="space-y-2 rounded-control bg-surface-2/70 p-2.5 ring-1 ring-inset ring-line/70">
+          <label className="flex items-center justify-between gap-3">
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-fg-muted">
+              <Banknote className={cn('size-4', paymentMode === 'Credit' ? 'text-warning-fg' : 'text-success-fg')} aria-hidden="true" />
+              {paymentMode === 'Credit' ? 'Paid now (optional)' : 'Amount paid now'}
+            </span>
+            <span className="relative w-full max-w-[190px]">
+              <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-xs font-semibold text-fg-subtle">Rs</span>
+              <SmartNumberInput
+                step="any"
+                placeholder={paymentMode === 'Credit' ? '0' : String(payableNow)}
+                aria-label="Customer payment received"
+                value={customerPaidAmount}
+                onChange={setCustomerPaidAmount}
+                className={cn(moneyField, 'pl-9')}
+              />
+            </span>
+          </label>
 
-        {selectedCustomerId && cart.length > 0 ? (
-          <div className="p-2.5 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2 animate-in fade-in">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                <Banknote size={14} className={paymentMode === 'Credit' ? 'text-amber-600' : 'text-emerald-600'} /> 
-                {paymentMode === 'Credit' ? 'Paid Now (Optional):' : 'Amount Paid Now:'}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-xs">
+            {customerDueAmount > 0 ? (
+              <span className="flex items-center gap-1.5 font-semibold text-warning-fg">
+                <span className="size-2 rounded-full bg-warning" aria-hidden="true" />
+                Khata mein jayega: <Money amount={customerDueAmount} className="font-bold" />
               </span>
-              <div className="flex items-center gap-1 max-w-[170px]">
-                <span className="text-xs font-bold text-slate-400 font-mono">Rs</span>
-                <SmartNumberInput 
-                  step="any"
-                  placeholder={paymentMode === 'Credit' ? '0' : payableNow.toString()}
-                  className="w-full px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-black text-slate-900 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
-                  aria-label="Customer payment received" value={customerPaidAmount}
-                  onChange={setCustomerPaidAmount}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-200/70 dark:border-slate-700">
-              {customerDueAmount > 0 ? (
-                <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                  Added to Customer Ledger: <strong className="font-mono text-amber-900 dark:text-amber-200 font-black">{formatCurrency(customerDueAmount)}</strong>
-                </span>
-              ) : customerChangeReturn > 0 ? (
-                <span className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  Cash Change to Return: <strong className="font-mono text-emerald-900 dark:text-emerald-200 font-black">{formatCurrency(customerChangeReturn)}</strong>
-                </span>
-              ) : (
-                <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                  <Check size={13} /> Fully Settled (Rs 0 Added to Ledger)
-                </span>
-              )}
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentMode('Credit');
-                    setCustomerPaidAmount('0');
-                  }}
-                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 transition-colors cursor-pointer"
-                  title="Zero payment received - Add full bill to Khata ledger"
-                >
-                  Full Khata (Rs 0)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (paymentMode === 'Credit') setPaymentMode('Cash');
-                    setCustomerPaidAmount(payableNow.toString());
-                  }}
-                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300 transition-colors cursor-pointer"
-                  title="Full payment received"
-                >
-                  Full Paid
-                </button>
-              </div>
-            </div>
+            ) : customerChangeReturn > 0 ? (
+              <span className="flex items-center gap-1.5 font-semibold text-success-fg">
+                <span className="size-2 rounded-full bg-success" aria-hidden="true" />
+                Change wapas: <Money amount={customerChangeReturn} className="font-bold" />
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 font-semibold text-success-fg">
+                <Check className="size-3.5" aria-hidden="true" /> Fully paid (Rs 0 khata)
+              </span>
+            )}
+            <span className="flex items-center gap-1.5">
+              <ChipButton tone="warning" title="Zero payment received - Add full bill to Khata ledger" onClick={() => { setPaymentMode('Credit'); setCustomerPaidAmount('0'); }}>
+                Full khata
+              </ChipButton>
+              <ChipButton tone="success" title="Full payment received" onClick={() => { if (paymentMode === 'Credit') setPaymentMode('Cash'); setCustomerPaidAmount(String(payableNow)); }}>
+                Full paid · {formatCurrency(payableNow)}
+              </ChipButton>
+            </span>
           </div>
-        ) : (
-          paymentMode === 'Cash' && cart.length > 0 && (
-            <div className="p-2 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400 shrink-0">Cash In:</span>
-                <div className="flex items-center gap-1 flex-1 max-w-[150px]">
-                  <span className="text-xs font-bold text-slate-400">Rs</span>
-                  <SmartNumberInput 
-                    placeholder="0.00"
-                    className="w-full px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-right font-mono font-bold text-slate-800 dark:text-slate-100 text-xs outline-none focus:border-lime-500 shadow-inner"
-                    aria-label="Cash received" value={cashReceived}
-                    onChange={setCashReceived}
-                  />
-                </div>
-                
-                {cashGiven > 0 && (
-                  <div className={`px-2 py-0.5 rounded-md text-xs font-bold font-mono shrink-0 border ${cashGiven >= grandTotal ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800'}`}>
-                    {cashGiven >= grandTotal ? `Change: ${formatCurrency(Math.abs(cashGiven - grandTotal))}` : `Short: ${formatCurrency(Math.abs(cashGiven - grandTotal))}`}
-                  </div>
-                )}
-              </div>
+        </div>
+      )}
 
-              <div className="flex gap-1 overflow-x-auto pb-0.5 scrollbar-hide">
-                <button onClick={() => setCashReceived(grandTotal.toString())} className="px-2 py-0.5 bg-white dark:bg-slate-700 hover:bg-lime-50 hover:border-lime-400 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600 transition-colors shrink-0 cursor-pointer">Exact</button>
-                <button onClick={() => setCashReceived('500')} className="px-2 py-0.5 bg-white dark:bg-slate-700 hover:bg-lime-50 hover:border-lime-400 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600 transition-colors shrink-0 cursor-pointer">500</button>
-                <button onClick={() => setCashReceived('1000')} className="px-2 py-0.5 bg-white dark:bg-slate-700 hover:bg-lime-50 hover:border-lime-400 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600 transition-colors shrink-0 cursor-pointer">1000</button>
-                <button onClick={() => setCashReceived('2000')} className="px-2 py-0.5 bg-white dark:bg-slate-700 hover:bg-lime-50 hover:border-lime-400 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600 transition-colors shrink-0 cursor-pointer">2000</button>
-                <button onClick={() => setCashReceived('5000')} className="px-2 py-0.5 bg-white dark:bg-slate-700 hover:bg-lime-50 hover:border-lime-400 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold border border-slate-200 dark:border-slate-600 transition-colors shrink-0 cursor-pointer">5000</button>
-              </div>
+      {hasItems && !selectedCustomerId && paymentMode === 'Cash' && (
+        <div className="space-y-2 rounded-control bg-surface-2/70 p-2.5 ring-1 ring-inset ring-line/70">
+          <label className="flex items-center justify-between gap-3">
+            <span className="shrink-0 text-xs font-semibold text-fg-muted">Cash received</span>
+            <span className="relative w-full max-w-[190px]">
+              <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-xs font-semibold text-fg-subtle">Rs</span>
+              <SmartNumberInput
+                placeholder="0"
+                aria-label="Cash received"
+                value={cashReceived}
+                onChange={setCashReceived}
+                className={cn(moneyField, 'pl-9')}
+              />
+            </span>
+          </label>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 gap-1.5 overflow-x-auto scrollbar-hide">
+              <ChipButton onClick={() => setCashReceived(String(grandTotal))}>Exact</ChipButton>
+              {tenderOptions(grandTotal).map(note => (
+                <ChipButton key={note} onClick={() => setCashReceived(String(note))}>{note.toLocaleString('en-PK')}</ChipButton>
+              ))}
             </div>
-          )
-        )}
+            {cashGiven > 0 && (
+              <span
+                role="status"
+                className={cn(
+                  'inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-bold tabular-nums ring-1 ring-inset',
+                  walkInShort > 0 ? 'bg-danger-soft text-danger-fg ring-danger/20' : 'bg-success-soft text-success-fg ring-success/20',
+                )}
+              >
+                {walkInShort > 0 ? 'Short' : 'Change'} <Money amount={walkInShort > 0 ? walkInShort : walkInChange} />
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
-        {cart.length > 0 && (
-          <div className="flex items-center justify-between text-xs px-1">
-            <span className="text-slate-500 dark:text-slate-400 font-semibold flex items-center gap-1"><Tag size={12}/> Discount:</span>
-            <div className="flex items-center gap-1">
-              <button 
-                onClick={() => setDiscountType(discountType === 'flat' ? 'percent' : 'flat')}
+      {/* Totals */}
+      <div className="space-y-1.5 px-0.5">
+        {hasItems && (
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="flex items-center gap-1.5 font-semibold text-fg-muted"><Tag className="size-3.5" aria-hidden="true" /> Discount</span>
+            <span className="flex items-center gap-1">
+              <button
+                type="button"
                 disabled={lockDiscount}
-                className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                onClick={() => setDiscountType(discountType === 'flat' ? 'percent' : 'flat')}
+                aria-label={`Discount type: ${discountType === 'flat' ? 'rupees' : 'percent'}. Click to switch.`}
+                title="Toggle Rs / % Discount"
+                className="h-9 min-w-10 cursor-pointer rounded-lg bg-surface-2 px-2 text-xs font-bold text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {discountType === 'flat' ? 'Rs' : '%'}
               </button>
-              <SmartNumberInput 
+              <SmartNumberInput
                 placeholder="0"
-                className="w-16 px-1.5 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-right font-mono font-bold text-slate-800 dark:text-slate-100 text-xs outline-none focus:border-lime-500"
-                aria-label="Sale discount" value={discountValue}
+                aria-label="Sale discount"
+                value={discountValue}
                 disabled={lockDiscount}
                 onChange={setDiscountValue}
-                wrapperClassName="w-auto"
+                wrapperClassName="w-24"
+                className={cn(moneyField, 'h-9 text-sm')}
               />
-            </div>
+            </span>
           </div>
         )}
+        {totalItemDiscount > 0 && (
+          <div className="flex items-center justify-between text-xs font-semibold text-success-fg">
+            <span className="flex items-center gap-1.5"><Tag className="size-3.5" aria-hidden="true" /> Item discounts</span>
+            <span className="tabular-nums">-{formatCurrency(totalItemDiscount)}</span>
+          </div>
+        )}
+        {discountAmount > 0 && (
+          <div className="flex items-center justify-between text-xs font-semibold text-success-fg">
+            <span>Bill discount</span>
+            <span className="tabular-nums">-{formatCurrency(discountAmount)}</span>
+          </div>
+        )}
+        <div className="flex items-end justify-between gap-3 border-t border-line pt-2">
+          <div>
+            <span className="block text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Grand total</span>
+            {(discountAmount > 0 || totalItemDiscount > 0) && (
+              <span className="text-xs tabular-nums text-fg-faint line-through">{formatCurrency(grossBeforeDiscounts)}</span>
+            )}
+          </div>
+          <Money amount={grandTotal} className="text-[28px] font-bold leading-none tracking-tight text-fg" />
+        </div>
       </div>
 
-      {totalItemDiscount > 0 && (
-        <div className="flex items-center justify-between text-xs px-2 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800 rounded-lg font-semibold">
-          <span className="flex items-center gap-1"><Tag size={11} /> Item Discounts:</span>
-          <span className="font-mono font-bold">-{formatCurrency(totalItemDiscount)}</span>
-        </div>
-      )}
-
-      <div className="flex items-baseline justify-between border-t border-slate-100 dark:border-slate-800 pt-1.5 px-1">
-        <div>
-          <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide block">Grand Total</span>
-          {(discountAmount > 0 || totalItemDiscount > 0) && (
-            <span className="text-xs text-slate-400 line-through font-mono">
-              {formatCurrency((subtotal + totalItemDiscount))}
-            </span>
-          )}
-        </div>
-        <div className="text-right">
-          <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-mono tracking-tight">{formatCurrency(grandTotal)}</span>
-        </div>
-      </div>
-      
       {/* A blank or 0 qty line blocks checkout; handleCheckout shows the same message as a toast. */}
-      {cart.some(line => !(Number(line.qty) > 0)) && (
-        <p role="status" className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-2 py-1">
-          Qty 0 wali line hata dein ya qty likhein
+      {hasZeroQtyLine && (
+        <p role="status" className="flex items-center gap-1.5 rounded-lg bg-warning-soft px-2.5 py-1.5 text-xs font-semibold text-warning-fg">
+          <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" /> Qty 0 wali line hata dein ya qty likhein
         </p>
       )}
-
       {walkInShort > 0 && (
-        <p role="status" className="text-xs font-semibold text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-2 py-1">
-          {formatCurrency(walkInShort)} kam hain. Poori raqam lein, ya customer select karein taake baqi khaate mein jaye.
+        <p role="status" className="flex items-start gap-1.5 rounded-lg bg-danger-soft px-2.5 py-1.5 text-xs font-semibold text-danger-fg">
+          <AlertCircle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+          <span>{formatCurrency(walkInShort)} kam hain. Poori raqam lein, ya customer select karein taake baqi khaate mein jaye.</span>
         </p>
       )}
 
@@ -401,44 +294,59 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
         <button
           type="button"
           onClick={onStartShift}
-          className="w-full py-3.5 rounded-xl font-black text-xs sm:text-sm text-slate-950 bg-amber-400 hover:bg-amber-300 flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98] cursor-pointer"
+          className="flex h-14 w-full cursor-pointer items-center justify-center gap-2 rounded-control bg-warning text-[15px] font-bold text-white shadow-e1 transition-[background-color,transform] duration-150 hover:bg-warning/90 active:scale-[.99]"
         >
-          <Clock size={17} />
-          <span>Start shift to sell</span>
+          <Clock className="size-5" aria-hidden="true" />
+          Start shift to sell
         </button>
       ) : (
-      <button
-        type="button" aria-label="Complete sale"
-        onClick={handleCheckout}
-        disabled={cart.length === 0 || isSubmitting || walkInShort > 0 || noShift || isDayLocked}
-        className={`
-          w-full py-3.5 rounded-xl font-black text-xs sm:text-sm text-white flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98]
-          ${cart.length > 0 && !isSubmitting && walkInShort === 0 && !noShift && !isDayLocked
-            ? 'bg-lime-600 hover:bg-lime-700 shadow-lime-600/25 cursor-pointer'
-            : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none'}
-        `}
-      >
-        {isSubmitting ? (
-          <>
-            <Loader2 size={17} className="animate-spin" /> Saving sale...
-          </>
-        ) : (
-          <>
-            {paymentMode === 'Online' ? <Wallet size={17} /> : <Banknote size={17} />}
-            <span>
-              {isDayLocked
-                ? 'Business day closed — sale band'
-                : noShift
-                ? 'Start Shift First — Sale Blocked'
-                : selectedCustomerId && customerDueAmount > 0
-                ? `Confirm & Post to Ledger (${paymentMode})`
-                : `Confirm & Pay (${paymentMode})`}
-              <span className="hidden md:inline"> [F9]</span>
+        <button
+          type="button"
+          aria-label="Complete sale"
+          onClick={handleCheckout}
+          disabled={!canPay}
+          aria-busy={isSubmitting || undefined}
+          className={cn(
+            'flex h-14 w-full items-center justify-between gap-3 rounded-control px-4 text-left font-bold transition-[background-color,transform,box-shadow] duration-150',
+            canPay
+              ? 'cursor-pointer bg-brand text-brand-on shadow-e1-lit hover:bg-brand-hover active:scale-[.99]'
+              : 'cursor-not-allowed bg-surface-3 text-fg-subtle',
+          )}
+        >
+          {isSubmitting ? (
+            <span className="flex w-full items-center justify-center gap-2 text-[15px]">
+              <Loader2 className="size-5 animate-spin" aria-hidden="true" /> Saving sale...
             </span>
-          </>
-        )}
-      </button>
+          ) : (
+            <>
+              <span className="flex min-w-0 items-center gap-2 text-[14px]">
+                {paymentMode === 'Online' ? <Wallet className="size-5 shrink-0" aria-hidden="true" /> : paymentMode === 'Credit' ? <BookOpen className="size-5 shrink-0" aria-hidden="true" /> : <Banknote className="size-5 shrink-0" aria-hidden="true" />}
+                <span className="truncate">{payLabel}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                {hasItems && !noShift && !isDayLocked && <Money amount={grandTotal} className="text-[17px]" />}
+                <Kbd className={cn('hidden md:inline-flex', canPay && 'bg-brand-on/15 text-brand-on ring-brand-on/25')}>F9</Kbd>
+              </span>
+            </>
+          )}
+        </button>
       )}
     </div>
   );
 };
+
+function ChipButton({ tone = 'neutral', className, ...props }: React.ComponentProps<'button'> & { tone?: 'neutral' | 'success' | 'warning' }) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        'inline-flex h-8 shrink-0 cursor-pointer items-center whitespace-nowrap rounded-full px-3 text-xs font-semibold tabular-nums ring-1 ring-inset transition-colors duration-150',
+        tone === 'success' && 'bg-success-soft text-success-fg ring-success/20 hover:bg-success/15',
+        tone === 'warning' && 'bg-warning-soft text-warning-fg ring-warning/25 hover:bg-warning/15',
+        tone === 'neutral' && 'bg-surface text-fg-muted ring-line hover:bg-surface-3 hover:text-fg',
+        className,
+      )}
+      {...props}
+    />
+  );
+}

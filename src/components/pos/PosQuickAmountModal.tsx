@@ -1,6 +1,6 @@
 import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Check, Minus, Plus, ShoppingCart, X, Zap } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Minus, Plus, ShoppingCart, X, Zap } from 'lucide-react';
 import { AvailableProduct } from './PosTypes';
 import { PosProductImage } from './PosProductImage';
 import { formatCurrency, formatQty, cleanNumber } from '../../lib/formatters';
@@ -10,8 +10,8 @@ import {
   hasConfiguredCashShortcuts,
   stepQuickQuantity,
 } from '../../lib/posQuickEntry';
-import { MOOCO_THEME } from '../../theme';
 import { qtyAfterUnitSwitch, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { Button, IconButton } from '../ui';
 
 interface Props {
   open: boolean;
@@ -26,10 +26,12 @@ interface Props {
   onAdded?: () => void;
 }
 
-export function PosQuickAmountModal(props: Props) {
+export default function PosQuickAmountModal(props: Props) {
   if (!props.open || !props.quickProduct) return null;
   return <QuickEntry key={props.quickProduct.id} {...props} product={props.quickProduct} />;
 }
+
+export { PosQuickAmountModal };
 
 const LOW_STOCK_LIMIT = 5;
 
@@ -50,21 +52,15 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   const minQty = isFractional ? (isKgItem ? 0.25 : 0.5) : 1;
 
   const seed = initialEntry && (seededVariantId || (looseAllowed && !initialEntry.variantId)) ? initialEntry : null;
-  const initialAmount = useMemo(() => {
+  const [amount, setAmount] = useState(() => {
     if (seed) {
       if (seed.mode === 'amount') return seed.value;
-      const q = Number(seed.value);
-      return String(cleanNumber(q * rate));
+      return String(cleanNumber(Number(seed.value) * rate));
     }
     return String(cleanNumber(rate > 0 ? rate : 100));
-  }, []);
-
-  const [amount, setAmount] = useState(initialAmount);
-  const [submitError, setSubmitError] = useState('');
-  const [tappedPreset, setTappedPreset] = useState<number | null>(() => {
-    if (seed && seed.mode === 'amount') return Number(seed.value);
-    return null;
   });
+  const [submitError, setSubmitError] = useState('');
+  const [tappedPreset, setTappedPreset] = useState<number | null>(() => (seed && seed.mode === 'amount' ? Number(seed.value) : null));
   const panel = useRef<HTMLFormElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const committing = useRef(false);
@@ -141,8 +137,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   const stepValue = (direction: number) => {
     const currentQty = entry.error || entry.qty <= 0 ? 1 : entry.qty;
     const nextQty = stepQuickQuantity(currentQty, direction, product.unit, packaged);
-    const nextAmount = cleanNumber(nextQty * rate);
-    setAmount(String(nextAmount));
+    setAmount(String(cleanNumber(nextQty * rate)));
     setSubmitError('');
     setTappedPreset(null);
   };
@@ -157,15 +152,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
     if (!canAdd || committing.current) return;
     committing.current = true;
     const finalTotal = entry.total;
-    const added = addToCart(
-      product,
-      entry.qty,
-      variant?.name,
-      rate,
-      contains,
-      variant?.id,
-      finalTotal
-    );
+    const added = addToCart(product, entry.qty, variant?.name, rate, contains, variant?.id, finalTotal);
     if (!added) {
       committing.current = false;
       setSubmitError('Could not add this item. Check stock and try again.');
@@ -177,10 +164,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   };
 
   const tapCashPreset = (presetAmt: number) => {
-    if (tappedPreset === presetAmt && canAdd) {
-      add();
-      return;
-    }
+    if (tappedPreset === presetAmt && canAdd) { add(); return; }
     setAmount(String(presetAmt));
     setTappedPreset(presetAmt);
     setSubmitError('');
@@ -188,10 +172,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
 
   const tapPackPreset = (packs: number) => {
     const packAmount = cleanNumber(packs * rate);
-    if (tappedPreset === packAmount && canAdd) {
-      add();
-      return;
-    }
+    if (tappedPreset === packAmount && canAdd) { add(); return; }
     setAmount(String(packAmount));
     setTappedPreset(packAmount);
     setSubmitError('');
@@ -203,12 +184,8 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
     if (entry.qty <= 0) return null;
     const isLiter = /liter|litre|\bl\b/i.test(unit || product.unit || '');
     const isKg = /kg|kilo/i.test(unit || product.unit || '');
-    if (isLiter && entry.qty < 1) {
-      return `~${Math.round(entry.qty * 1000)} ml`;
-    }
-    if (isKg && entry.qty < 1) {
-      return `~${Math.round(entry.qty * 1000)} g`;
-    }
+    if (isLiter && entry.qty < 1) return `~${Math.round(entry.qty * 1000)} ml`;
+    if (isKg && entry.qty < 1) return `~${Math.round(entry.qty * 1000)} g`;
     return null;
   }, [entry.qty, unit, product.unit]);
 
@@ -233,66 +210,41 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
         }}
       >
         <div className="pos-quick-header">
-          <PosProductImage name={product.name} imageUrl={product.image_url} className="pos-quick-image" />
+          <PosProductImage name={product.name} imageUrl={product.image_url} className="size-14 rounded-2xl" />
           <div className="pos-quick-heading">
-            <span className="pos-eyebrow"><Zap size={12} />QUICK ENTRY</span>
+            <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-fg"><Zap className="size-3" aria-hidden="true" />Quick entry</span>
             <h2 id={titleId}>{product.name}</h2>
             <div className="pos-quick-meta">
-              <p>{formatCurrency(rate)} / {unit}</p>
+              <span className="tabular-nums">{formatCurrency(rate)} / {unit}</span>
               <span className="pos-quick-chip" data-tone={stockTone}>{stockLabel}</span>
               {sameUnitInCart > 0 && <span className="pos-quick-chip" data-tone="cart">{formatQty(sameUnitInCart, 3)} in cart</span>}
             </div>
           </div>
-          <button type="button" className="pos-icon-button" aria-label="Close quick entry" onClick={onClose}><X size={19} /></button>
+          <IconButton variant="secondary" aria-label="Close quick entry" icon={<X />} onClick={onClose} className="self-start" />
         </div>
 
         <div className="pos-quick-body">
           {variants.length > 0 && (
-            <div className="pos-quick-units space-y-1.5 mb-3">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                Choose Unit / Packaging:
-              </span>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <>
+              <div className="pos-quick-section-label"><span>Unit / packaging</span></div>
+              <div className="pos-quick-units" role="group" aria-label="Unit / packaging">
                 {looseAllowed && (
-                  <button
-                    type="button"
-                    onClick={() => switchVariant('base')}
-                    className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
-                      variantId === 'base'
-                        ? 'bg-lime-600 text-white border-lime-600 shadow-sm ring-2 ring-lime-600/30 font-bold'
-                        : 'bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-slate-200 dark:border-slate-700 hover:border-lime-500'
-                    }`}
-                  >
-                    <div className="text-xs font-bold truncate">1 {product.unit}</div>
-                    <div className={`text-xs font-mono font-black mt-0.5 ${variantId === 'base' ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
-                      {formatCurrency(product.price)}
-                    </div>
+                  <button type="button" aria-pressed={variantId === 'base'} onClick={() => switchVariant('base')}>
+                    <strong>1 {product.unit}</strong>
+                    <span>{formatCurrency(product.price)}</span>
                   </button>
                 )}
                 {variants.map(v => {
                   const size = sellUnitContains(v);
-                  const packPrice = sellUnitPrice(Number(product.price) || 0, size, v.selling_price);
-                  const isSelected = variantId === v.id;
                   return (
-                    <button
-                      key={v.id}
-                      type="button"
-                      onClick={() => switchVariant(v.id)}
-                      className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer active:scale-95 ${
-                        isSelected
-                          ? 'bg-lime-600 text-white border-lime-600 shadow-sm ring-2 ring-lime-600/30 font-bold'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-slate-200 dark:border-slate-700 hover:border-lime-500'
-                      }`}
-                    >
-                      <div className="text-xs font-bold truncate">{v.name} ({size} {product.unit})</div>
-                      <div className={`text-xs font-mono font-black mt-0.5 ${isSelected ? 'text-lime-100' : 'text-lime-600 dark:text-lime-400'}`}>
-                        {formatCurrency(packPrice)}
-                      </div>
+                    <button key={v.id} type="button" aria-pressed={variantId === v.id} onClick={() => switchVariant(v.id)}>
+                      <strong>{v.name} ({formatQty(size, 3)} {product.unit})</strong>
+                      <span>{formatCurrency(sellUnitPrice(Number(product.price) || 0, size, v.selling_price))}</span>
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </>
           )}
 
           <div className="pos-quick-input-block">
@@ -300,22 +252,13 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
               <label htmlFor={`${titleId}-input`}>
                 {packaged ? 'Sale amount (Rupees)' : 'Enter sale amount (Rupees)'}
               </label>
-              <button
-                type="button"
-                onClick={() => { setAmount(''); setSubmitError(''); refocus(); }}
-                disabled={!amount}
-              >
+              <button type="button" onClick={() => { setAmount(''); setSubmitError(''); refocus(); }} disabled={!amount}>
                 Clear
               </button>
             </div>
             <div className="pos-quick-value">
-              <button
-                type="button"
-                aria-label="Decrease quick quantity"
-                disabled={decreaseDisabled}
-                onClick={() => stepValue(-1)}
-              >
-                <Minus size={19} />
+              <button type="button" aria-label="Decrease quick quantity" disabled={decreaseDisabled} onClick={() => stepValue(-1)}>
+                <Minus className="size-5" />
               </button>
               <span className="pos-quick-prefix">Rs</span>
               <input
@@ -339,33 +282,21 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
               />
               {entry.qty > 0 && !entry.error && (
                 <div className="pos-quick-qty-badge" title="Equivalent quantity">
-                  <span className="pos-quick-qty-num">{formatQty(entry.qty, 3)}</span>
-                  <span className="pos-quick-qty-unit">{unit}</span>
+                  <strong>{formatQty(entry.qty, 3)}</strong>
+                  <span>{unit}</span>
                 </div>
               )}
-              <button
-                type="button"
-                aria-label="Increase quick quantity"
-                onClick={() => stepValue(1)}
-              >
-                <Plus size={19} />
+              <button type="button" aria-label="Increase quick quantity" onClick={() => stepValue(1)}>
+                <Plus className="size-5" />
               </button>
             </div>
             <div id={summaryId} className="pos-quick-conversion">
-              <span className="flex items-center gap-1.5 flex-wrap">
+              <span>
                 {variant && fromBase
                   ? `= ${formatQty(entry.qty, 3)} ${unit} = ${formatQty(entry.qty * contains, 3)} ${product.unit} @ ${formatCurrency(rate)}/${unit}`
                   : `= ${formatQty(entry.qty, 3)} ${unit} @ ${formatCurrency(rate)}/${unit}`}
-                {humanQtyBadge && (
-                  <span className="px-1.5 py-0.5 rounded-md bg-lime-100 dark:bg-lime-950/70 text-lime-800 dark:text-lime-300 font-bold text-[11px] shadow-2xs">
-                    {humanQtyBadge}
-                  </span>
-                )}
-                {amount && Number(amount) > 0 && !packaged && (
-                  <span className="px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-bold text-[11px] shadow-2xs">
-                    Rs. {amount} Custom Amount
-                  </span>
-                )}
+                {humanQtyBadge && <span className="pos-quick-tag">{humanQtyBadge}</span>}
+                {amount && Number(amount) > 0 && !packaged && <span className="pos-quick-tag">{formatCurrency(Number(amount))} custom amount</span>}
               </span>
               <span>{allowNegativeStock ? 'Stock override enabled' : `${formatQty(remaining, 3)} ${unit} available`}</span>
             </div>
@@ -373,11 +304,11 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
 
           {!packaged && cashPresets.length > 0 && (
             <>
-              <div className="pos-quick-presets-heading">
+              <div className="pos-quick-section-label pos-quick-presets-heading">
                 <span>{customCash ? "This product's cash buttons" : 'Popular amounts'}</span>
                 <span>Tap to fill · tap again to add</span>
               </div>
-              <div className="pos-quick-presets pos-quick-cash-presets">
+              <div className="pos-quick-presets">
                 {cashPresets.map(presetAmt => {
                   const portion = calculateQuickEntry(String(presetAmt), 'amount', rate, false);
                   const disabled = Boolean(portion.error) || (!allowNegativeStock && portion.qty > remaining + .01);
@@ -391,9 +322,9 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
                       data-armed={tappedPreset === presetAmt || undefined}
                       onClick={() => tapCashPreset(presetAmt)}
                     >
-                      <strong>Rs {presetAmt}</strong>
+                      <strong>{formatCurrency(presetAmt)}</strong>
                       <span>{portion.qty > 0 ? `${formatQty(portion.qty, 3)} ${unit}` : ''}</span>
-                      {isSelected && <Check size={14} />}
+                      {isSelected && <Check aria-hidden="true" />}
                     </button>
                   );
                 })}
@@ -403,7 +334,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
 
           {packaged && packPresets.length > 0 && (
             <>
-              <div className="pos-quick-presets-heading">
+              <div className="pos-quick-section-label pos-quick-presets-heading">
                 <span>Quick pack count</span>
                 <span>Tap to fill · tap again to add</span>
               </div>
@@ -423,7 +354,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
                     >
                       <strong>{presetPacks} {unit}</strong>
                       <span>{formatCurrency(packAmount)}</span>
-                      {isSelected && <Check size={14} />}
+                      {isSelected && <Check aria-hidden="true" />}
                     </button>
                   );
                 })}
@@ -431,7 +362,11 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
             </>
           )}
 
-          {error && <p id={errorId} className="pos-quick-error has-error" role="status" aria-live="polite">{error}</p>}
+          {error && (
+            <p id={errorId} className="pos-quick-error" role="status" aria-live="polite">
+              <AlertCircle className="size-4 shrink-0" aria-hidden="true" />{error}
+            </p>
+          )}
         </div>
 
         <div className="pos-quick-footer">
@@ -439,9 +374,9 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
             <span>{formatQty(entry.qty, 3)} {unit}{sameUnitInCart > 0 ? ` · ${formatQty(sameUnitInCart, 3)} already in cart` : ''}</span>
             <strong>{formatCurrency(total)}</strong>
           </div>
-          <button type="submit" disabled={!canAdd} className={`${MOOCO_THEME.button.primary} pos-quick-add`}>
-            <ShoppingCart size={18} />Add to cart<ArrowRight size={17} />
-          </button>
+          <Button type="submit" size="lg" disabled={!canAdd} leftIcon={<ShoppingCart />} rightIcon={<ArrowRight />} className="shrink-0">
+            Add to cart
+          </Button>
         </div>
       </form>
     </div>,
