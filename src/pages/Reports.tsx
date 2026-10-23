@@ -1,24 +1,40 @@
-import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, ChevronDown, FileSpreadsheet, FileText, Link2, ListTree, Loader2, Lock, MessageCircle,
-  Printer, RefreshCw, Star, X, AlertTriangle, ChevronRight
+  AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, FileSpreadsheet, FileText, Link2, ListTree, Loader2, Lock, MessageCircle,
+  Printer, RefreshCw, Star, X
 } from 'lucide-react';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
-import { ReportCatalog } from '../components/reports/ReportCatalog';
+import { ReportCard, ReportCatalog, ReportCatalogGrid } from '../components/reports/ReportCatalog';
 import { ReportToolbar, FilterOptions } from '../components/reports/ReportToolbar';
 import { ReportTable } from '../components/reports/ReportTable';
-import { ReportChart } from '../components/reports/ReportChart';
-import { Insights, KpiGrid, NotesList, StatementCard } from '../components/reports/ReportBlocks';
+import { Insights, KPI_TONE, KpiGrid, NotesList, StatementCard } from '../components/reports/ReportBlocks';
 import { ReportIcon } from '../components/reports/ReportIcon';
+import { loadedExport, preloadExport } from '../components/reports/exportLoader';
+import { Button, Card, EmptyState, IconButton, Kbd, PageHeader, SearchInput, Skeleton, StatCard } from '../components/ui';
+import { cn } from '../lib/cn';
 import { getReport, REPORT_CATEGORIES, REPORTS } from '../lib/reports/registry';
 import { presetLabel, presetRange, rangeText } from '../lib/reports/presets';
 import { businessDate, itemCategory, previousRange } from '../lib/reports/helpers';
-import { exportCsv, exportXlsx, ExportInput, printReport, shareText } from '../lib/reports/export';
-import type { FilterKey, GroupBy, ReportColumn, ReportData, ReportDefinition, ReportFilters, ReportResult, ReportRow } from '../lib/reports/types';
+import { formatValue } from '../lib/reports/format';
+import type { ExportInput } from '../lib/reports/export';
+import type { FilterKey, GroupBy, ReportChart as ChartSpec, ReportColumn, ReportData, ReportDefinition, ReportFilters, ReportResult, ReportRow } from '../lib/reports/types';
+import '../styles/reports.css';
+
+// Recharts is only needed once a report with charts is open.
+const ReportChart = lazy(() => import('../components/reports/ReportChart'));
 
 const FILTER_KEYS: Exclude<FilterKey, 'groupBy'>[] = ['customerId', 'supplierId', 'itemId', 'accountId', 'category', 'paymentMode', 'cashierId', 'milkType', 'shift'];
+
+type ExportKind = 'xlsx' | 'csv' | 'print' | 'share' | 'link';
+const EXPORTS: { kind: ExportKind; icon: React.ElementType; label: string; hint: string; needsPermission: boolean }[] = [
+  { kind: 'xlsx', icon: FileSpreadsheet, label: 'Excel workbook (.xlsx)', hint: 'Every table on its own sheet', needsPermission: true },
+  { kind: 'print', icon: Printer, label: 'Print / Save as PDF', hint: 'Letterhead, A4 ready', needsPermission: true },
+  { kind: 'csv', icon: FileText, label: 'CSV file', hint: 'For any spreadsheet app', needsPermission: true },
+  { kind: 'share', icon: MessageCircle, label: 'Share on WhatsApp', hint: 'Summary as a message', needsPermission: true },
+  { kind: 'link', icon: Link2, label: 'Copy report link', hint: 'Same report, dates & filters', needsPermission: false },
+];
 
 function runReport(report: ReportDefinition, data: ReportData, filters: ReportFilters): ReportResult {
   try {
@@ -44,15 +60,20 @@ function useStoredList(key: string, limit = 30) {
   return [list, save] as const;
 }
 
+const visibleInput = (...inputs: (HTMLInputElement | null)[]) => inputs.find(el => el && el.offsetParent !== null) || null;
+
 const Reports: React.FC = () => {
   const dairy = useDairy();
   const { canPerform, currentUser, settings, isDataLoading, dataLoadError, retryLoading } = dairy;
   const { showToast } = useToast();
   const [params, setParams] = useSearchParams();
-  const searchRef = useRef<HTMLInputElement>(null);
+  const homeSearchRef = useRef<HTMLInputElement>(null);
+  const catalogSearchRef = useRef<HTMLInputElement>(null);
   const viewsRef = useRef<ExportInput['views']>({});
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<ExportKind | null>(null);
+  const [homeQuery, setHomeQuery] = useState('');
   const exportRef = useRef<HTMLDivElement>(null);
 
   const today = dairy.getBusinessDate?.() || businessDate();
@@ -71,6 +92,8 @@ const Reports: React.FC = () => {
     const range = preset === 'custom'
       ? { from: params.get('from') || presetRange('this_month', today).from, to: params.get('to') || today }
       : presetRange(preset, today);
+    // A hand-typed or edited link can carry the dates the wrong way round.
+    if (range.from > range.to) [range.from, range.to] = [range.to, range.from];
     const f: ReportFilters = { ...range, groupBy: (params.get('g') as GroupBy) || 'day' };
     FILTER_KEYS.forEach(k => { const v = params.get(k); if (v) f[k] = v; });
     return f;
@@ -100,6 +123,7 @@ const Reports: React.FC = () => {
     setParams(next);
     setRecent([id, ...recent.filter(x => x !== id)]);
     setCatalogOpen(false);
+    setExportOpen(false);
     viewsRef.current = {};
   }, [filters.from, filters.to, params, preset, compare, setParams, recent, setRecent]);
 
@@ -172,27 +196,30 @@ const Reports: React.FC = () => {
 
   const rangeLabel = report?.snapshot ? `As of ${rangeText(today, today)}` : rangeText(filters.from, filters.to);
   const onViewChange = useCallback((id: string, view: { rows: ReportRow[]; columns: ReportColumn[] }) => { viewsRef.current = { ...viewsRef.current, [id]: view }; }, []);
-  const exportInput = (): ExportInput | null => (report && result ? {
-    report, result, filters, rangeLabel, company: settings.general, generatedBy: currentUser?.name, views: viewsRef.current,
+  const hasContent = Boolean(result && (result.kpis?.length || result.tables?.length || result.statements?.length || result.charts?.length));
+  // Exports describe what is on screen: the result's own (deferred) dates, never dates still being calculated.
+  const exportInput = (): ExportInput | null => (report && result && hasContent ? {
+    report, result, filters: deferredFilters, generatedBy: currentUser?.name, views: viewsRef.current, company: settings.general,
+    rangeLabel: report.snapshot ? `As of ${rangeText(today, today)}` : rangeText(deferredFilters.from, deferredFilters.to),
   } : null);
 
-  const doExport = (kind: 'xlsx' | 'csv' | 'print' | 'share' | 'link') => {
-    setExportOpen(false);
-    if (kind === 'link') {
-      navigator.clipboard?.writeText(window.location.href).then(() => showToast('Report link copied', 'success'), () => showToast('Could not copy the link', 'error'));
-      return;
-    }
-    const input = exportInput();
-    if (!input) return;
-    if (!canExport) { showToast('Aap ko reports export karne ki ijazat nahi hai.', 'warning'); return; }
+  const copyLink = () => {
+    const done = (ok: boolean) => showToast(ok ? 'Report link copied' : 'Could not copy the link', ok ? 'success' : 'error');
+    if (!navigator.clipboard?.writeText) { done(false); return; }
+    navigator.clipboard.writeText(window.location.href).then(() => done(true), () => done(false));
+  };
+
+  const runExport = (mod: typeof import('../lib/reports/export'), kind: ExportKind, input: ExportInput) => {
     try {
-      if (kind === 'xlsx') { exportXlsx(input); showToast('Excel file downloaded', 'success'); }
-      if (kind === 'csv') { exportCsv(input); showToast('CSV file downloaded', 'success'); }
-      if (kind === 'print' && !printReport(input)) showToast('Pop-up blocked. Allow pop-ups to print or save PDF.', 'warning');
+      if (kind === 'xlsx') { mod.exportXlsx(input); showToast('Excel file downloaded', 'success'); }
+      if (kind === 'csv') { mod.exportCsv(input); showToast('CSV file downloaded', 'success'); }
+      if (kind === 'print' && !mod.printReport(input)) showToast('Pop-up blocked. Allow pop-ups to print or save PDF.', 'warning');
       if (kind === 'share') {
-        const text = shareText(input);
-        if (navigator.share && /Android|iPhone|iPad/i.test(navigator.userAgent)) void navigator.share({ title: report!.title, text }).catch(() => {});
-        else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+        const text = mod.shareText(input);
+        const whatsapp = () => window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+        if (navigator.share && /Android|iPhone|iPad/i.test(navigator.userAgent)) {
+          navigator.share({ title: input.report.title, text }).catch((error: unknown) => { if ((error as Error)?.name !== 'AbortError') whatsapp(); });
+        } else whatsapp();
       }
     } catch (error) {
       console.error('[Reports] export failed', error);
@@ -200,23 +227,50 @@ const Reports: React.FC = () => {
     }
   };
 
+  const doExport = (kind: ExportKind) => {
+    setExportOpen(false);
+    if (kind === 'link') { copyLink(); return; }
+    if (!canExport) { showToast('Aap ko reports export karne ki ijazat nahi hai.', 'warning'); return; }
+    if (exporting) return;
+    const input = exportInput();
+    if (!input) return;
+    const mod = loadedExport();
+    // Print and share open windows, which browsers allow only inside the click itself.
+    if (mod && (kind === 'print' || kind === 'share')) { runExport(mod, kind, input); return; }
+    setExporting(kind);
+    preloadExport()
+      // A frame for the spinner to paint before a large workbook is built.
+      .then(m => new Promise<void>(resolve => setTimeout(() => { runExport(m, kind, input); resolve(); }, 30)))
+      .catch(() => showToast('Export could not be loaded. Check the connection and try again.', 'error'))
+      .finally(() => setExporting(null));
+  };
+
   useEffect(() => {
     if (!exportOpen) return;
     const close = (e: MouseEvent) => { if (!exportRef.current?.contains(e.target as Node)) setExportOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setExportOpen(false); };
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
   }, [exportOpen]);
+
+  useEffect(() => {
+    if (!catalogOpen) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setCatalogOpen(false); };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [catalogOpen]);
 
   // "/" jumps to report search, like most dashboards.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.ctrlKey || e.metaKey) return;
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-      const input = searchRef.current;
-      if (!input || input.offsetParent === null) { if (!report) return; setCatalogOpen(true); return; }
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+      const input = visibleInput(homeSearchRef.current, catalogSearchRef.current);
       e.preventDefault();
-      input.focus();
+      if (input) input.focus();
+      else if (report) setCatalogOpen(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -226,30 +280,35 @@ const Reports: React.FC = () => {
     setFavourites(favourites.includes(id) ? favourites.filter(x => x !== id) : [id, ...favourites]);
   }, [favourites, setFavourites]);
 
+  const openById = useCallback((id: string) => openReport(id), [openReport]);
   const onDrill = useCallback((row: ReportRow) => { if (row._drill) openReport(row._drill.report, row._drill.filters); }, [openReport]);
-  const onCopied = useCallback(() => showToast('Table copied — paste it into Excel', 'success'), [showToast]);
+  const onCopied = useCallback((ok: boolean) => showToast(ok ? 'Table copied — paste it into Excel' : 'Could not copy the table', ok ? 'success' : 'error'), [showToast]);
 
   const catalog = (
     <ReportCatalog reports={REPORTS} activeId={report?.id} favourites={favourites} recent={recent} isLocked={isLocked}
-      onOpen={id => openReport(id)} onToggleFavourite={toggleFavourite} searchRef={searchRef} />
+      onOpen={openById} onToggleFavourite={toggleFavourite} searchRef={catalogSearchRef} />
   );
 
   const category = REPORT_CATEGORIES.find(c => c.id === report?.category);
   const canGoBack = (window.history.state?.idx ?? 0) > 0;
+  const isFavourite = report ? favourites.includes(report.id) : false;
+  const exportBlocked = !hasContent || isStale;
 
   return (
     <div className="flex gap-5 pb-6">
-      {/* Catalog: docked on large screens, a drawer on phones and tablets */}
-      <aside className="sticky top-4 hidden h-[calc(100dvh-7.5rem)] w-72 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white/80 shadow-xs backdrop-blur lg:block dark:border-slate-800 print:hidden">
-        {catalog}
-      </aside>
+      {/* Catalogue: docked beside an open report on large screens, a drawer on phones and tablets */}
+      {report && (
+        <aside className="sticky top-4 hidden h-[calc(100dvh-7.5rem)] w-72 shrink-0 overflow-hidden rounded-card border border-line bg-surface shadow-e1 lg:block print:hidden">
+          {catalog}
+        </aside>
+      )}
       {catalogOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="All reports">
-          <button type="button" aria-label="Close" className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setCatalogOpen(false)} />
-          <div className="absolute inset-y-0 left-0 flex w-[min(22rem,88vw)] flex-col bg-white shadow-2xl dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-              <span className="text-sm font-bold text-slate-800 dark:text-slate-100">All reports</span>
-              <button type="button" onClick={() => setCatalogOpen(false)} aria-label="Close" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><X size={16} /></button>
+        <div className="fixed inset-0 z-50 lg:hidden print:hidden" role="dialog" aria-modal="true" aria-label="All reports">
+          <button type="button" aria-label="Close" tabIndex={-1} className="absolute inset-0 bg-slate-950/50" onClick={() => setCatalogOpen(false)} />
+          <div className="absolute inset-y-0 left-0 flex w-[min(22rem,88vw)] flex-col bg-surface shadow-e3 animate-in slide-in-from-left duration-200">
+            <div className="flex items-center justify-between border-b border-line px-4 py-3">
+              <span className="text-sm font-bold text-fg">All reports</span>
+              <IconButton size="sm" icon={<X />} aria-label="Close" onClick={() => setCatalogOpen(false)} />
             </div>
             <div className="min-h-0 flex-1">{catalog}</div>
           </div>
@@ -258,68 +317,63 @@ const Reports: React.FC = () => {
 
       <div className="min-w-0 flex-1 space-y-4">
         {(isDataLoading || dataLoadError) && (
-          <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium ${dataLoadError ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-500 dark:border-slate-800'}`}>
-            {dataLoadError ? <AlertTriangle size={14} /> : <Loader2 size={14} className="animate-spin" />}
+          <div role="status" className={cn('flex items-center gap-2 rounded-control px-3 py-2 text-xs font-medium ring-1 ring-inset print:hidden',
+            dataLoadError ? 'bg-warning-soft text-warning-fg ring-warning/25' : 'bg-surface text-fg-subtle ring-line')}>
+            {dataLoadError ? <AlertTriangle size={14} aria-hidden="true" /> : <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
             <span className="flex-1">{dataLoadError ? `${dataLoadError} Reports may be incomplete.` : 'Loading the latest records — figures will refresh automatically.'}</span>
-            {dataLoadError && !isDataLoading && <button type="button" onClick={() => void retryLoading()} className="inline-flex items-center gap-1 font-bold underline"><RefreshCw size={12} />Retry</button>}
+            {dataLoadError && !isDataLoading && <Button variant="ghost" size="sm" leftIcon={<RefreshCw />} onClick={() => void retryLoading()}>Retry</Button>}
           </div>
         )}
 
         {!report ? (
-          <ReportsHome favourites={favourites} recent={recent} overview={overview} isLocked={isLocked} onOpen={id => openReport(id)} onBrowse={() => setCatalogOpen(true)} />
+          <ReportsHome favourites={favourites} recent={recent} overview={overview} isLocked={isLocked} onOpen={openById}
+            onToggleFavourite={toggleFavourite} query={homeQuery} onQuery={setHomeQuery} searchRef={homeSearchRef} />
         ) : (
           <>
             <div className="flex flex-wrap items-start gap-3">
-              <button type="button" onClick={() => (canGoBack ? window.history.back() : goHome())} aria-label="Back"
-                className="mt-1 rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-xs hover:text-slate-900 dark:border-slate-700 dark:hover:text-white print:hidden">
-                <ArrowLeft size={16} />
-              </button>
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-lime-500 to-lime-700 text-white shadow-lg shadow-lime-600/20">
+              <IconButton variant="secondary" icon={<ArrowLeft />} aria-label="Back" onClick={() => (canGoBack ? window.history.back() : goHome())} className="mt-0.5 print:hidden" />
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-fg">
                 <ReportIcon name={report.icon} size={20} />
-              </div>
+              </span>
               <div className="min-w-0 flex-1">
-                <nav className="flex items-center gap-1 text-[11px] font-semibold text-slate-400" aria-label="Breadcrumb">
-                  <button type="button" onClick={goHome} className="hover:text-lime-700">Reports</button>
-                  <ChevronRight size={11} />
+                <nav className="flex items-center gap-1 text-[11px] font-semibold text-fg-subtle print:hidden" aria-label="Breadcrumb">
+                  <button type="button" onClick={goHome} className="rounded hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Reports</button>
+                  <ChevronRight size={11} aria-hidden="true" />
                   <span>{category?.label}</span>
                 </nav>
-                <h2 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900 sm:text-xl dark:text-white">
+                <h2 className="flex items-center gap-1 text-xl font-bold tracking-tight text-fg sm:text-2xl">
                   <span className="truncate">{report.title}</span>
-                  <button type="button" onClick={() => toggleFavourite(report.id)} aria-pressed={favourites.includes(report.id)} aria-label="Favourite"
-                    className={favourites.includes(report.id) ? 'text-amber-500' : 'text-slate-300 hover:text-amber-500'}>
-                    <Star size={17} fill={favourites.includes(report.id) ? 'currentColor' : 'none'} />
-                  </button>
+                  <IconButton size="sm" onClick={() => toggleFavourite(report.id)} aria-pressed={isFavourite} aria-label={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+                    icon={<Star fill={isFavourite ? 'currentColor' : 'none'} />} className={cn('print:hidden', isFavourite ? 'text-warning hover:text-warning' : 'text-fg-faint hover:text-warning')} />
                 </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {report.subtitle} · <span className="font-semibold text-slate-700 dark:text-slate-200">{rangeLabel}</span>
-                  {!report.snapshot && preset !== 'custom' && <span className="text-slate-400"> ({presetLabel(preset)})</span>}
+                <p className="text-[13px] text-fg-subtle">
+                  {report.subtitle} · <span className="font-semibold text-fg-muted">{rangeLabel}</span>
+                  {!report.snapshot && preset !== 'custom' && <span> ({presetLabel(preset)})</span>}
                 </p>
               </div>
-              <div className="flex items-center gap-2 print:hidden">
-                <button type="button" onClick={() => setCatalogOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 shadow-xs hover:bg-slate-50 lg:hidden dark:border-slate-700 dark:text-slate-300">
-                  <ListTree size={14} />Reports
-                </button>
-                <div ref={exportRef} className="relative">
-                  <button type="button" onClick={() => setExportOpen(v => !v)} disabled={!result} aria-expanded={exportOpen}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-lime-600 px-3.5 text-xs font-bold text-white shadow-lg shadow-lime-600/20 hover:bg-lime-700 disabled:opacity-50">
-                    <FileSpreadsheet size={14} />Export<ChevronDown size={13} />
-                  </button>
+              <div className="flex w-full items-center gap-2 sm:w-auto print:hidden">
+                <Button variant="secondary" leftIcon={<ListTree />} onClick={() => setCatalogOpen(true)} className="lg:hidden">Reports</Button>
+                <div ref={exportRef} className="relative ml-auto sm:ml-0">
+                  <Button leftIcon={<FileSpreadsheet />} rightIcon={<ChevronDown />} loading={Boolean(exporting)}
+                    onClick={() => setExportOpen(v => !v)} onPointerEnter={() => void preloadExport().catch(() => {})} onFocus={() => void preloadExport().catch(() => {})}
+                    disabled={!hasContent} aria-expanded={exportOpen} aria-haspopup="menu"
+                    title={!hasContent ? 'Nothing to export yet' : undefined}>
+                    {exporting ? 'Exporting…' : 'Export'}
+                  </Button>
                   {exportOpen && (
-                    <div className="absolute right-0 top-11 z-40 w-60 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-2xl dark:border-slate-700">
-                      {[
-                        { kind: 'xlsx' as const, icon: FileSpreadsheet, label: 'Excel workbook (.xlsx)', hint: 'Every table on its own sheet', color: 'text-emerald-600' },
-                        { kind: 'print' as const, icon: Printer, label: 'Print / Save as PDF', hint: 'Letterhead, A4 ready', color: 'text-slate-700 dark:text-slate-200' },
-                        { kind: 'csv' as const, icon: FileText, label: 'CSV file', hint: 'For any spreadsheet app', color: 'text-blue-600' },
-                        { kind: 'share' as const, icon: MessageCircle, label: 'Share on WhatsApp', hint: 'Summary as a message', color: 'text-green-600' },
-                        { kind: 'link' as const, icon: Link2, label: 'Copy report link', hint: 'Same report, dates & filters', color: 'text-violet-600' },
-                      ].map(o => (
-                        <button key={o.kind} type="button" onClick={() => doExport(o.kind)} disabled={o.kind !== 'link' && !canExport}
-                          className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-slate-800">
-                          <o.icon size={16} className={o.color} />
-                          <span><span className="block text-xs font-bold text-slate-800 dark:text-slate-100">{o.label}</span><span className="block text-[10.5px] text-slate-400">{o.hint}</span></span>
-                        </button>
-                      ))}
-                      {!canExport && <p className="px-3 pb-1 pt-1.5 text-[10.5px] text-amber-600">Export needs the “Export reports” permission.</p>}
+                    <div role="menu" aria-label="Export" className="absolute right-0 top-12 z-40 w-64 rounded-card border border-line bg-surface p-1.5 shadow-e2 animate-fade-up">
+                      {EXPORTS.map(o => {
+                        const disabled = (o.needsPermission && !canExport) || (o.kind !== 'link' && exportBlocked);
+                        return (
+                          <button key={o.kind} type="button" role="menuitem" onClick={() => doExport(o.kind)} disabled={disabled}
+                            className="flex w-full items-center gap-3 rounded-control px-3 py-2 text-left hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40">
+                            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-fg-muted"><o.icon size={16} aria-hidden="true" /></span>
+                            <span className="min-w-0"><span className="block text-[13px] font-semibold text-fg">{o.label}</span><span className="block text-[11px] text-fg-subtle">{o.hint}</span></span>
+                          </button>
+                        );
+                      })}
+                      {!canExport && <p className="px-3 pb-1 pt-1.5 text-[11px] font-medium text-warning-fg">Export needs the “Export reports” permission.</p>}
+                      {canExport && isStale && <p className="flex items-center gap-1.5 px-3 pb-1 pt-1.5 text-[11px] text-fg-subtle"><Loader2 size={11} className="animate-spin" aria-hidden="true" />Updating figures — export in a moment.</p>}
                     </div>
                   )}
                 </div>
@@ -329,32 +383,41 @@ const Reports: React.FC = () => {
             <ReportToolbar
               report={report} filters={filters} preset={preset} today={today} compare={compare} options={options}
               onPreset={id => update({ p: id, from: null, to: null })}
-              onRange={(from, to) => update({ p: 'custom', from, to })}
+              onRange={(from, to) => update({ p: 'custom', from: from <= to ? from : to, to: from <= to ? to : from })}
               onFilter={(key, value) => update({ [key === 'groupBy' ? 'g' : key]: value || null })}
               onCompare={on => update({ cmp: on ? '1' : null })}
               onReset={() => update(Object.fromEntries(FILTER_KEYS.map(k => [k, null])))}
             />
 
             {locked ? (
-              <EmptyState icon={<Lock size={22} />} title="This report shows profit and balances" text="Ask the owner to give you the “View profit & financial reports” permission." />
+              <Card><EmptyState icon={<Lock />} title="This report shows profit and balances" description="Ask the owner to give you the “View profit & financial reports” permission." /></Card>
             ) : missingRequired ? (
-              <EmptyState icon={<ReportIcon name={report.icon} size={22} />} title={`Choose a ${report.requires === 'customerId' ? 'customer' : report.requires === 'supplierId' ? 'supplier' : report.requires === 'itemId' ? 'product' : 'account'} above`}
-                text="This report is prepared for one record at a time." />
+              <Card>
+                <EmptyState icon={<ReportIcon name={report.icon} />}
+                  title={`Choose a ${report.requires === 'customerId' ? 'customer' : report.requires === 'supplierId' ? 'supplier' : report.requires === 'itemId' ? 'product' : 'account'} above`}
+                  description="This report is prepared for one record at a time." />
+              </Card>
             ) : result ? (
-              <div className={`space-y-4 transition-opacity ${isStale ? 'opacity-60' : ''}`} aria-busy={isStale}>
+              <div className={cn('space-y-4 transition-opacity duration-150', isStale && 'opacity-60')} aria-busy={isStale}>
                 {result.kpis?.length ? <KpiGrid kpis={result.kpis} previous={previous?.kpis} previousLabel={rangeText(prevRange.from, prevRange.to)} /> : null}
-                {compare && previous && <p className="-mt-2 text-[11px] text-slate-400">Compared with {rangeText(prevRange.from, prevRange.to)}</p>}
+                {compare && previous && <p className="-mt-1 text-xs text-fg-subtle">Compared with {rangeText(prevRange.from, prevRange.to)}</p>}
                 {result.insights?.length ? <Insights items={result.insights} /> : null}
                 {result.notes?.length ? <NotesList notes={result.notes} /> : null}
                 {result.statements?.length ? <div className="grid gap-4 xl:grid-cols-2">{result.statements.map(s => <StatementCard key={s.id} statement={s} />)}</div> : null}
-                {result.charts?.length ? <div className="grid gap-4 lg:grid-cols-2">{result.charts.map(c => <ReportChart key={c.id} spec={c} />)}</div> : null}
+                {result.charts?.length ? (
+                  <div className="grid gap-4 lg:grid-cols-2 print:grid-cols-2">
+                    <Suspense fallback={result.charts.map(c => <ChartSkeleton key={c.id} spec={c} />)}>
+                      {result.charts.map(c => <ReportChart key={c.id} spec={c} />)}
+                    </Suspense>
+                  </div>
+                ) : null}
                 {result.tables?.map(t => <ReportTable key={`${report.id}:${t.id}`} table={t} onDrill={onDrill} onViewChange={onViewChange} onCopied={onCopied} />)}
-                {!result.kpis?.length && !result.tables?.length && !result.statements?.length && !result.notes?.length && (
-                  <EmptyState icon={<ReportIcon name={report.icon} size={22} />} title="Nothing to show" text="Try a wider date range or clear the filters." />
+                {!hasContent && !result.notes?.length && (
+                  <Card><EmptyState icon={<ReportIcon name={report.icon} />} title="Nothing to show" description="Try a wider date range or clear the filters." /></Card>
                 )}
               </div>
             ) : (
-              <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"><Loader2 size={16} className="animate-spin" />Preparing report…</div>
+              <ReportSkeleton />
             )}
           </>
         )}
@@ -363,91 +426,69 @@ const Reports: React.FC = () => {
   );
 };
 
-const EmptyState = ({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) => (
-  <div className="flex flex-col items-center rounded-2xl border border-dashed border-slate-300 bg-white/60 px-6 py-14 text-center dark:border-slate-700">
-    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 dark:bg-slate-800">{icon}</div>
-    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">{title}</h3>
-    <p className="mt-1 max-w-sm text-xs text-slate-500 dark:text-slate-400">{text}</p>
+const ChartSkeleton: React.FC<{ spec: ChartSpec }> = ({ spec }) => (
+  <Card className={cn('p-5', spec.wide && 'lg:col-span-2')}>
+    <p className="mb-4 text-[15px] font-bold text-fg">{spec.title}</p>
+    <Skeleton className="h-64 w-full" />
+  </Card>
+);
+
+const ReportSkeleton = () => (
+  <div className="space-y-4" aria-busy="true" aria-label="Preparing report">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-4">
+      {[0, 1, 2, 3].map(i => <div key={i} className="min-w-0"><StatCard label="" value="" loading className="h-full" /></div>)}
+    </div>
+    <Card className="space-y-3 p-5"><Skeleton className="h-4 w-40" />{[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-8 w-full" />)}</Card>
   </div>
 );
 
-const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onBrowse }: {
+const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onToggleFavourite, query, onQuery, searchRef }: {
   favourites: string[]; recent: string[]; overview: ReportResult['kpis'] | null;
-  isLocked: (r: ReportDefinition) => boolean; onOpen: (id: string) => void; onBrowse: () => void;
+  isLocked: (r: ReportDefinition) => boolean; onOpen: (id: string) => void; onToggleFavourite: (id: string) => void;
+  query: string; onQuery: (q: string) => void; searchRef: React.Ref<HTMLInputElement>;
 }) => {
-  const quick = [...new Set([...favourites, ...recent])].map(id => getReport(id)).filter(Boolean).slice(0, 6) as ReportDefinition[];
+  const quick = useMemo(() => [...new Set([...favourites, ...recent])].map(id => getReport(id)).filter(Boolean).slice(0, 6) as ReportDefinition[], [favourites, recent]);
+  const favouriteSet = useMemo(() => new Set(favourites), [favourites]);
   return (
-    <div className="space-y-5">
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-lime-600 via-lime-700 to-emerald-800 p-5 text-white shadow-xl shadow-lime-900/10 sm:p-7">
-        <div className="absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden="true" />
-        <div className="relative flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-lime-100/80">Reports centre</p>
-            <h2 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">{REPORTS.length} live reports for your dairy</h2>
-            <p className="mt-1 max-w-xl text-sm text-lime-50/90">Sales, profit, khata, milk, stock and cash — every figure from your live records, with compare, drill-down and one-click Excel / PDF.</p>
-          </div>
-          <button type="button" onClick={onBrowse} className="inline-flex items-center gap-2 rounded-xl bg-white/15 px-4 py-2.5 text-sm font-bold backdrop-blur hover:bg-white/25 lg:hidden">
-            <ListTree size={16} />Browse reports
-          </button>
-        </div>
-        {overview?.length ? (
-          <div className="relative mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {overview.map(k => (
-              <div key={k.key} className="rounded-2xl bg-white/12 px-3 py-2.5 ring-1 ring-white/15 backdrop-blur" style={{ background: 'rgba(255,255,255,0.12)' }}>
-                <div className="text-[10px] font-bold uppercase tracking-wide text-lime-100/80">Today · {k.label}</div>
-                <div className="mt-0.5 truncate text-lg font-black tabular-nums">{k.format === 'money' ? `Rs ${Math.round(k.value).toLocaleString('en-PK')}` : Math.round(k.value).toLocaleString('en-PK')}{k.unit ? ` ${k.unit}` : ''}</div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Reports centre"
+        title={`${REPORTS.length} live reports for your dairy`}
+        description="Sales, profit, khata, milk, stock and cash — every figure from your live records, with compare, drill-down and one-click Excel / PDF."
+      />
 
-      {quick.length > 0 && (
-        <section>
-          <h3 className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400"><Star size={12} />Your reports</h3>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {quick.map(r => <ReportCard key={r.id} report={r} locked={isLocked(r)} onOpen={() => onOpen(r.id)} />)}
+      {overview?.length ? (
+        <section aria-label="Today at a glance" className="space-y-2">
+          <h3 className="text-xs font-semibold text-fg-muted">Today</h3>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {overview.map(k => {
+              const text = formatValue(k.value, k.format || 'number', k.unit);
+              return (
+                <div key={k.key} className="min-w-0">
+                  <StatCard label={k.label} value={<span title={text}>{text}</span>} tone={KPI_TONE[k.tone || 'neutral']} hint={k.hint} className="h-full" />
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      <SearchInput ref={searchRef as any} value={query} onChange={onQuery} placeholder="Find a report — sales, khata, milk, stock, profit…" aria-label="Find a report" shortcut="/" className="max-w-xl" />
+
+      {!query && quick.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="flex items-center gap-1.5 text-xs font-semibold text-fg-muted"><Star size={12} aria-hidden="true" />Your reports</h3>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {quick.map(r => <ReportCard key={r.id} report={r} locked={isLocked(r)} favourite={favouriteSet.has(r.id)} onOpen={onOpen} onToggleFavourite={onToggleFavourite} />)}
           </div>
         </section>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-        {REPORT_CATEGORIES.map(cat => {
-          const list = REPORTS.filter(r => r.category === cat.id);
-          if (!list.length) return null;
-          return (
-            <section key={cat.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800">
-              <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-slate-800 dark:text-slate-100">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-lime-50 text-lime-700 dark:bg-lime-950/40 dark:text-lime-400"><ReportIcon name={cat.icon} size={14} /></span>
-                {cat.label}<span className="ml-auto text-[11px] font-semibold text-slate-400">{list.length}</span>
-              </h3>
-              <div className="space-y-0.5">
-                {list.map(r => (
-                  <button key={r.id} type="button" onClick={() => onOpen(r.id)} className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60">
-                    <ReportIcon name={r.icon} size={13} className="shrink-0 text-slate-400 group-hover:text-lime-600" />
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-slate-700 dark:text-slate-200">{r.title}</span>
-                    {isLocked(r) ? <Lock size={11} className="text-slate-300" /> : <ChevronRight size={13} className="text-slate-300 group-hover:text-lime-600" />}
-                  </button>
-                ))}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-      <p className="flex items-center gap-1.5 text-[11px] text-slate-400">Tip: press <kbd className="rounded border border-slate-200 px-1 dark:border-slate-700">/</kbd> to search reports. Click any highlighted row to drill down.</p>
+      <ReportCatalogGrid reports={REPORTS} query={query} isLocked={isLocked} onOpen={onOpen} />
+
+      <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-subtle">Tip: press <Kbd>/</Kbd> to search reports. Click any highlighted row to drill down.</p>
     </div>
   );
 };
-
-const ReportCard: React.FC<{ report: ReportDefinition; locked: boolean; onOpen: () => void }> = ({ report, locked, onOpen }) => (
-  <button type="button" onClick={onOpen} className="group flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-xs transition hover:-translate-y-0.5 hover:border-lime-400 hover:shadow-md dark:border-slate-800">
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-lime-50 text-lime-700 group-hover:bg-lime-600 group-hover:text-white dark:bg-lime-950/40 dark:text-lime-400"><ReportIcon name={report.icon} size={18} /></span>
-    <span className="min-w-0 flex-1">
-      <span className="block truncate text-sm font-bold text-slate-800 dark:text-slate-100">{report.title}</span>
-      <span className="block truncate text-[11px] text-slate-500">{report.subtitle}</span>
-    </span>
-    {locked && <Lock size={13} className="text-slate-300" />}
-  </button>
-);
 
 export default Reports;
