@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
@@ -6,21 +6,27 @@ import { ExpenseEntry, ExpenseVendor, SavedExpense } from '../types';
 import {
   FolderTree, Wallet, CreditCard, Plus, Bookmark, UserPlus, ArrowUpRight
 } from 'lucide-react';
-import { ExpensesHeader, paidOf } from '../components/expenses/ExpenseUI';
+import { ExpensesHeader, dayKey, paidOf, pkToday } from '../components/expenses/ExpenseUI';
 import { Button } from '../components/ui';
 import { RichSelectOption } from '../components/RichSelect';
-import { 
-  CategoryStructure, SubcategoryStructure, LedgerRow, 
-  DEFAULT_EXPENSE_STRUCTURE, ExpenseDateFilterMode, KhataDateRangeType 
+import {
+  CategoryStructure, SubcategoryStructure, LedgerRow,
+  DEFAULT_EXPENSE_STRUCTURE, ExpenseDateFilterMode, KhataDateRangeType
 } from '../components/expenses/ExpenseTypes';
-import { ExpenseTransactionsTab } from '../components/expenses/ExpenseTransactionsTab';
+import { ExpenseStats, ExpenseTransactionsTab } from '../components/expenses/ExpenseTransactionsTab';
 import { ExpenseVendorsTab } from '../components/expenses/ExpenseVendorsTab';
-import { 
-  ExpenseCategoryModal, ExpenseFormModal, SavedExpensesModal,
-  ExpenseVendorModal, VendorPaymentModal 
-} from '../components/expenses/ExpenseModals';
+import { inRange, periodRange, previousPeriod } from '../components/expenses/expensePeriods';
 import { formatCurrency } from '../lib/formatters';
 import { confirmAction } from '../components/ui/ConfirmDialog';
+
+// The dialogs (~1,200 lines) load in their own chunk: prefetched once the screen is idle and
+// mounted only while open, so they are not part of the screen's first paint.
+const loadExpenseModals = () => import('../components/expenses/ExpenseModals');
+const ExpenseCategoryModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseCategoryModal })));
+const ExpenseFormModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseFormModal })));
+const SavedExpensesModal = lazy(() => loadExpenseModals().then(m => ({ default: m.SavedExpensesModal })));
+const ExpenseVendorModal = lazy(() => loadExpenseModals().then(m => ({ default: m.ExpenseVendorModal })));
+const VendorPaymentModal = lazy(() => loadExpenseModals().then(m => ({ default: m.VendorPaymentModal })));
 
 const Expenses: React.FC = () => {
   const { 
@@ -93,6 +99,17 @@ const Expenses: React.FC = () => {
       setIsMobileLedgerOpen(true);
     }
   }, [location.search]);
+
+  // Warm the dialogs chunk while the screen is idle, so the first "Record expense" opens at once.
+  useEffect(() => {
+    const prefetch = () => { loadExpenseModals().catch(() => { /* opening a dialog loads it again */ }); };
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(prefetch, { timeout: 4000 });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(prefetch, 1500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const [isAddMode, setIsAddMode] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
@@ -324,119 +341,96 @@ const Expenses: React.FC = () => {
     return accounts.find(a => a.id === paymentFormData.account_id) || accounts[0];
   }, [accounts, paymentFormData.account_id]);
 
-  const getCategoryUsageCount = (catName: string) => {
-    return expenses.filter(e => e.category?.toLowerCase() === catName.toLowerCase()).length;
-  };
-
-  const getSubcategoryUsageCount = (catName: string, subcatName: string) => {
-    return expenses.filter(e => 
-      e.category?.toLowerCase() === catName.toLowerCase() && 
-      e.subcategory?.toLowerCase() === subcatName.toLowerCase()
-    ).length;
-  };
-
-  const filteredExpenses = useMemo(() => {
-    // Every comparison uses the Pakistan business day, for the filter edges and the expense alike.
-    const pkDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
-    const todayStr = pkDay(new Date());
-    const yday = new Date();
-    yday.setDate(yday.getDate() - 1);
-    const ydayStr = pkDay(yday);
-
-    const d7 = new Date();
-    d7.setDate(d7.getDate() - 6);
-    const d7Str = pkDay(d7);
-
-    const d30 = new Date();
-    d30.setDate(d30.getDate() - 29);
-    const d30Str = pkDay(d30);
-
-    // Built from the Pakistan date: toISOString() on a local midnight rolled back to the month before last.
-    const [curYear, curMonth] = todayStr.split('-').map(Number);
-    const prevMonthStr = curMonth === 1 ? `${curYear - 1}-12` : `${curYear}-${String(curMonth - 1).padStart(2, '0')}`;
-
-    return expenses.filter(exp => {
-      const matchesSearch = 
-        exp.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (exp.vendor_name && exp.vendor_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (exp.subcategory && exp.subcategory.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      const matchesCategory = filterCategory === 'All' || exp.category === filterCategory;
-      const matchesVendor = filterVendor === 'All' || exp.vendor_id === filterVendor;
-      const matchesStatus = filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus;
-
-      const rawDate = exp.date || '';
-      const expDate = rawDate.includes('T') ? pkDay(new Date(rawDate)) : rawDate.slice(0, 10);
-
-      let matchesDate = true;
-      if (dateFilterMode === 'all') {
-        matchesDate = true;
-      } else if (dateFilterMode === 'today') {
-        matchesDate = expDate === todayStr;
-      } else if (dateFilterMode === 'yesterday') {
-        matchesDate = expDate === ydayStr;
-      } else if (dateFilterMode === '7days') {
-        matchesDate = Boolean(expDate && expDate >= d7Str && expDate <= todayStr);
-      } else if (dateFilterMode === '30days') {
-        matchesDate = Boolean(expDate && expDate >= d30Str && expDate <= todayStr);
-      } else if (dateFilterMode === 'this_month') {
-        matchesDate = Boolean(expDate && expDate.startsWith(filterMonth));
-      } else if (dateFilterMode === 'last_month') {
-        matchesDate = Boolean(expDate && expDate.startsWith(prevMonthStr));
-      } else if (dateFilterMode === 'single_date') {
-        matchesDate = Boolean(filterSingleDate && expDate === filterSingleDate);
-      } else if (dateFilterMode === 'custom_range') {
-        if (filterStartDate && filterEndDate) {
-          matchesDate = Boolean(expDate && expDate >= filterStartDate && expDate <= filterEndDate);
-        } else if (filterStartDate) {
-          matchesDate = Boolean(expDate && expDate >= filterStartDate);
-        } else if (filterEndDate) {
-          matchesDate = Boolean(expDate && expDate <= filterEndDate);
-        }
+  // Entries per category and per category::sub-category, counted once instead of per row of the dialog.
+  const categoryUsage = useMemo(() => {
+    const byCategory = new Map<string, number>();
+    const bySub = new Map<string, number>();
+    expenses.forEach(e => {
+      const cat = (e.category || '').toLowerCase();
+      if (!cat) return;
+      byCategory.set(cat, (byCategory.get(cat) || 0) + 1);
+      if (e.subcategory) {
+        const key = `${cat}::${e.subcategory.toLowerCase()}`;
+        bySub.set(key, (bySub.get(key) || 0) + 1);
       }
-
-      return matchesSearch && matchesCategory && matchesVendor && matchesStatus && matchesDate;
     });
-  }, [
-    expenses, searchTerm, filterCategory, filterVendor, filterPaymentStatus,
-    dateFilterMode, filterSingleDate, filterStartDate, filterEndDate, filterMonth
-  ]);
+    return { byCategory, bySub };
+  }, [expenses]);
 
-  const filteredVendors = useMemo(() => {
-    return expenseVendors.filter(v => {
-      const matchesSearch = 
-        v.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (v.service_type && v.service_type.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (v.phone && v.phone.includes(searchTerm)) ||
-        (v.contact_person && v.contact_person.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      if (!matchesSearch) return false;
+  const getCategoryUsageCount = (catName: string) => categoryUsage.byCategory.get(catName.toLowerCase()) || 0;
 
-      if (filterVendorTabStatus === 'Active') return v.isActive !== false;
-      if (filterVendorTabStatus === 'Inactive') return v.isActive === false;
-      if (filterVendorTabStatus === 'With Dues') return (v.pending_balance || 0) > 0;
-      if (filterVendorTabStatus === 'Advance') return (v.pending_balance || 0) < 0;
-      return true;
-    }).map(v => {
-      const vendorExpenses = expenses.filter(e => e.vendor_id === v.id || (e.vendor_name && e.vendor_name.toLowerCase() === v.name.toLowerCase()));
-      const liveTotalBilled = vendorExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-      const liveExpensesPaid = vendorExpenses.reduce((sum, e) => {
-        const isUnpaid = e.paymentStatus === 'Unpaid' || (e as any).payment_status === 'Unpaid';
-        if (isUnpaid) return sum;
-        const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-          ? Number(e.paidAmount) 
-          : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-        return sum + paid;
-      }, 0);
-      const directPayments = expenseVendorTransactions
-        .filter(t => t.vendor_id === v.id && t.type === 'Payment')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-      const directRefunds = expenseVendorTransactions
-        .filter(t => t.vendor_id === v.id && t.type === 'Refund')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-      
-      const totalPaidCalc = Math.max(0, liveExpensesPaid + directPayments - directRefunds);
+  const getSubcategoryUsageCount = (catName: string, subcatName: string) =>
+    categoryUsage.bySub.get(`${catName.toLowerCase()}::${subcatName.toLowerCase()}`) || 0;
 
+  // Day key and lower-cased search text per expense, worked out once per data change, not per keystroke.
+  const indexedExpenses = useMemo(() => expenses.map(exp => ({
+    exp,
+    day: dayKey(exp.date),
+    text: [exp.description, exp.vendor_name, exp.category, exp.subcategory, exp.notes, exp.referenceNo]
+      .filter(Boolean).join(' ').toLowerCase(),
+  })), [expenses]);
+
+  const today = pkToday();
+  const periodInput = useMemo(() => ({
+    mode: dateFilterMode, today, month: filterMonth, singleDate: filterSingleDate, startDate: filterStartDate, endDate: filterEndDate,
+  }), [dateFilterMode, today, filterMonth, filterSingleDate, filterStartDate, filterEndDate]);
+
+  const { filteredExpenses, previousTotal, previousLabel } = useMemo(() => {
+    // Every comparison uses the Pakistan business day, for the filter edges and the expense alike.
+    const range = periodRange(periodInput);
+    const previous = previousPeriod(periodInput);
+    const needle = searchTerm.trim().toLowerCase();
+    const matches = (exp: ExpenseEntry, text: string) =>
+      (!needle || text.includes(needle)) &&
+      (filterCategory === 'All' || exp.category === filterCategory) &&
+      (filterVendor === 'All' || exp.vendor_id === filterVendor) &&
+      (filterPaymentStatus === 'All' || (exp.paymentStatus || 'Paid') === filterPaymentStatus);
+
+    const list: ExpenseEntry[] = [];
+    let prevTotal = 0;
+    indexedExpenses.forEach(({ exp, day, text }) => {
+      const inCurrent = inRange(day, range);
+      const inPrevious = previous ? inRange(day, previous.range) : false;
+      if (!inCurrent && !inPrevious) return;
+      if (!matches(exp, text)) return;
+      if (inCurrent) list.push(exp);
+      if (inPrevious) prevTotal += Number(exp.amount || 0);
+    });
+    return { filteredExpenses: list, previousTotal: previous ? prevTotal : null, previousLabel: previous?.label };
+  }, [indexedExpenses, periodInput, searchTerm, filterCategory, filterVendor, filterPaymentStatus]);
+
+  // Billed / paid per vendor in one pass over expenses and vendor payments (was one pass per vendor).
+  const vendorsWithTotals = useMemo(() => {
+    const idsByName = new Map<string, string[]>();
+    expenseVendors.forEach(v => {
+      const key = v.name.toLowerCase();
+      idsByName.set(key, [...(idsByName.get(key) || []), v.id]);
+    });
+    const totals = new Map<string, { billed: number; paid: number; direct: number }>();
+    const bucket = (id: string) => {
+      let entry = totals.get(id);
+      if (!entry) { entry = { billed: 0, paid: 0, direct: 0 }; totals.set(id, entry); }
+      return entry;
+    };
+    expenses.forEach(e => {
+      // Same match as the khata: the vendor id, or (older rows) the vendor's name.
+      const ids = new Set<string>();
+      if (e.vendor_id) ids.add(e.vendor_id);
+      if (e.vendor_name) (idsByName.get(e.vendor_name.toLowerCase()) || []).forEach(id => ids.add(id));
+      if (!ids.size) return;
+      const billed = e.amount || 0;
+      const paid = paidOf(e);
+      ids.forEach(id => { const entry = bucket(id); entry.billed += billed; entry.paid += paid; });
+    });
+    expenseVendorTransactions.forEach(t => {
+      if (t.type === 'Payment') bucket(t.vendor_id).direct += t.amount || 0;
+      else if (t.type === 'Refund') bucket(t.vendor_id).direct -= t.amount || 0;
+    });
+
+    return expenseVendors.map(v => {
+      const entry = totals.get(v.id);
+      const liveTotalBilled = entry?.billed || 0;
+      const totalPaidCalc = Math.max(0, (entry?.paid || 0) + (entry?.direct || 0));
       return {
         ...v,
         total_billed: liveTotalBilled > 0 ? liveTotalBilled : (v.total_billed || 0),
@@ -444,33 +438,35 @@ const Expenses: React.FC = () => {
         pending_balance: v.pending_balance !== undefined ? v.pending_balance : 0
       };
     });
-  }, [expenseVendors, expenses, expenseVendorTransactions, searchTerm, filterVendorTabStatus]);
+  }, [expenseVendors, expenses, expenseVendorTransactions]);
+
+  const filteredVendors = useMemo(() => {
+    const needle = searchTerm.toLowerCase();
+    return vendorsWithTotals.filter(v => {
+      const matchesSearch =
+        v.name.toLowerCase().includes(needle) ||
+        (v.service_type && v.service_type.toLowerCase().includes(needle)) ||
+        (v.phone && v.phone.includes(searchTerm)) ||
+        (v.contact_person && v.contact_person.toLowerCase().includes(needle));
+
+      if (!matchesSearch) return false;
+
+      if (filterVendorTabStatus === 'Active') return v.isActive !== false;
+      if (filterVendorTabStatus === 'Inactive') return v.isActive === false;
+      if (filterVendorTabStatus === 'With Dues') return (v.pending_balance || 0) > 0;
+      if (filterVendorTabStatus === 'Advance') return (v.pending_balance || 0) < 0;
+      return true;
+    });
+  }, [vendorsWithTotals, searchTerm, filterVendorTabStatus]);
 
   const selectedVendor = useMemo(() => {
     if (selectedVendorId) {
-      const found = filteredVendors.find(v => v.id === selectedVendorId) || expenseVendors.find(v => v.id === selectedVendorId);
+      const found = vendorsWithTotals.find(v => v.id === selectedVendorId);
       if (found) return found;
     }
     // Nothing picked yet: open the vendor we owe the most, matching the list's default order.
     return [...filteredVendors].sort((a, b) => (b.pending_balance || 0) - (a.pending_balance || 0) || a.name.localeCompare(b.name))[0];
-  }, [selectedVendorId, filteredVendors, expenseVendors]);
-
-  const totalExpense = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const actualPaidExpense = filteredExpenses.reduce((sum, e) => {
-    const isUnpaid = e.paymentStatus === 'Unpaid' || (e as any).payment_status === 'Unpaid';
-    if (isUnpaid) return sum;
-    const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-      ? Number(e.paidAmount) 
-      : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-    return sum + paid;
-  }, 0);
-  const cashExpense = filteredExpenses.filter(e => (e.paymentMode === 'Cash' || (e as any).payment_mode === 'Cash') && e.paymentStatus !== 'Unpaid' && (e as any).payment_status !== 'Unpaid').reduce((sum, e) => {
-    const paid = e.paidAmount !== undefined && e.paidAmount !== null 
-      ? Number(e.paidAmount) 
-      : ((e as any).paid_amount !== undefined && (e as any).paid_amount !== null ? Number((e as any).paid_amount) : Number(e.amount || 0));
-    return sum + paid;
-  }, 0);
-  const onlineExpense = actualPaidExpense - cashExpense;
+  }, [selectedVendorId, filteredVendors, vendorsWithTotals]);
 
   const totalOutstandingVendorDues = useMemo(() => {
     return expenseVendors
@@ -478,14 +474,30 @@ const Expenses: React.FC = () => {
       .reduce((sum, v) => sum + Math.max(0, v.pending_balance || 0), 0);
   }, [expenseVendors]);
 
-  const expenseStats = {
-    total: totalExpense,
-    cash: cashExpense,
-    digital: onlineExpense,
-    onCredit: filteredExpenses.reduce((sum, e) => sum + Math.max(0, Number(e.amount || 0) - paidOf(e)), 0),
-    vendorDues: totalOutstandingVendorDues,
-    vendorDueCount: expenseVendors.filter(v => v.isActive !== false && (v.pending_balance || 0) > 0).length,
-  };
+  const expenseStats = useMemo<ExpenseStats>(() => {
+    let total = 0, paid = 0, cash = 0, onCredit = 0;
+    filteredExpenses.forEach(e => {
+      const amount = Number(e.amount || 0);
+      const paidPart = paidOf(e);
+      total += amount;
+      paid += paidPart;
+      if ((e.paymentMode || (e as any).payment_mode) === 'Cash') cash += paidPart;
+      onCredit += Math.max(0, amount - paidPart);
+    });
+    return {
+      total,
+      cash,
+      digital: paid - cash,
+      onCredit,
+      vendorDues: totalOutstandingVendorDues,
+      vendorDueCount: expenseVendors.filter(v => v.isActive !== false && (v.pending_balance || 0) > 0).length,
+      trend: previousTotal && previousTotal > 0 ? ((total - previousTotal) / previousTotal) * 100 : null,
+      trendLabel: previousTotal && previousTotal > 0 ? previousLabel : undefined,
+    };
+  }, [filteredExpenses, totalOutstandingVendorDues, expenseVendors, previousTotal, previousLabel]);
+  const totalExpense = expenseStats.total;
+
+  const vendorsWithDuesCount = useMemo(() => expenseVendors.filter(v => (v.pending_balance || 0) > 0).length, [expenseVendors]);
 
   const vendorRichOptions: RichSelectOption[] = useMemo(() => {
     return expenseVendors.filter(v => v.isActive !== false).map(v => {
@@ -1371,7 +1383,8 @@ const Expenses: React.FC = () => {
   };
 
   const khataLedgerRows = useMemo<LedgerRow[]>(() => {
-    const targetVendor = selectedVendor;
+    // Only the vendors tab shows the khata; skip the work while the expenses list is open.
+    const targetVendor = activeTab === 'vendors' ? selectedVendor : undefined;
     if (!targetVendor) return [];
 
     const rows: LedgerRow[] = [];
@@ -1537,7 +1550,7 @@ const Expenses: React.FC = () => {
     });
 
     return resultRows;
-  }, [selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate]);
+  }, [activeTab, selectedVendor, expenses, expenseVendorTransactions, khataDateRange, khataStartDate, khataEndDate]);
 
   const handleShareWhatsAppStatement = (vendor: ExpenseVendor) => {
     const phoneClean = (vendor.phone || '').replace(/[^0-9]/g, '');
@@ -1604,7 +1617,7 @@ const Expenses: React.FC = () => {
         active={activeTab}
         onChange={switchTab}
         subtitle={headerSubtitle}
-        counts={{ vendors: expenseVendors.filter(v => (v.pending_balance || 0) > 0).length }}
+        counts={{ vendors: vendorsWithDuesCount }}
         actions={activeTab === 'transactions' ? (
           <>
             {canCreate && (
@@ -1723,116 +1736,136 @@ const Expenses: React.FC = () => {
         />
       )}
 
-      <ExpenseCategoryModal
-        isOpen={isCategoryModalOpen}
-        onClose={() => setIsCategoryModalOpen(false)}
-        categoryTree={categoryTree}
-        categorySearch={categorySearch}
-        setCategorySearch={setCategorySearch}
-        modalCatFilter={modalCatFilter}
-        setModalCatFilter={setModalCatFilter}
-        isModalCreatingMainCat={isModalCreatingMainCat}
-        setIsModalCreatingMainCat={setIsModalCreatingMainCat}
-        modalNewCategoryName={modalNewCategoryName}
-        setModalNewCategoryName={setModalNewCategoryName}
-        handleModalAddCategory={handleModalAddCategory}
-        handleToggleCategoryActive={handleToggleCategoryActive}
-        handleStartEditCategory={handleStartEditCategory}
-        handleSaveEditCategory={handleSaveEditCategory}
-        editingCatName={editingCatName}
-        setEditingCatName={setEditingCatName}
-        editCatInput={editCatInput}
-        setEditCatInput={setEditCatInput}
-        handleDeleteCategory={handleDeleteCategory}
-        getCategoryUsageCount={getCategoryUsageCount}
-        expandedCatsInModal={expandedCatsInModal}
-        setExpandedCatsInModal={setExpandedCatsInModal}
-        getSubcategoryUsageCount={getSubcategoryUsageCount}
-        editingSubcatKey={editingSubcatKey}
-        setEditingSubcatKey={setEditingSubcatKey}
-        editSubcatInput={editSubcatInput}
-        setEditSubcatInput={setEditSubcatInput}
-        handleStartEditSubcategory={handleStartEditSubcategory}
-        handleSaveEditSubcategory={handleSaveEditSubcategory}
-        handleToggleSubcategoryActive={handleToggleSubcategoryActive}
-        handleDeleteSubcategory={handleDeleteSubcategory}
-        newSubcatInputs={newSubcatInputs}
-        setNewSubcatInputs={setNewSubcatInputs}
-        handleModalAddSubcat={handleModalAddSubcat}
-      />
+      {isCategoryModalOpen && (
+        <Suspense fallback={null}>
+          <ExpenseCategoryModal
+            isOpen={isCategoryModalOpen}
+            onClose={() => setIsCategoryModalOpen(false)}
+            categoryTree={categoryTree}
+            categorySearch={categorySearch}
+            setCategorySearch={setCategorySearch}
+            modalCatFilter={modalCatFilter}
+            setModalCatFilter={setModalCatFilter}
+            isModalCreatingMainCat={isModalCreatingMainCat}
+            setIsModalCreatingMainCat={setIsModalCreatingMainCat}
+            modalNewCategoryName={modalNewCategoryName}
+            setModalNewCategoryName={setModalNewCategoryName}
+            handleModalAddCategory={handleModalAddCategory}
+            handleToggleCategoryActive={handleToggleCategoryActive}
+            handleStartEditCategory={handleStartEditCategory}
+            handleSaveEditCategory={handleSaveEditCategory}
+            editingCatName={editingCatName}
+            setEditingCatName={setEditingCatName}
+            editCatInput={editCatInput}
+            setEditCatInput={setEditCatInput}
+            handleDeleteCategory={handleDeleteCategory}
+            getCategoryUsageCount={getCategoryUsageCount}
+            expandedCatsInModal={expandedCatsInModal}
+            setExpandedCatsInModal={setExpandedCatsInModal}
+            getSubcategoryUsageCount={getSubcategoryUsageCount}
+            editingSubcatKey={editingSubcatKey}
+            setEditingSubcatKey={setEditingSubcatKey}
+            editSubcatInput={editSubcatInput}
+            setEditSubcatInput={setEditSubcatInput}
+            handleStartEditSubcategory={handleStartEditSubcategory}
+            handleSaveEditSubcategory={handleSaveEditSubcategory}
+            handleToggleSubcategoryActive={handleToggleSubcategoryActive}
+            handleDeleteSubcategory={handleDeleteSubcategory}
+            newSubcatInputs={newSubcatInputs}
+            setNewSubcatInputs={setNewSubcatInputs}
+            handleModalAddSubcat={handleModalAddSubcat}
+          />
+        </Suspense>
+      )}
 
-      <SavedExpensesModal
-        isOpen={isSavedExpensesOpen}
-        onClose={() => setIsSavedExpensesOpen(false)}
-        savedExpenses={savedExpenses}
-        accounts={accounts}
-        onUse={handleUseSavedExpense}
-        onDelete={deleteSavedExpense}
-      />
+      {isSavedExpensesOpen && (
+        <Suspense fallback={null}>
+          <SavedExpensesModal
+            isOpen={isSavedExpensesOpen}
+            onClose={() => setIsSavedExpensesOpen(false)}
+            savedExpenses={savedExpenses}
+            accounts={accounts}
+            onUse={handleUseSavedExpense}
+            onDelete={deleteSavedExpense}
+          />
+        </Suspense>
+      )}
 
-      <ExpenseFormModal
-        isOpen={isAddMode}
-        onClose={() => setIsAddMode(false)}
-        isEditing={Boolean(editingExpenseId)}
-        formData={formData}
-        setFormData={setFormData}
-        handleSubmitExpense={handleSubmitExpense}
-        isSubmitting={isSubmitting}
-        categoryRichOptions={categoryRichOptions}
-        activeSubcategoryList={activeSubcategoryList}
-        vendorRichOptions={vendorRichOptions}
-        accountRichOptions={accountRichOptions}
-        selectedPaymentAccount={selectedPaymentAccount}
-        isModalCreatingCat={isModalCreatingCat}
-        setIsModalCreatingCat={setIsModalCreatingCat}
-        modalNewCatInput={modalNewCatInput}
-        setModalNewCatInput={setModalNewCatInput}
-        handleCreateMainCategory={handleCreateMainCategory}
-        isModalCreatingSub={isModalCreatingSub}
-        setIsModalCreatingSub={setIsModalCreatingSub}
-        modalNewSubInput={modalNewSubInput}
-        setModalNewSubInput={setModalNewSubInput}
-        handleCreateSubcategory={handleCreateSubcategory}
-        isModalCreatingVendor={isModalCreatingVendor}
-        setIsModalCreatingVendor={setIsModalCreatingVendor}
-        quickVendorName={quickVendorName}
-        setQuickVendorName={setQuickVendorName}
-        quickVendorPhone={quickVendorPhone}
-        setQuickVendorPhone={setQuickVendorPhone}
-        handleQuickCreateVendor={handleQuickCreateVendor}
-        accounts={accounts}
-        settings={settings}
-        rememberExpense={rememberExpense}
-        setRememberExpense={setRememberExpense}
-        rememberName={rememberName}
-        setRememberName={setRememberName}
-      />
+      {isAddMode && (
+        <Suspense fallback={null}>
+          <ExpenseFormModal
+            isOpen={isAddMode}
+            onClose={() => setIsAddMode(false)}
+            isEditing={Boolean(editingExpenseId)}
+            formData={formData}
+            setFormData={setFormData}
+            handleSubmitExpense={handleSubmitExpense}
+            isSubmitting={isSubmitting}
+            categoryRichOptions={categoryRichOptions}
+            activeSubcategoryList={activeSubcategoryList}
+            vendorRichOptions={vendorRichOptions}
+            accountRichOptions={accountRichOptions}
+            selectedPaymentAccount={selectedPaymentAccount}
+            isModalCreatingCat={isModalCreatingCat}
+            setIsModalCreatingCat={setIsModalCreatingCat}
+            modalNewCatInput={modalNewCatInput}
+            setModalNewCatInput={setModalNewCatInput}
+            handleCreateMainCategory={handleCreateMainCategory}
+            isModalCreatingSub={isModalCreatingSub}
+            setIsModalCreatingSub={setIsModalCreatingSub}
+            modalNewSubInput={modalNewSubInput}
+            setModalNewSubInput={setModalNewSubInput}
+            handleCreateSubcategory={handleCreateSubcategory}
+            isModalCreatingVendor={isModalCreatingVendor}
+            setIsModalCreatingVendor={setIsModalCreatingVendor}
+            quickVendorName={quickVendorName}
+            setQuickVendorName={setQuickVendorName}
+            quickVendorPhone={quickVendorPhone}
+            setQuickVendorPhone={setQuickVendorPhone}
+            handleQuickCreateVendor={handleQuickCreateVendor}
+            accounts={accounts}
+            settings={settings}
+            rememberExpense={rememberExpense}
+            setRememberExpense={setRememberExpense}
+            rememberName={rememberName}
+            setRememberName={setRememberName}
+          />
+        </Suspense>
+      )}
 
-      <ExpenseVendorModal
-        isOpen={isVendorModalOpen}
-        onClose={() => setIsVendorModalOpen(false)}
-        vendorFormData={vendorFormData}
-        setVendorFormData={setVendorFormData}
-        handleVendorSubmit={handleVendorSubmit}
-        isSubmittingVendor={isSubmittingVendor}
-        editingVendor={editingVendor}
-      />
+      {isVendorModalOpen && (
+        <Suspense fallback={null}>
+          <ExpenseVendorModal
+            isOpen={isVendorModalOpen}
+            onClose={() => setIsVendorModalOpen(false)}
+            vendorFormData={vendorFormData}
+            setVendorFormData={setVendorFormData}
+            handleVendorSubmit={handleVendorSubmit}
+            isSubmittingVendor={isSubmittingVendor}
+            editingVendor={editingVendor}
+          />
+        </Suspense>
+      )}
 
-      <VendorPaymentModal
-        isOpen={isPaymentModalOpen}
-        onClose={() => setIsPaymentModalOpen(false)}
-        paymentFormData={paymentFormData}
-        setPaymentFormData={setPaymentFormData}
-        handlePaymentSubmit={handlePaymentSubmit}
-        isSubmittingPayment={isSubmittingPayment}
-        expenseVendors={expenseVendors}
-        vendorRichOptions={vendorRichOptions}
-        accountRichOptions={accountRichOptions}
-        selectedDirectPaymentAccount={selectedDirectPaymentAccount}
-        setSelectedPaymentVendor={setSelectedPaymentVendor}
-        accounts={accounts}
-        settings={settings}
-      />
+      {isPaymentModalOpen && (
+        <Suspense fallback={null}>
+          <VendorPaymentModal
+            isOpen={isPaymentModalOpen}
+            onClose={() => setIsPaymentModalOpen(false)}
+            paymentFormData={paymentFormData}
+            setPaymentFormData={setPaymentFormData}
+            handlePaymentSubmit={handlePaymentSubmit}
+            isSubmittingPayment={isSubmittingPayment}
+            expenseVendors={expenseVendors}
+            vendorRichOptions={vendorRichOptions}
+            accountRichOptions={accountRichOptions}
+            selectedDirectPaymentAccount={selectedDirectPaymentAccount}
+            setSelectedPaymentVendor={setSelectedPaymentVendor}
+            accounts={accounts}
+            settings={settings}
+          />
+        </Suspense>
+      )}
 
       {canCreate && activeTab === 'transactions' && (
         <Button
