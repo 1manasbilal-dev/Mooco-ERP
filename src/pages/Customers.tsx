@@ -96,7 +96,7 @@ const Customers: React.FC = () => {
   const customerList = useMemo(() => (customers || []).filter(Boolean), [customers]);
   const salesByCustomer = useMemo(() => indexByCustomer(sales || [], saleCustomerId), [sales]);
   const txByCustomer = useMemo(() => indexByCustomer<CustomerTransaction>(customerTransactions || [], tx => tx.customer_id), [customerTransactions]);
-  const salesById = useMemo(() => new Map((sales || []).map(s => [s.id, s] as const)), [sales]);
+  const salesById = useMemo(() => new Map<string, POSBill>((sales || []).map(s => [s.id, s] as const)), [sales]);
   const searchIndex = useMemo(() => buildCustomerSearchIndex(customerList), [customerList]);
 
   const isMdScreen = useMediaQuery(BREAKPOINTS.md);
