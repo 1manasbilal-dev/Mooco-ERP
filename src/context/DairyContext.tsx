@@ -39,7 +39,7 @@ import {
 import { useToast } from './ToastContext';
 import { normalizeTransactionTimestamp, getTodayLocalDate } from '../lib/formatters';
 import { netPurchaseReturnRefunds, proportionalRefund, salePaidAmount, splitRefund } from '../lib/moneyFlow';
-import { buildStandardUnitGroups, convertQuantity } from '../lib/unitConversion';
+import { buildStandardUnitGroups, convertQuantity, getAllAvailableUnits } from '../lib/unitConversion';
 import { 
   PriorityLevel, MilkType, StockType, AllocationStatus, ProductionStage, DestinationType,
   AdjustmentReason, SystemSettings, PurchaseEntry, MaterialPurchaseEntry, Supplier, InventoryItem,
@@ -1975,7 +1975,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const existing = settings.inventory?.customUnits || [];
-      const isDuplicate = existing.some(
+      // Built-in units count too: a custom "kg" or "L" shadowed the standard one in every conversion.
+      const isDuplicate = getAllAvailableUnits(existing).some(
         (u: any) => (u.symbol || '').toLowerCase() === cleanSymbol.toLowerCase()
       );
       if (isDuplicate) {
@@ -4263,16 +4264,23 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const updateSupplier = async (id: string, u: Partial<Supplier>) => {
     try {
       // The balance is a running ledger total moved only by delta RPCs; a profile edit never writes it.
-      const { name, phone, pending_balance: _balance, balance: _rawBalance, isActive, ...extraData } = u as any;
+      // Row columns and fields the loader computes are not profile data: a screen passing the whole
+      // supplier object copied id, data, timestamps and totals into the data JSON on every save.
+      const {
+        name, phone, pending_balance: _balance, balance: _rawBalance, isActive,
+        id: _id, data: _data, is_active: _isActive, created_at: _createdAt, updated_at: _updatedAt,
+        total_due: _totalDue, ...extraData
+      } = u as any;
       setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...extraData, ...(name !== undefined ? { name } : {}), ...(phone !== undefined ? { phone } : {}), ...(isActive !== undefined ? { isActive } : {}) } : s));
 
       const dbUpdates: any = {};
       if (name !== undefined) dbUpdates.name = name;
       if (phone !== undefined) dbUpdates.phone = phone || '';
       if (isActive !== undefined) dbUpdates.is_active = isActive;
-      
+
       if (Object.keys(extraData).length > 0) {
-         const { data: existing } = await supabase.from('suppliers').select('data').eq('id', id).maybeSingle();
+         const { data: existing, error: readError } = await supabase.from('suppliers').select('data').eq('id', id).maybeSingle();
+         if (readError) throw readError;
          dbUpdates.data = { ...(existing?.data || {}), ...extraData };
       }
       

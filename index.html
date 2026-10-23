@@ -9,9 +9,14 @@
       // Apply the saved theme and zoom before first paint to avoid a flash.
       try {
         const preference = localStorage.getItem('app_theme');
-        document.documentElement.classList.toggle('dark', preference === 'dark' || (!preference && matchMedia('(prefers-color-scheme: dark)').matches));
+        const dark = preference === 'dark' || (!preference && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+        // Browser chrome matches the saved theme from the first paint (the shell keeps it in step later).
+        const themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.setAttribute('content', dark ? '#020617' : '#f5f7fc');
+        // Same range as the header's screen-size control (80-150%); 250% was accepted here only.
         const scale = Number(localStorage.getItem('app_zoom_scale'));
-        if (scale >= 80 && scale <= 250) document.documentElement.style.fontSize = `${scale / 100 * 16}px`;
+        if (scale >= 80 && scale <= 150) document.documentElement.style.fontSize = `${scale / 100 * 16}px`;
       } catch (_) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
