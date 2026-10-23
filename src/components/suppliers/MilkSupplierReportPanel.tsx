@@ -1,18 +1,83 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Milk } from 'lucide-react';
 import {
   MilkGroupMode,
+  MilkReportSection,
   MilkSupplierReport,
   formatMilkQty,
   formatMilkRate
 } from '../../lib/milkSupplierReport';
-import { formatLedgerDate, formatMoney } from '../../lib/supplierStatement';
+import { formatLedgerDate } from '../../lib/supplierStatement';
+import { formatQty } from '../../lib/formatters';
+import { useProgressiveList } from '../../hooks/useProgressiveList';
+import { Badge, Card, EmptyState, LoadMoreRow, Money, SegmentedControl, Select, TBody, TD, TH, THead, TR, Table } from '../ui';
+import type { SegmentOption } from '../ui';
 
-const GROUPS: { id: MilkGroupMode; label: string }[] = [
-  { id: 'milk', label: 'By milk' },
-  { id: 'shift', label: 'By shift' },
-  { id: 'day', label: 'By day' }
+const GROUPS: SegmentOption<MilkGroupMode>[] = [
+  { value: 'milk', label: 'By milk' },
+  { value: 'shift', label: 'By shift' },
+  { value: 'day', label: 'By day' }
 ];
+
+const SectionCard = memo(function SectionCard({ section, report, resetKey }: {
+  section: MilkReportSection;
+  report: MilkSupplierReport;
+  resetKey: unknown;
+}) {
+  const { visibleItems, hiddenCount, sentinelRef, showMore, showAll } = useProgressiveList(section.lines, 60, resetKey);
+  const showDate = report.mode !== 'day';
+  const showShift = report.mode !== 'shift';
+  const showMilk = report.mode !== 'milk';
+  const columns = 4 + Number(showDate) + Number(showShift) + Number(showMilk) + Number(report.showFat) + Number(report.showSnf);
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-line bg-surface-2 px-4 py-3 sm:px-5">
+        <div className="min-w-0">
+          <p className="truncate text-[13px] font-bold text-fg">{section.title}</p>
+          <p className="text-[11px] font-medium text-fg-subtle">
+            {section.slips} slip{section.slips === 1 ? '' : 's'}
+            {section.fat > 0 ? ` · Fat ${formatMilkQty(section.fat)}` : ''}
+            {` · ${formatMilkRate(section.rate)}/L`}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-[13px] font-bold tabular-nums text-fg">{formatQty(section.litres)} L</p>
+          <Money amount={section.amount} className="text-xs font-semibold text-fg-muted" />
+        </div>
+      </div>
+      <Table className="min-w-[560px]">
+        <THead>
+          <tr>
+            {showDate && <TH>Date</TH>}
+            {showShift && <TH>Shift</TH>}
+            {showMilk && <TH>Milk</TH>}
+            <TH numeric>Litres</TH>
+            {report.showFat && <TH numeric>Fat</TH>}
+            {report.showSnf && <TH numeric>SNF</TH>}
+            <TH numeric>Rate</TH>
+            <TH numeric>Amount</TH>
+          </tr>
+        </THead>
+        <TBody>
+          {visibleItems.map(line => (
+            <TR key={line.id}>
+              {showDate && <TD className="whitespace-nowrap py-2 text-[13px] font-semibold tabular-nums text-fg-muted">{formatLedgerDate(line.date)}</TD>}
+              {showShift && <TD className="py-2 text-[13px] text-fg-muted">{line.shift}</TD>}
+              {showMilk && <TD className="py-2 text-[13px] font-medium">{line.milkType}</TD>}
+              <TD numeric className="py-2">{formatMilkQty(line.litres)}</TD>
+              {report.showFat && <TD numeric className="py-2 font-medium text-fg-muted">{line.fat > 0 ? formatMilkQty(line.fat) : '—'}</TD>}
+              {report.showSnf && <TD numeric className="py-2 font-medium text-fg-muted">{line.snf > 0 ? formatMilkQty(line.snf) : '—'}</TD>}
+              <TD numeric className="py-2 font-medium text-fg-muted">{formatMilkRate(line.rate)}</TD>
+              <TD numeric className="py-2"><Money amount={line.amount} /></TD>
+            </TR>
+          ))}
+          <LoadMoreRow sentinelRef={sentinelRef} hiddenCount={hiddenCount} onShowMore={showMore} onShowAll={showAll} colSpan={columns} />
+        </TBody>
+      </Table>
+    </Card>
+  );
+});
 
 export function MilkSupplierReportPanel(props: {
   report: MilkSupplierReport;
@@ -22,143 +87,75 @@ export function MilkSupplierReportPanel(props: {
   onGroupBy: (mode: MilkGroupMode) => void;
   onMilkType: (value: string) => void;
   onShift: (value: string) => void;
+  /** Supplier / range key; a change shows the first page again. */
+  resetKey?: unknown;
 }) {
   const { report } = props;
-  const showDate = report.mode !== 'day';
-  const showShift = report.mode !== 'shift';
-  const showMilk = report.mode !== 'milk';
+  const resetKey = `${String(props.resetKey ?? '')}|${report.mode}|${report.filterLabel}`;
+  const { visibleItems, hiddenCount, sentinelRef, showMore, showAll } = useProgressiveList(report.sections, 12, resetKey);
 
   return (
-    <div className="space-y-3">
-      <div className="bg-white rounded-2xl border border-slate-200 p-2.5 shadow-2xs space-y-2">
-        <div className="flex items-center gap-1 flex-wrap">
-          {GROUPS.map(group => (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => props.onGroupBy(group.id)}
-              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
-                props.groupBy === group.id
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {group.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-            Milk
-            <select
-              value={props.milkType}
-              onChange={event => props.onMilkType(event.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800"
-            >
-              <option value="all">All milk</option>
-              {props.milkType !== 'all' && !report.milkOptions.includes(props.milkType) && (
-                <option value={props.milkType}>{props.milkType}</option>
-              )}
-              {report.milkOptions.map(option => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-            Shift
-            <select
-              value={props.shift}
-              onChange={event => props.onShift(event.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800"
-            >
-              <option value="all">All shifts</option>
-              {props.shift !== 'all' && !report.shiftOptions.some(option => option.toLowerCase() === props.shift.toLowerCase()) && (
-                <option value={props.shift}>{props.shift}</option>
-              )}
-              {report.shiftOptions.map(option => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
-          </label>
-          <span className="text-[11px] font-semibold text-slate-400">{report.filterLabel}</span>
-        </div>
-      </div>
+    <div className="flex flex-col gap-3">
+      <Card className="flex flex-wrap items-center gap-2 p-3">
+        <SegmentedControl aria-label="Milk report grouping" size="sm" value={props.groupBy} onChange={props.onGroupBy} options={GROUPS} />
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-fg-muted">
+          Milk
+          <Select value={props.milkType} onChange={event => props.onMilkType(event.target.value)} className="h-8 w-auto text-xs">
+            <option value="all">All milk</option>
+            {props.milkType !== 'all' && !report.milkOptions.includes(props.milkType) && (
+              <option value={props.milkType}>{props.milkType}</option>
+            )}
+            {report.milkOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </Select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-fg-muted">
+          Shift
+          <Select value={props.shift} onChange={event => props.onShift(event.target.value)} className="h-8 w-auto text-xs">
+            <option value="all">All shifts</option>
+            {props.shift !== 'all' && !report.shiftOptions.some(option => option.toLowerCase() === props.shift.toLowerCase()) && (
+              <option value={props.shift}>{props.shift}</option>
+            )}
+            {report.shiftOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </Select>
+        </label>
+        <span className="text-xs text-fg-subtle sm:ml-auto">{report.filterLabel}</span>
+      </Card>
 
       {(report.milkBreakdown.length > 0 || report.shiftBreakdown.length > 0) && (
         <div className="flex flex-wrap gap-1.5">
           {report.milkBreakdown.map(bucket => (
-            <span key={`m-${bucket.label}`} className="px-2 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-100 text-[11px] font-bold">
-              {bucket.label} {formatMilkQty(bucket.litres)} L
-            </span>
+            <Badge key={`m-${bucket.label}`} tone="info" className="tabular-nums">
+              {bucket.label} {formatQty(bucket.litres)} L
+            </Badge>
           ))}
           {report.shiftBreakdown.map(bucket => (
-            <span key={`s-${bucket.label}`} className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-bold">
-              {bucket.label} {formatMilkQty(bucket.litres)} L
-            </span>
+            <Badge key={`s-${bucket.label}`} className="tabular-nums">
+              {bucket.label} {formatQty(bucket.litres)} L
+            </Badge>
           ))}
         </div>
       )}
 
       {report.slipCount === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-2xs">
-          <Milk size={28} className="mx-auto text-slate-300 mb-2" />
-          <p className="font-bold text-sm text-slate-700">
-            {report.rangeCount > 0 ? 'No milk for this filter' : 'No milk in this period'}
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {report.rangeCount > 0 ? 'Choose All milk or All shifts to see every collection.' : 'Change the dates, or record milk for this supplier.'}
-          </p>
-        </div>
+        <Card>
+          <EmptyState
+            icon={<Milk />}
+            title={report.rangeCount > 0 ? 'Is filter mein koi milk nahi' : 'Is period mein koi milk nahi'}
+            description={report.rangeCount > 0 ? 'Saari collections dekhne ke liye All milk / All shifts chunein.' : 'Tareekh badlein, ya is supplier ka milk record karein.'}
+          />
+        </Card>
       ) : (
-        report.sections.map(section => (
-          <div key={section.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-black text-slate-800 truncate">{section.title}</p>
-                <p className="text-[10px] font-semibold text-slate-400">
-                  {section.slips} slip{section.slips === 1 ? '' : 's'}
-                  {section.fat > 0 ? ` · Fat ${formatMilkQty(section.fat)}` : ''}
-                  {` · ${formatMilkRate(section.rate)}/L`}
-                </p>
-              </div>
-              <div className="text-right shrink-0">
-                <p className="text-xs font-black text-slate-900">{formatMilkQty(section.litres)} L</p>
-                <p className="text-[11px] font-bold text-amber-700">{formatMoney(section.amount)}</p>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs min-w-[640px]">
-                <thead className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  <tr>
-                    {showDate && <th className="px-3 py-2">Date</th>}
-                    {showShift && <th className="px-3 py-2">Shift</th>}
-                    {showMilk && <th className="px-3 py-2">Milk</th>}
-                    <th className="px-3 py-2 text-right">Litres</th>
-                    {report.showFat && <th className="px-3 py-2 text-right">Fat</th>}
-                    {report.showSnf && <th className="px-3 py-2 text-right">SNF</th>}
-                    <th className="px-3 py-2 text-right">Rate</th>
-                    <th className="px-3 py-2 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {section.lines.map(line => (
-                    <tr key={line.id}>
-                      {showDate && <td className="px-3 py-2 font-mono font-bold text-slate-600 whitespace-nowrap">{formatLedgerDate(line.date)}</td>}
-                      {showShift && <td className="px-3 py-2 font-semibold text-slate-700">{line.shift}</td>}
-                      {showMilk && <td className="px-3 py-2 font-semibold text-slate-800">{line.milkType}</td>}
-                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{formatMilkQty(line.litres)}</td>
-                      {report.showFat && <td className="px-3 py-2 text-right font-mono text-slate-500">{line.fat > 0 ? formatMilkQty(line.fat) : '—'}</td>}
-                      {report.showSnf && <td className="px-3 py-2 text-right font-mono text-slate-500">{line.snf > 0 ? formatMilkQty(line.snf) : '—'}</td>}
-                      <td className="px-3 py-2 text-right font-mono text-slate-600">{formatMilkRate(line.rate)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-amber-700">{formatMoney(line.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))
+        <>
+          {visibleItems.map(section => <SectionCard key={section.id} section={section} report={report} resetKey={resetKey} />)}
+          <LoadMoreRow sentinelRef={sentinelRef} hiddenCount={hiddenCount} onShowMore={showMore} onShowAll={showAll} />
+        </>
       )}
     </div>
   );
 }
+
+export default MilkSupplierReportPanel;
