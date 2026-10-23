@@ -2927,22 +2927,35 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return true;
   };
 
+  // Lines carry litres (production batches are in litres) unless they name another `unit`; each is
+  // converted to the item's own stock unit, so 2 L taken from milk stocked in ml moves 2000 ml, not 2.
   const allocateFromRetailStock = async (itemsList: any[], destination: string, _details: any) => {
     const lockResult = await actionLock.runExclusive(`alloc_retail_${destination}`, async () => {
       try {
           const updatedInventory = [...inventory];
           const updatedItems = [...items];
+          const customUnits = settings.inventory?.customUnits || [];
+
+          const lines: Array<{ def: ItemDefinition; stockQty: number }> = [];
+          for (const item of itemsList) {
+            const rawId = String(item.itemId || item.id || '');
+            const def = findLineItem<ItemDefinition>(items, { ...item, itemId: rawId.startsWith('inv_') ? rawId.slice(4) : rawId || undefined, id: undefined });
+            if (!def) continue;
+            const fromUnit = String(item.unit || 'L');
+            const stockQty = convertQuantity(Number(item.quantity) || 0, fromUnit, def.unit || fromUnit, customUnits);
+            if (stockQty === null) {
+              showToast(`${def.name}: ${fromUnit} ko ${def.unit} mein badla nahi ja sakta. Ye item yahan allocate nahi ho sakta.`, 'error');
+              return false;
+            }
+            lines.push({ def, stockQty: roundQuantity(stockQty) });
+          }
 
           // Counter stock cannot be sent out beyond what is on hand (it went negative). Checked for
           // every line before anything moves, so a short line never leaves earlier lines deducted.
           const wanted = new Map<string, { name: string; unit: string; qty: number }>();
-          for (const item of itemsList) {
-            const rawId = item.itemId || item.id || '';
-            const actualItemId = rawId.startsWith('inv_') ? rawId.replace('inv_', '') : rawId;
-            const def = items.find(i => i.id === actualItemId || i.id === rawId || i.name.toLowerCase() === (item.name || '').toLowerCase());
-            if (!def) continue;
+          for (const { def, stockQty } of lines) {
             const prev = wanted.get(def.id);
-            wanted.set(def.id, { name: def.name, unit: def.unit || '', qty: roundQuantity((prev?.qty || 0) + (Number(item.quantity) || 0)) });
+            wanted.set(def.id, { name: def.name, unit: def.unit || '', qty: roundQuantity((prev?.qty || 0) + stockQty) });
           }
           for (const [itemId, need] of wanted) {
             const { data: stockRow, error: stockError } = await supabase.from('items').select('stock').eq('id', itemId).single();
@@ -2954,21 +2967,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
           }
 
-          for (const item of itemsList) {
-              const rawId = item.itemId || item.id || '';
-              const actualItemId = rawId.startsWith('inv_') ? rawId.replace('inv_', '') : rawId;
-              
-              let itemDef = updatedItems.find(i => i.id === actualItemId || i.id === rawId || i.name.toLowerCase() === (item.name || '').toLowerCase());
-              if (!itemDef) {
-                 itemDef = items.find(i => i.id === actualItemId || i.id === rawId);
-              }
-              if (!itemDef) continue;
-              
+          let logFailed = false;
+          for (const { def: itemDef, stockQty } of lines) {
               const targetId = itemDef.id;
               const { data: currItem } = await supabase.from('items').select('stock, name').eq('id', targetId).single();
 
               const currentStock = currItem ? roundQuantity(currItem.stock || 0) : roundQuantity((itemDef as any).stock || 0);
-              const deductQty = roundQuantity(item.quantity || 0);
+              const deductQty = stockQty;
               const newStock = roundQuantity(currentStock - deductQty);
 
               const { error: allocStockError } = await adjustItemStock(targetId, -deductQty);
@@ -2984,7 +2989,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                  updatedItems[idxItem] = { ...updatedItems[idxItem], stock: newStock };
               }
 
-              await supabase.from('inventory_logs').insert([{
+              const { error: logError } = await supabase.from('inventory_logs').insert([{
                   id: `log_alloc_ret_${generateUUID()}`, 
                   date: new Date().toISOString(), 
                   item_id: targetId,
@@ -2995,9 +3000,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                   reason: 'Allocation', 
                   notes: `Leftover Milk Allocated to ${destination}`
               }]);
+              if (logError) {
+                console.error('[allocateFromRetailStock] Stock log not saved:', logError);
+                logFailed = true;
+              }
           }
           setInventory(updatedInventory);
           setItems(updatedItems);
+          if (logFailed) showToast('Stock nikal gaya, lekin stock history mein entry save nahi hui.', 'warning');
           fetchData(['allocations', ...STOCK]);
           return true;
       } catch (e) { 
@@ -3260,6 +3270,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                   const retailDef = items.find(i => i.id === retailItemId);
                   if (!retailDef) continue;
                   const partQty = roundQuantity(Number(part.quantity) || 0);
+                  // The batch counts litres; the item may be stocked in ml.
+                  const stockQty = roundQuantity(convertQuantity(partQty, 'L', retailDef.unit || 'L', settings.inventory?.customUnits || []) ?? partQty);
                   // Deterministic log id first: a retry finds it and does not add the litres twice.
                   const { error: retailLogError } = await supabase.from('inventory_logs').insert([{
                     id: `log_batch_cancel_${batch.id}_${retailItemId}`,
@@ -3267,21 +3279,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     item_id: retailItemId,
                     item_name: retailDef.name,
                     old_quantity: roundQuantity(Number((retailDef as any).stock) || 0),
-                    new_quantity: roundQuantity((Number((retailDef as any).stock) || 0) + partQty),
-                    difference: partQty,
+                    new_quantity: roundQuantity((Number((retailDef as any).stock) || 0) + stockQty),
+                    difference: stockQty,
                     reason: 'Allocation',
                     notes: `Batch #${batch.batch_number} cancelled: counter milk returned`,
-                    details: { loose_delta: partQty, batch_id: batch.id }
+                    details: { loose_delta: stockQty, batch_id: batch.id }
                   }]);
                   if (retailLogError && retailLogError.code !== '23505') throw retailLogError;
                   if (!retailLogError) {
-                    const { error: retailStockError } = await adjustItemStock(retailItemId, partQty);
+                    const { error: retailStockError } = await adjustItemStock(retailItemId, stockQty);
                     if (retailStockError) {
                       await supabase.from('inventory_logs').delete().eq('id', `log_batch_cancel_${batch.id}_${retailItemId}`);
                       throw retailStockError;
                     }
-                    setItems(prev => prev.map(i => i.id === retailItemId ? { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + partQty) } as any : i));
-                    setInventory(prev => prev.map(inv => inv.item_id === retailItemId ? { ...inv, quantity: roundQuantity((inv.quantity || 0) + partQty) } : inv));
+                    setItems(prev => prev.map(i => i.id === retailItemId ? { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + stockQty) } as any : i));
+                    setInventory(prev => prev.map(inv => inv.item_id === retailItemId ? { ...inv, quantity: roundQuantity((inv.quantity || 0) + stockQty) } : inv));
                   }
                   retailReturned = roundQuantity(retailReturned + partQty);
                 }
@@ -8095,10 +8107,25 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           // so a credit raises them; debit − credit lowered Owner Capital on every capital entry.
           const isCreditNormal = ['Liability', 'Equity', 'Income'].includes(String(manualAcc.type));
           const manualChange = isCreditNormal ? -netChange : netChange;
-          const newBal = roundCurrency((manualAcc.balance || 0) + manualChange);
-          const { error: manualError } = await supabase.from('manual_accounts').update({ balance: newBal }).eq('id', manualAcc.id);
-          if (manualError) throw manualError;
-          setManualAccounts(prev => prev.map(m => m.id === manualAcc.id ? { ...m, balance: newBal } : m));
+          // Compare-and-swap on the server's balance: writing screen balance + change lost a posting
+          // made on another device in between. (An adjust_manual_account_balance delta RPC would remove
+          // the retry; see the report.)
+          let newBal: number | null = null;
+          for (let attempt = 0; attempt < 4 && newBal === null; attempt++) {
+            const { data: balanceRow, error: balanceReadError } = await supabase.from('manual_accounts').select('balance').eq('id', manualAcc.id).single();
+            if (balanceReadError) throw balanceReadError;
+            const rawBalance = balanceRow?.balance;
+            const candidate = roundCurrency((Number(rawBalance) || 0) + manualChange);
+            const swapQuery = supabase.from('manual_accounts').update({ balance: candidate }).eq('id', manualAcc.id);
+            const { data: swapped, error: manualError } = await (rawBalance === null || rawBalance === undefined
+              ? swapQuery.is('balance', null)
+              : swapQuery.eq('balance', rawBalance)).select('id');
+            if (manualError) throw manualError;
+            if (swapped && swapped.length) newBal = candidate;
+          }
+          if (newBal === null) throw new Error(`${manualAcc.name} ka balance doosre device se badal raha hai. Dobara koshish karein.`);
+          const postedBalance = newBal;
+          setManualAccounts(prev => prev.map(m => m.id === manualAcc.id ? { ...m, balance: postedBalance } : m));
         } else {
           const finAcc = accounts.find(a => a.id === line.account_id);
           if (finAcc) {
@@ -8521,22 +8548,45 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!item) return false;
 
       if (action === 'write_off_spoilage') {
-        const inv = inventory.find(i => i.item_id === id);
-        const stock = Number(inv?.quantity || (item as any)?.stock || 0);
-        if (stock > 0) {
-          await adjustItemStock(id, -stock);
-          await supabase.from('inventory_logs').insert([{
-            id: `log_sp_${generateUUID()}`,
-            date: new Date().toISOString(),
-            item_id: id,
-            item_name: item.name,
-            old_quantity: stock,
-            new_quantity: 0,
-            difference: -stock,
-            reason: AdjustmentReason.SPOILAGE,
-            notes: `Stock written off to spoilage prior to item discontinuation`
-          }]);
-          setInventory(prev => prev.map(iv => iv.item_id === id ? { ...iv, quantity: 0 } : iv));
+        // Loose stock AND ready packs leave the shelf: writing off only the loose pile left the packs
+        // sellable (and counted) on a discontinued item. Read from the server, not the screen copy.
+        const { data: stockRow, error: stockReadError } = await supabase.from('items').select('stock, variant_stocks').eq('id', id).single();
+        if (stockReadError) throw stockReadError;
+        const loose = roundQuantity(Number(stockRow?.stock) || 0);
+        const packDeltas: Record<string, number> = {};
+        for (const [variantId, count] of Object.entries((stockRow?.variant_stocks || {}) as Record<string, number>)) {
+          const packs = roundQuantity(Number(count) || 0);
+          if (packs > 0) packDeltas[variantId] = -packs;
+        }
+        const looseOff = loose > 0 ? loose : 0;
+        if (looseOff > 0 || Object.keys(packDeltas).length > 0) {
+          const { error: writeOffError } = await adjustItemStock(id, -looseOff, Object.keys(packDeltas).length ? packDeltas : undefined);
+          if (writeOffError) throw writeOffError;
+          const now = new Date().toISOString();
+          const logRows = [
+            ...(looseOff > 0 ? [{
+              id: `log_sp_${generateUUID()}`, date: now, item_id: id, item_name: item.name,
+              old_quantity: loose, new_quantity: 0, difference: -looseOff, reason: AdjustmentReason.SPOILAGE,
+              notes: 'Stock written off to spoilage prior to item discontinuation',
+              details: { loose_delta: -looseOff }
+            }] : []),
+            ...Object.entries(packDeltas).map(([variantId, delta]) => ({
+              id: `log_sp_${generateUUID()}`, date: now, item_id: id,
+              item_name: `${item.name} (${(item.variants || []).find(v => v.id === variantId)?.name || 'Pack'})`,
+              old_quantity: loose, new_quantity: loose, difference: 0, reason: AdjustmentReason.SPOILAGE,
+              notes: `${-delta} pack(s) written off to spoilage prior to item discontinuation`,
+              details: { variant_id: variantId, variant_delta: delta, loose_delta: 0 }
+            }))
+          ];
+          const { error: logError } = await supabase.from('inventory_logs').insert(logRows);
+          if (logError) console.error('[safeDeleteItem] Write-off log not saved:', logError);
+          const clearPacks = (stocks: Record<string, number> | undefined) => {
+            const next = { ...(stocks || {}) };
+            Object.keys(packDeltas).forEach(variantId => { next[variantId] = 0; });
+            return next;
+          };
+          setInventory(prev => prev.map(iv => iv.item_id === id ? { ...iv, quantity: looseOff > 0 ? 0 : iv.quantity, variant_stocks: clearPacks(iv.variant_stocks) } : iv));
+          setItems(prev => prev.map(i => i.id === id ? { ...i, stock: looseOff > 0 ? 0 : (i as any).stock, variant_stocks: clearPacks(i.variant_stocks) } as any : i));
         }
         await updateItem(id, { isActive: false });
         showToast(`Stock written off to spoilage and "${item.name}" marked Inactive (Discontinued)!`, 'success');
