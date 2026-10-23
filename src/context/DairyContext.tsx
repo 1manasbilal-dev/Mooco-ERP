@@ -193,6 +193,13 @@ const DEFAULT_SYSTEM_MANUAL_ACCOUNTS: Array<{
 
 
 
+/** Note counts at shift close: all counted cash, the part left in the drawer and the part sent to the head. */
+interface ShiftCloseDenominations {
+  closing?: Record<string | number, number>;
+  leave_in_drawer?: Record<string | number, number>;
+  remit_to_head?: Record<string | number, number>;
+}
+
 interface DairyContextType {
   users: AppUser[];
   roles: AppRole[];
@@ -279,7 +286,7 @@ interface DairyContextType {
   startCashierShift: (data: { drawerId: string; openingCounted: number; denominations?: Record<string | number, number>; handoverId?: string }) => Promise<boolean>;
   /** receiveIntoAccountId: a head closing the shift receives the remitted cash straight into that account (no Head Inbox step). */
   /** approveDifferenceNow: the Owner closing their own shift approves its cash difference in the same step. */
-  closeCashierShift: (data: { countedCash: number; leaveInDrawer: number; remitToHead: number; denominations?: Record<string | number, number>; differenceReason?: string; notes?: string; receiveIntoAccountId?: string; approveDifferenceNow?: boolean }) => Promise<boolean>;
+  closeCashierShift: (data: { countedCash: number; leaveInDrawer: number; remitToHead: number; denominations?: ShiftCloseDenominations; differenceReason?: string; notes?: string; receiveIntoAccountId?: string; approveDifferenceNow?: boolean }) => Promise<boolean>;
   acceptHeadRemittance: (remittanceId: string, countedAmount: number, denominations?: Record<string | number, number>, destinationAccountId?: string, notes?: string) => Promise<boolean>;
   resolveCashVariance: (varianceId: string, status: 'Approved' | 'Adjusted' | 'Rejected', notes: string) => Promise<boolean>;
   resolveCashHandover: (handoverId: string, action: 'Accept' | 'Resolve' | 'Cancel', notes?: string) => Promise<boolean>;
@@ -6053,7 +6060,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     countedCash: number;
     leaveInDrawer: number;
     remitToHead: number;
-    denominations?: Record<string | number, number>;
+    denominations?: ShiftCloseDenominations;
     differenceReason?: string;
     notes?: string;
     receiveIntoAccountId?: string;
@@ -6173,7 +6180,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     // so it never sits "in transit" waiting for the same person to accept it in Head Inbox.
     let receivedNow = false;
     if (remit > 0 && receiveIntoAccountId) {
-      const remitDenominations = (data.denominations as any)?.remit_to_head || {};
+      const remitDenominations = data.denominations?.remit_to_head || {};
       receivedNow = await acceptHeadRemittance(remittanceId, remit, remitDenominations, receiveIntoAccountId, 'Received by head at shift close', { silent: true });
     }
 
@@ -9747,12 +9754,8 @@ const useDairyStore = (): DairySource => {
   return store;
 };
 
-/**
- * The workspace records and actions. Re-renders only when a field this component read changes.
- * Returned as `any`, as it effectively always was (React has no type package in this project);
- * typing it as DairyContextType surfaces type mismatches in pages that need their own fixes.
- */
-export const useDairy = (): any => {
+/** The workspace records and actions. Re-renders only when a field this component read changes. */
+export const useDairy = (): DairyContextType => {
   const store = useDairyStore();
   // Every field this component has read, kept for its lifetime: a field read only on some renders
   // (or only in an effect) still re-renders it when it changes.
