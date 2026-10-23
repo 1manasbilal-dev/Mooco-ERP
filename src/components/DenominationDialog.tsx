@@ -1,205 +1,211 @@
-import React from 'react';
-import { createPortal } from 'react-dom';
-import { Banknote, X, RotateCcw, Check } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Banknote, Check, Minus, Plus, RotateCcw } from 'lucide-react';
+import { Button, Kbd, Modal, Money } from './ui';
+import { cn } from '../lib/cn';
 import { formatCurrency } from '../lib/formatters';
+import { DENOMINATIONS, denominationPieces, denominationTotal, pieceCount, splitDenominations, type DenominationCounts } from './cash/denominations';
+import { cashVariance } from './cash/cashFormat';
 
-export const DENOMINATIONS = [5000, 1000, 500, 100, 50, 20, 10, 5, 1];
+// Kept here for existing importers (POS shift modal, shift activity dialog).
+export { DENOMINATIONS, splitDenominations };
 
 export const money = (value: number | undefined | null) =>
   formatCurrency(value);
 
-export const splitDenominations = (source: Record<string | number, number>, requestedAmount: number) => {
-  let remaining = Math.max(0, Math.round(requestedAmount * 100) / 100);
-  const result: Record<string | number, number> = {};
-  for (const denomination of DENOMINATIONS) {
-    const available = Math.max(0, Number(source[denomination] || 0));
-    const take = Math.min(available, Math.floor((remaining + 0.001) / denomination));
-    if (take > 0) {
-      result[denomination] = take;
-      remaining = Math.round((remaining - take * denomination) * 100) / 100;
-    }
-  }
-  return Math.abs(remaining) < 0.01 ? result : {};
-};
-
 export interface DenominationDialogProps {
   open: boolean;
   onClose: () => void;
-  value: Record<string | number, number>;
-  onChange: (next: Record<string | number, number>) => void;
+  value: DenominationCounts;
+  onChange: (next: DenominationCounts) => void;
   onApply: (total: number) => void;
   title?: string;
   subtitle?: string;
+  /** Optional amount to count against (declared / expected); shows the live difference. */
+  expectedAmount?: number;
+  expectedLabel?: string;
 }
 
-export const DenominationDialog: React.FC<DenominationDialogProps> = ({
-  open,
+const MAX_PIECES = 99999;
+
+/**
+ * Cash count by note and coin. Built for speed at the counter: type a count and press Enter to
+ * jump to the next note, arrow keys move up and down, + / − change the count, Ctrl+Enter applies.
+ */
+export const DenominationDialog: React.FC<DenominationDialogProps> = props => (props.open ? <DenominationCounter {...props} /> : null);
+
+const DenominationCounter: React.FC<DenominationDialogProps> = ({
   onClose,
   value,
   onChange,
   onApply,
   title = 'Cash Denomination Count',
-  subtitle = 'Enter quantity for each currency note and coin'
+  subtitle = 'Har note aur sikkay ki taadaad likhein',
+  expectedAmount,
+  expectedLabel = 'Expected',
 }) => {
-  // Hooks must run before the early return, otherwise the Escape listener is never cleaned up.
-  React.useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [open, onClose]);
+  const inputs = useRef<Array<HTMLInputElement | null>>([]);
+  const firstInputRef = useRef<HTMLInputElement | null>(null);
+  const total = denominationTotal(value);
+  const pieces = denominationPieces(value);
+  const hasExpected = typeof expectedAmount === 'number' && Number.isFinite(expectedAmount);
+  const difference = hasExpected && pieces > 0 ? cashVariance(total, Number(expectedAmount)) : null;
+  const last = DENOMINATIONS.length - 1;
 
-  if (!open) return null;
-
-  const total = DENOMINATIONS.reduce((sum, denomination) => sum + denomination * Number(value[denomination] || 0), 0);
-  const totalNotes = DENOMINATIONS.reduce((sum, denomination) => sum + Number(value[denomination] || 0), 0);
-
-  const handleClear = () => {
-    onChange({});
+  const setCount = (denomination: number, count: number) => {
+    const next = { ...value };
+    const safe = Math.min(MAX_PIECES, pieceCount(count));
+    if (safe > 0) next[denomination] = safe;
+    else delete next[denomination];
+    onChange(next);
   };
 
-  const handleApply = () => {
+  const focusAt = (index: number) => {
+    const input = inputs.current[Math.max(0, Math.min(last, index))];
+    if (input) { input.focus(); input.select(); }
+  };
+
+  const apply = () => {
     onApply(total);
     onClose();
   };
 
-  const updateCount = (denomination: number, count: number) => {
-    const next = { ...value };
-    if (count > 0) {
-      next[denomination] = count;
-    } else {
-      delete next[denomination];
+  const handleKeyDown = (index: number, denomination: number) => (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const count = pieceCount(value[denomination]);
+    switch (event.key) {
+      case 'Enter':
+        event.preventDefault();
+        if (event.ctrlKey || event.metaKey || index === last) apply();
+        else focusAt(index + 1);
+        break;
+      case 'ArrowDown':
+        event.preventDefault();
+        focusAt(index + 1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        focusAt(index - 1);
+        break;
+      case '+':
+      case '=':
+        event.preventDefault();
+        setCount(denomination, count + 1);
+        break;
+      case '-':
+        event.preventDefault();
+        setCount(denomination, count - 1);
+        break;
+      default:
     }
-    onChange(next);
   };
 
-  const dialogContent = (
-    <div className="fixed inset-0 z-[140] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs" onClick={onClose} />
-      <div className="relative bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-lg border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-200">
-        
-        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-800/40 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-lime-500/15 dark:bg-lime-950/60 text-lime-600 dark:text-lime-400 flex items-center justify-center font-bold shrink-0">
-              <Banknote size={20} />
-            </div>
-            <div>
-              <h4 className="font-black text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
-                {title}
-              </h4>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                {subtitle}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title={title}
+      description={subtitle}
+      initialFocusRef={firstInputRef}
+      icon={<span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg"><Banknote size={20} /></span>}
+      footer={(
+        <>
+          <Button variant="ghost" leftIcon={<RotateCcw />} disabled={pieces === 0} onClick={() => { onChange({}); focusAt(0); }} className="sm:mr-auto">
+            Clear
+          </Button>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button leftIcon={<Check />} onClick={apply}>
+            Apply <Money amount={total} />
+          </Button>
+        </>
+      )}
+    >
+      <div className="sticky top-0 z-10 -mx-5 -mt-4 border-b border-line bg-surface px-5 pb-3 pt-4">
+        <div className="flex items-end justify-between gap-3 rounded-card bg-surface-2 px-4 py-3 ring-1 ring-inset ring-line/70">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Total count</p>
+            <p className="mt-0.5 truncate text-2xl font-bold tracking-tight tabular-nums text-fg sm:text-[28px]" aria-live="polite">
+              <Money amount={total} />
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="text-[11px] font-semibold text-fg-subtle">{pieces} {pieces === 1 ? 'piece' : 'pieces'}</p>
+            {hasExpected && (
+              <p className="mt-0.5 text-xs font-semibold text-fg-subtle">
+                {expectedLabel} <Money amount={expectedAmount} className="text-fg-muted" />
               </p>
-            </div>
-          </div>
-          <button aria-label="Band karein" 
-            type="button" 
-            onClick={onClose} 
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="p-4 bg-gradient-to-r from-slate-900 to-slate-800 dark:from-slate-950 dark:to-slate-900 text-white shrink-0 border-b border-slate-800 flex items-center justify-between">
-          <div>
-            <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">
-              Total Cash Count
-            </span>
-            <span className="text-xl sm:text-2xl font-black font-mono text-lime-400">
-              {money(total)}
-            </span>
-          </div>
-          <div className="text-right">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">
-              Total Notes / Coins
-            </span>
-            <span className="text-xs sm:text-sm font-bold bg-white/10 px-2.5 py-1 rounded-lg inline-block mt-0.5">
-              {totalNotes} {totalNotes === 1 ? 'Piece' : 'Pieces'}
-            </span>
-          </div>
-        </div>
-
-        <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
-            {DENOMINATIONS.map(denomination => {
-              const qty = Number(value[denomination] || 0);
-              const subtotal = denomination * qty;
-
-              return (
-                <div 
-                  key={denomination} 
-                  className={`p-3 rounded-2xl border transition-all ${
-                    qty > 0 
-                      ? 'border-lime-400 dark:border-lime-700/80 bg-lime-50/40 dark:bg-lime-950/20 shadow-2xs' 
-                      : 'border-slate-200/90 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-xs font-bold mb-1.5">
-                    <span className="text-slate-700 dark:text-slate-300 font-mono">
-                      {formatCurrency(denomination)}
-                    </span>
-                    <span className={`text-[11px] font-mono ${qty > 0 ? 'text-lime-600 dark:text-lime-400 font-black' : 'text-slate-400'}`}>
-                      {qty > 0 ? money(subtotal) : '—'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={qty > 0 ? qty : ''}
-                      onChange={e => {
-                        const val = parseInt(e.target.value, 10);
-                        updateCount(denomination, isNaN(val) ? 0 : Math.max(0, val));
-                      }}
-                      placeholder="0"
-                      className="w-full text-center font-bold text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-1.5 focus:border-lime-500 focus:ring-1 focus:ring-lime-500 outline-hidden"
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="p-4 sm:p-5 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 shrink-0 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={total === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-          >
-            <RotateCcw size={14} /> Clear
-          </button>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleApply}
-              className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-black bg-lime-600 hover:bg-lime-500 dark:bg-lime-500 dark:hover:bg-lime-400 text-white dark:text-slate-950 shadow-md shadow-lime-600/20 cursor-pointer transition-all"
-            >
-              <Check size={15} /> Apply ({formatCurrency(total)})
-            </button>
+            )}
+            {difference !== null && (
+              <p className={cn('mt-0.5 text-xs font-bold', difference === 0 ? 'text-success-fg' : difference > 0 ? 'text-success-fg' : 'text-danger-fg')}>
+                {difference === 0 ? 'Exact match' : <>{difference > 0 ? 'Over' : 'Short'} <Money amount={Math.abs(difference)} /></>}
+              </p>
+            )}
           </div>
         </div>
       </div>
-    </div>
-  );
 
-  return typeof document !== 'undefined' ? createPortal(dialogContent, document.body) : dialogContent;
+      <div className="pt-1">
+        {DENOMINATIONS.map((denomination, index) => {
+          const count = pieceCount(value[denomination]);
+          const inputId = `denomination-${denomination}`;
+          return (
+            <div key={denomination} className="flex items-center gap-2 border-b border-line/70 py-1.5">
+              <label htmlFor={inputId} className={cn('w-16 shrink-0 text-[13px] font-bold tabular-nums', count > 0 ? 'text-fg' : 'text-fg-muted')}>
+                {denomination.toLocaleString('en-PK')}
+              </label>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={`Rs ${denomination} ek kam`}
+                  disabled={count === 0}
+                  onClick={() => setCount(denomination, count - 1)}
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-fg-subtle hover:bg-surface-2 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <Minus className="size-3.5" />
+                </button>
+                <input
+                  id={inputId}
+                  ref={element => {
+                    inputs.current[index] = element;
+                    if (index === 0) firstInputRef.current = element;
+                  }}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={count > 0 ? String(count) : ''}
+                  placeholder="0"
+                  onChange={event => setCount(denomination, Number(event.target.value.replace(/\D/g, '') || 0))}
+                  onKeyDown={handleKeyDown(index, denomination)}
+                  onFocus={event => event.currentTarget.select()}
+                  className={cn(
+                    'ds-control h-9 w-16 rounded-lg border bg-surface text-center text-sm font-bold tabular-nums text-fg outline-none transition-[border-color,box-shadow] duration-150 placeholder:font-normal placeholder:text-fg-faint focus:border-brand-accent focus:ring-4 focus:ring-ring/20',
+                    count > 0 ? 'border-brand-accent/60' : 'border-line',
+                  )}
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={`Rs ${denomination} ek zyada`}
+                  onClick={() => setCount(denomination, count + 1)}
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-fg-subtle hover:bg-surface-2 hover:text-fg"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              </div>
+              <span className={cn('ml-auto truncate text-right text-[13px] font-semibold tabular-nums', count > 0 ? 'text-fg' : 'text-fg-faint')}>
+                {count > 0 ? <Money amount={denomination * count} /> : '—'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="mt-3 hidden flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-subtle sm:flex">
+        <span><Kbd>Enter</Kbd> agla note</span>
+        <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> upar / neeche</span>
+        <span><Kbd>+</Kbd> <Kbd>−</Kbd> ek zyada / kam</span>
+        <span><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> apply</span>
+      </p>
+    </Modal>
+  );
 };
