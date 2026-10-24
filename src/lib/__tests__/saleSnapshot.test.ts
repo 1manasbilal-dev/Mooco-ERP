@@ -34,6 +34,16 @@ describe('saleItemSnapshot', () => {
     expect(loose.stockDeduction).toBeUndefined();
   });
 
+  it("reads 'base' / 'loose' and loose-marked lines as the loose pile", () => {
+    const [base, marked] = saleItemSnapshot([
+      { id: 'milk', qty: 2, price: 220, variantId: 'base' },
+      { id: 'egg', qty: 1, price: 25, variantId: 'gone', isLoose: true }
+    ]);
+    expect(base).toMatchObject({ variantId: undefined, unit: 'Unit' });
+    expect(base.deductFromBase).toBeUndefined();
+    expect(marked).toMatchObject({ variantId: 'gone', isLoose: true, deductFromBase: true });
+  });
+
   it('returns an empty list for anything that is not a list', () => {
     expect(saleItemSnapshot(null as any)).toEqual([]);
   });

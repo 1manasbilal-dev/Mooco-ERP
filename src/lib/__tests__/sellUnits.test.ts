@@ -10,6 +10,7 @@ import {
   pricePerBase,
   qtyAfterUnitSwitch,
   reservedBaseQty,
+  reservedPackQty,
   saleLineCostPerBase,
   saleLineStock,
   sellLineCaption,
@@ -64,6 +65,23 @@ describe('cart stock reservation', () => {
     expect(cartLineUsesMainStock({ variantId: 'x' })).toBe(false);
     expect(cartLineUsesMainStock({})).toBe(true);
     expect(cartLineContains({ stockDeduction: 0 })).toBe(1);
+  });
+
+  it('reads a cart line exactly like a saved bill line: flag, then catalog, then ready-made pack', () => {
+    // No flag: the catalog says the dozen is a view of loose stock.
+    expect(cartLineUsesMainStock({ variantId: 'dz' }, eggs)).toBe(true);
+    expect(cartLineUsesMainStock({ variantId: 'dz' })).toBe(false);
+    expect(cartLineContains({ variantId: 'dz' }, eggs)).toBe(12);
+    // 'base' / 'loose' ids and loose lines are the loose pile, one base unit each, whatever else they carry.
+    expect(cartLineUsesMainStock({ variantId: 'base' })).toBe(true);
+    expect(cartLineUsesMainStock({ isLoose: true, variantId: 'pack6', deductFromBase: false })).toBe(true);
+    expect(cartLineContains({ isLoose: true, stockDeduction: 12 })).toBe(1);
+    const noFlags = [{ id: 'egg', cartItemId: 'a', qty: 2, variantId: 'dz' }, { id: 'egg', cartItemId: 'b', qty: 3, variantId: 'pack6' }];
+    expect(reservedBaseQty(noFlags, 'egg', undefined, eggs)).toBe(24);
+    expect(reservedPackQty(noFlags, 'egg', 'pack6', undefined, eggs)).toBe(3);
+    expect(reservedPackQty(cart, 'egg', 'pack6')).toBe(3);
+    expect(reservedPackQty(cart, 'egg', 'pack6', 'c')).toBe(0);
+    expect(reservedPackQty(cart, 'egg', 'dz')).toBe(0);
   });
 
   it('works out how many units can still be sold', () => {

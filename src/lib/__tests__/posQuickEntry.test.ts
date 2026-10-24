@@ -66,6 +66,16 @@ describe('quantity steppers', () => {
     expect(stepQuickQuantity(1, -1, 'kg', true)).toBe(1);
     expect(stepQuickQuantity(3, 1, 'pcs')).toBe(4);
     expect(stepQuickQuantity(0, 1, 'pcs')).toBe(2);
+    expect(stepQuickQuantity(0.3, 1, 'Ltr')).toBe(0.5);
+  });
+
+  it('walks grams and millilitres a glass / pao (250) at a time', () => {
+    expect(stepQuickQuantity(0, 1, 'ml')).toBe(500);
+    expect(stepQuickQuantity(100, 1, 'g')).toBe(250);
+    expect(stepQuickQuantity(454.545, 1, 'ml')).toBe(500);
+    expect(stepQuickQuantity(454.545, -1, 'ml')).toBe(250);
+    expect(stepQuickQuantity(250, -1, 'grams')).toBe(250);
+    expect(stepQuickQuantity(3, 1, 'ml', true)).toBe(4);
   });
 });
 
@@ -86,6 +96,15 @@ describe('quick presets', () => {
     expect(getQuickPresets({ mode: 'qty', packaged: true, rate: 1 })).toEqual([1, 2, 3, 5, 10, 12]);
     expect(getQuickPresets({ mode: 'qty', packaged: false, unit: 'kg', rate: 1 })[0]).toBe(0.25);
     expect(getQuickPresets({ mode: 'qty', packaged: false, unit: 'L', rate: 1 })[0]).toBe(0.5);
+    expect(getQuickPresets({ mode: 'qty', packaged: false, unit: 'litres', rate: 1 })[0]).toBe(0.5);
+    expect(getQuickPresets({ mode: 'qty', packaged: false, unit: 'ml', rate: 0.22 })).toEqual([250, 500, 750, 1000, 1500, 2000, 5000]);
+    expect(getQuickPresets({ mode: 'qty', packaged: false, unit: 'g', rate: 0.5 })).toEqual([100, 250, 500, 750, 1000, 2000]);
+  });
+
+  it('hints small-unit shortcuts in everyday words', () => {
+    const ml = buildQuickPreview(0.22, 'ml').qty;
+    expect(ml[0]).toMatchObject({ qty: 250, title: '250 ml', hint: '1 Glass', converted: 'Rs 55' });
+    expect(buildQuickPreview(0.5, 'g').qty.find(q => q.qty === 250)).toMatchObject({ hint: '1 Paao' });
   });
 
   it('previews the conversions the cashier will see', () => {

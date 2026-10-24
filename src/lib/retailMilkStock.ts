@@ -1,7 +1,27 @@
 import { StockType, type InventoryItem, type ItemDefinition } from '../types';
 import { cleanNumber, cleanQty } from './formatters';
+import { convertQuantity, normalizeUnit } from './unitConversion';
 
 export const RETAIL_CHILLER_CAPACITY = 500;
+
+/** 'L' or 'ml' for a milk stock unit in any everyday spelling ('Ltr', 'litres', 'ML'); null for anything else. */
+export function litreUnitOf(unit?: string | null): 'L' | 'ml' | null {
+  const symbol = normalizeUnit(unit);
+  return symbol === 'L' ? 'L' : symbol === 'ml' ? 'ml' : null;
+}
+
+/**
+ * Litres (milk pool, batches, allocations) in a milk item's own stock unit: 2.5 L → 2500 for an ml item.
+ * Null when the item is not stocked by volume (kg, pcs): the caller must refuse, never post raw litres.
+ */
+export function litresToStockUnit(liters: number, stockUnit?: string | null): number | null {
+  return convertQuantity(Number(liters) || 0, 'L', stockUnit || 'L');
+}
+
+/** The other way: a milk item's stock quantity in litres (2500 ml → 2.5). Null when the unit is not a volume. */
+export function stockUnitToLitres(quantity: number, stockUnit?: string | null): number | null {
+  return convertQuantity(Number(quantity) || 0, stockUnit || 'L', 'L');
+}
 
 export interface RetailMilkRow {
   id: string;
@@ -51,19 +71,19 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
     const isMilk = /\b(milk|doodh)\b/.test(categories) || /\b(milk|doodh|buffalo|cow|mixed)\b/.test(name);
     if (!isMilk || /\b(powder|shake|flavou?red|condensed)\b/.test(name)) return [];
     
-    const unit = String(stock.unit || master?.unit || '').trim().toLowerCase();
-    const factor = ['l', 'ltr', 'ltrs', 'liter', 'liters', 'litre', 'litres'].includes(unit) ? 1
-      : ['ml', 'milliliter', 'milliliters', 'millilitre', 'millilitres'].includes(unit) ? 0.001 : 0;
+    const stockUnit = litreUnitOf(stock.unit || master?.unit);
     const quantity = Number(stock.quantity);
-    if (!factor || !Number.isFinite(quantity)) return [];
+    if (!stockUnit || !Number.isFinite(quantity)) return [];
+    const factor = stockUnit === 'L' ? 1 : 0.001;
 
     // Stock keeps three decimals; two would show 0.125 L as 0.13 L and drift the totals.
     const liters = cleanQty(quantity * factor);
     // Catalog rates are per stock unit; express them per litre so ml stock is valued correctly.
     const rate = cleanNumber((Number(master?.selling_price || stock.price) || 0) / factor, 4);
     const costRate = cleanNumber((Number(master?.cost_price) || 0) / factor, 4);
-    const value = Math.round(liters * rate);
-    const costValue = Math.round(liters * costRate);
+    // Minus stock stays visible in litres but is worth nothing (same rule as readStock / itemStockValue).
+    const value = cleanNumber(Math.max(0, liters) * rate);
+    const costValue = cleanNumber(Math.max(0, liters) * costRate);
 
     let milkType: 'Buffalo' | 'Cow' | 'Mixed' | 'Goat' | 'Camel' = 'Mixed';
     if (name.includes('buffalo') || name.includes('bhains')) {
@@ -82,8 +102,8 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
       name: stock.name,
       unit: 'L' as const,
       liters,
-      stockUnit: factor === 1 ? 'L' as const : 'ml' as const,
-      stockQuantity: quantity,
+      stockUnit,
+      stockQuantity: cleanQty(quantity),
       rate,
       costRate,
       value,
@@ -92,15 +112,17 @@ export function getRetailMilkStock(inventory: InventoryItem[], items: ItemDefini
     }];
   });
 
-  const totalLiters = Math.round(rawRows.reduce((sum, row) => sum + row.liters, 0) * 1000) / 1000;
-  const totalValue = rawRows.reduce((sum, row) => sum + row.value, 0);
-  const totalCostValue = rawRows.reduce((sum, row) => sum + row.costValue, 0);
-  const avgRate = totalLiters > 0 ? Math.round(totalValue / totalLiters) : 0;
-  const avgCostRate = totalLiters > 0 ? Math.round(totalCostValue / totalLiters) : 0;
+  const totalLiters = cleanQty(rawRows.reduce((sum, row) => sum + row.liters, 0));
+  const totalValue = cleanNumber(rawRows.reduce((sum, row) => sum + row.value, 0));
+  const totalCostValue = cleanNumber(rawRows.reduce((sum, row) => sum + row.costValue, 0));
+  // Averages over the litres that carry value, so a minus row does not inflate the rate.
+  const valuedLiters = cleanQty(rawRows.reduce((sum, row) => sum + Math.max(0, row.liters), 0));
+  const avgRate = valuedLiters > 0 ? cleanNumber(totalValue / valuedLiters) : 0;
+  const avgCostRate = valuedLiters > 0 ? cleanNumber(totalCostValue / valuedLiters) : 0;
 
   const rows: RetailMilkRow[] = rawRows.map(row => ({
     ...row,
-    percentOfTotal: totalLiters > 0 ? Math.round((row.liters / totalLiters) * 1000) / 10 : 0
+    percentOfTotal: valuedLiters > 0 ? Math.round((Math.max(0, row.liters) / valuedLiters) * 1000) / 10 : 0
   }));
 
   rows.sort((a, b) => b.liters - a.liters);
