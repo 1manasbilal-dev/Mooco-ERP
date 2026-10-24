@@ -12,7 +12,7 @@ import {
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { BREAKPOINTS, useMediaQuery } from '../hooks/useMediaQuery';
 import {
-  buildCatalogRows, categoryOptions, filterAndSort, posOrderUpdates,
+  buildCatalogRows, canTakeOpeningStock, categoryOptions, filterAndSort, posOrderUpdates,
   type CatalogRow, type SortField, type SortOrder, type StatusFilter, type StockFilter, type TypeFilter,
 } from '../components/items/catalogModel';
 import { CatalogSkeleton, ProductCard, ProductListItem, ProductTableRow, type DropPosition } from '../components/items/CatalogViews';
@@ -26,7 +26,8 @@ const ItemDeleteDialog = lazy(() => import('../components/items/ItemDeleteDialog
 const CategoryManagerDialog = lazy(() => import('../components/items/CategoryManagerDialog'));
 const UnitManagerModal = lazy(() => import('../components/units/UnitManagerModal').then(m => ({ default: m.UnitManagerModal })));
 
-type SheetState = { mode: 'view' | 'edit'; id: string } | { mode: 'create'; id: null };
+/** `focus: 'opening'` opens the edit form at its opening stock fields. */
+type SheetState = { mode: 'view' | 'edit'; id: string; focus?: 'opening' } | { mode: 'create'; id: null };
 type ViewMode = 'grid' | 'list';
 
 const VIEW_KEY = 'mooco.catalog.view';
@@ -70,7 +71,7 @@ function SheetLoading({ onClose }: { onClose: () => void }) {
 
 const Items: React.FC = () => {
   const {
-    items, inventory, categories, reorderItems, canPerform, reactivateEntity, hasPermission, settings, hasLoadedData,
+    items, inventory, inventoryLogs, categories, reorderItems, canPerform, reactivateEntity, hasPermission, settings, hasLoadedData,
   } = useDairy();
   const { openTab } = useTabs();
   const location = useLocation();
@@ -81,6 +82,7 @@ const Items: React.FC = () => {
   const canCreate = canPerform('items', 'create');
   const canEdit = canPerform('items', 'edit');
   const canDelete = canPerform('items', 'delete');
+  const canAdjustStock = canPerform('inventory', 'edit');
   const canOpenPos = hasPermission ? hasPermission(MODULE_METADATA['pos']?.module || 'pos') : true;
 
   /* ---------- Filters ---------- */
@@ -120,8 +122,9 @@ const Items: React.FC = () => {
       if (row.item.isActive === false) return;
       active += 1;
       if (row.isSale) sale += 1;
-      if (row.tone === 'low') low += 1;
-      if (row.tone === 'out') out += 1;
+      if (row.alert === 'low') low += 1;
+      // Minus stock counts as out (docs/stock-model.md).
+      if (row.alert === 'out' || row.alert === 'minus') out += 1;
     });
     return { active, sale, low, out, value, typeCounts };
   }, [allRows]);
@@ -204,6 +207,11 @@ const Items: React.FC = () => {
   const openCreate = () => openSheet({ mode: 'create', id: null });
 
   const sheetItem = sheet?.id ? items.find(i => i.id === sheet.id) || null : null;
+  // Opening stock is offered only before a product's first stock move (no stock log yet).
+  const sheetHasStockLogs = useMemo(
+    () => Boolean(sheetItem && sheet?.mode === 'view' && (inventoryLogs || []).some(log => log.item_id === sheetItem.id)),
+    [inventoryLogs, sheetItem, sheet?.mode],
+  );
   const deleteItem = deleteId ? items.find(i => i.id === deleteId) || null : null;
 
   const sellInPos = (itemId: string, entry?: SellInPosEntry) => {
@@ -486,6 +494,8 @@ const Items: React.FC = () => {
                   canDelete={canDelete}
                   canOpenPos={canOpenPos}
                   materialName={id => items.find(i => i.id === id)?.name}
+                  canSetOpeningStock={Boolean(canEdit && canAdjustStock && !sheetItem.isSystem && row && canTakeOpeningStock(row.reading, sheetHasStockLogs))}
+                  onOpeningStock={() => openSheet({ mode: 'edit', id: sheetItem.id, focus: 'opening' })}
                   onClose={closeSheet}
                   onEdit={() => openEdit(sheetItem.id)}
                   onDelete={() => openDelete(sheetItem.id)}
@@ -505,6 +515,7 @@ const Items: React.FC = () => {
             key={sheet.mode === 'create' ? 'create' : `edit-${sheet.id}`}
             mode={sheet.mode}
             item={sheet.mode === 'edit' ? sheetItem : null}
+            focusOpeningStock={sheet.mode === 'edit' && sheet.focus === 'opening'}
             canDelete={canDelete}
             onClose={closeSheet}
             onSaved={closeSheet}
