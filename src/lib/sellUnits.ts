@@ -44,26 +44,41 @@ export function pricePerBase(packPrice: number, contains: number): number {
   return cleanNumber((Number(packPrice) || 0) / size);
 }
 
-export function cartLineUsesMainStock(line: CartSellLine): boolean {
-  if (line.deductFromBase === true) return true;
-  if (line.deductFromBase === false) return false;
-  return Boolean(line.isLoose) || !line.variantId;
+/** Catalog fields a line's stock rule may fall back on. `ItemDefinition` and the raw `items` row both fit. */
+export type SaleLineCatalog = { variants?: { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean }[] } | null | undefined;
+
+/**
+ * True when a cart line takes loose (main) stock: a loose line, or a dozen/tray line. False for a
+ * ready-made pack, which takes its own count. Same rule as `saleLineStock`: the line's own flag
+ * wins, then the catalog (when given), and a pack line with neither is a ready-made pack.
+ */
+export function cartLineUsesMainStock(line: CartSellLine, item?: SaleLineCatalog): boolean {
+  return saleLineStock(line, item).fromBase;
 }
 
-export function cartLineContains(line: CartSellLine): number {
-  const contains = Number(line.stockDeduction);
-  return Number.isFinite(contains) && contains > 0 ? contains : 1;
+/** Base units one cart unit takes from its pile: 1 for a loose line, the pack size for a dozen or pack line. */
+export function cartLineContains(line: CartSellLine, item?: SaleLineCatalog): number {
+  return saleLineStock(line, item).contains;
 }
 
-function cartLineBaseQty(line: CartSellLine): number {
-  return cleanQty((Number(line.qty) || 0) * cartLineContains(line));
-}
-
-/** Base units already sitting in the cart for this product, excluding one line. */
-export function reservedBaseQty(cart: CartSellLine[], productId: string, exceptCartItemId?: string): number {
+/** Base units already sitting in the cart for this product (loose and dozen/tray lines), excluding one line. */
+export function reservedBaseQty(cart: CartSellLine[], productId: string, exceptCartItemId?: string, item?: SaleLineCatalog): number {
   return cleanQty(cart
-    .filter(line => line.id === productId && line.cartItemId !== exceptCartItemId && cartLineUsesMainStock(line))
-    .reduce((sum, line) => sum + cartLineBaseQty(line), 0));
+    .filter(line => line.id === productId && line.cartItemId !== exceptCartItemId)
+    .reduce((sum, line) => {
+      const stock = saleLineStock(line, item);
+      return stock.fromBase ? sum + stock.baseQty : sum;
+    }, 0));
+}
+
+/** Packs of one ready-made pack already in the cart, excluding one line. The packed twin of `reservedBaseQty`. */
+export function reservedPackQty(cart: CartSellLine[], productId: string, variantId: string, exceptCartItemId?: string, item?: SaleLineCatalog): number {
+  return cleanQty(cart
+    .filter(line => line.id === productId && line.cartItemId !== exceptCartItemId)
+    .reduce((sum, line) => {
+      const stock = saleLineStock(line, item);
+      return !stock.fromBase && stock.variantId === variantId ? sum + stock.stockQty : sum;
+    }, 0));
 }
 
 /**
@@ -108,7 +123,9 @@ export function oneUnitLabel(name: string, contains: number, baseUnit: string): 
 export function sellLineCaption(line: CartSellLine): string {
   const base = line.baseUnit || line.unit || 'unit';
   const name = !line.isLoose && line.variantName ? line.variantName : (line.unit || base);
-  const contains = cartLineContains(line);
+  // The caption shows the size the line carries, even on an old line that names its unit without an id.
+  const own = Number(line.stockDeduction);
+  const contains = Number.isFinite(own) && own > 0 ? own : 1;
   const qty = Number(line.qty) || 0;
   if (line.isLoose || !line.variantName || (contains === 1 && name.toLowerCase() === base.toLowerCase())) {
     return `${formatQty(qty, 3)} ${base}`;
@@ -136,16 +153,16 @@ export interface SaleLineStock {
  */
 export function saleLineStock(
   line: { qty?: number; variantId?: string; variant_id?: string; isLoose?: boolean; stockDeduction?: number; deductFromBase?: boolean; deduct_from_base?: boolean },
-  item?: { variants?: { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean }[] } | null
+  item?: SaleLineCatalog
 ): SaleLineStock {
   const qty = Number(line.qty) || 0;
   const rawVariant = line.variantId || line.variant_id;
   const variantId = rawVariant && rawVariant !== 'loose' && rawVariant !== 'base' && !line.isLoose ? rawVariant : undefined;
   const variant = variantId ? (item?.variants || []).find(v => v.id === variantId) : undefined;
   const snapshotContains = Number(line.stockDeduction);
-  const contains = snapshotContains > 0
+  const contains = Number.isFinite(snapshotContains) && snapshotContains > 0
     ? snapshotContains
-    : (variant && Number(variant.quantity_in_base_unit) > 0 ? Number(variant.quantity_in_base_unit) : 1);
+    : sellUnitContains(variant);
   const flag = line.deductFromBase ?? line.deduct_from_base;
   const fromBase = !variantId || (flag === true ? true : flag === false ? false : variant?.deduct_from_base === true);
   const baseQty = cleanQty(qty * (variantId ? contains : 1));
