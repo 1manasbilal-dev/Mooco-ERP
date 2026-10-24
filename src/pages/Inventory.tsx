@@ -9,14 +9,18 @@ import {
   Button, Card, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, StatCard, TBody, TH, THead, Table,
   TableContainer, Toolbar,
 } from '../components/ui';
-import { buildStockRows, type StockRow } from '../components/milk-ops/inventoryStock';
-import { StockCard, StockTableRows } from '../components/milk-ops/StockRows';
-import type { AuditTab, StockAdjustment } from '../components/milk-ops/StockAuditDialog';
+import { alertOf, buildStockRows, canSetOpening, type StockRow } from '../components/milk-ops/inventoryStock';
+import { groupLogsByItem } from '../components/milk-ops/stockLog';
+import { StockCard, StockTableRow, type RowAction } from '../components/milk-ops/StockRows';
+import type { AuditTab, StockCountSubmission } from '../components/milk-ops/StockAuditDialog';
+import type { InventoryLog, OpeningStockPiles } from '../types';
 
 const StockAuditDialog = lazy(() => import('../components/milk-ops/StockAuditDialog'));
+const StockHistoryDrawer = lazy(() => import('../components/milk-ops/StockHistoryDrawer'));
+const OpeningStockDialog = lazy(() => import('../components/milk-ops/OpeningStockDialog'));
 
 type TypeFilter = 'All' | 'Sale product' | 'Raw material' | 'Packaging material';
-type StatusFilter = 'all' | 'low' | 'out';
+type StatusFilter = 'all' | 'low' | 'out' | 'fix';
 
 const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'All', label: 'All items' },
@@ -24,6 +28,8 @@ const TYPE_FILTERS: { value: TypeFilter; label: string }[] = [
   { value: 'Raw material', label: 'Raw materials' },
   { value: 'Packaging material', label: 'Packaging' },
 ];
+
+const NO_LOGS: InventoryLog[] = [];
 
 interface AuditState { open: boolean; tab: AuditTab; itemId: string }
 
@@ -36,8 +42,11 @@ const auditFromSearch = (search: string): AuditState => {
   };
 };
 
+const matchesStatus = (row: StockRow, filter: StatusFilter) =>
+  filter === 'all' ? true : filter === 'fix' ? row.stray.length > 0 : alertOf(row) === filter;
+
 const Inventory: React.FC = () => {
-  const { inventory, inventoryLogs, adjustStock, items, canPerform } = useDairy();
+  const { inventory, inventoryLogs, adjustStock, setOpeningStock, items, canPerform } = useDairy();
   const { showToast } = useToast();
   const canEdit = canPerform('inventory', 'edit');
   const location = useLocation();
@@ -48,10 +57,11 @@ const Inventory: React.FC = () => {
   const deferredSearch = useDeferredValue(searchTerm);
   const [filterType, setFilterType] = useState<TypeFilter>('All');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [historyItemId, setHistoryItemId] = useState('');
+  const [openingItemId, setOpeningItemId] = useState('');
 
   // Audit dialog state mirrors the URL (?audit=true&tab=history&item=...), so it can be linked to.
   const [audit, setAudit] = useState<AuditState>(() => auditFromSearch(window.location.search));
-  const [auditVariant, setAuditVariant] = useState('loose');
   const [auditSession, setAuditSession] = useState(0);
   const [lastSearch, setLastSearch] = useState(location.search);
   if (location.search !== lastSearch) {
@@ -75,10 +85,9 @@ const Inventory: React.FC = () => {
     navigate(`${location.pathname}${q ? `?${q}` : ''}`, { replace: true });
   }, [location.pathname, location.search, navigate]);
 
-  const openAudit = useCallback((tab: AuditTab = 'adjust', itemId = '', variantId = 'loose') => {
+  const openAudit = useCallback((tab: AuditTab = 'adjust', itemId = '') => {
     const next: AuditState = { open: true, tab: canEdit ? tab : 'history', itemId };
     setAudit(next);
-    setAuditVariant(variantId);
     setAuditSession(session => session + 1);
     writeAuditUrl(next);
   }, [canEdit, writeAuditUrl]);
@@ -103,6 +112,9 @@ const Inventory: React.FC = () => {
 
   // Stock, value and status for every item, worked out once per data change rather than per keystroke.
   const allRows = useMemo(() => buildStockRows(items, inventory), [items, inventory]);
+  const rowsById = useMemo(() => new Map(allRows.map(row => [row.item.id, row])), [allRows]);
+  const logsByItem = useMemo(() => groupLogsByItem(inventoryLogs), [inventoryLogs]);
+  const canOpenItem = useCallback((row: StockRow) => canSetOpening(row, logsByItem.has(row.item.id)), [logsByItem]);
 
   const scopedRows = useMemo(() => {
     const q = deferredSearch.trim().toLowerCase();
@@ -114,58 +126,83 @@ const Inventory: React.FC = () => {
   // Header totals equal the sum of the listed rows (search and type filters apply, status filter does not).
   const stats = useMemo(() => {
     let totalValue = 0;
+    let retailValue = 0;
     let low = 0;
     let out = 0;
+    let fix = 0;
     for (const row of scopedRows) {
-      totalValue += row.valuation.costValue;
-      if (row.status === 'low') low += 1;
-      else if (row.status === 'out' || row.status === 'negative') out += 1;
+      totalValue += row.reading.costValue;
+      retailValue += row.retailValue;
+      const alert = alertOf(row);
+      if (alert === 'low') low += 1;
+      else if (alert === 'out') out += 1;
+      if (row.stray.length > 0) fix += 1;
     }
-    return { totalItems: scopedRows.length, totalValue, low, out };
+    return { totalItems: scopedRows.length, totalValue, retailValue, low, out, fix };
   }, [scopedRows]);
 
   const visibleRows = useMemo(() => (
-    statusFilter === 'all' ? scopedRows
-      : scopedRows.filter(row => (statusFilter === 'low' ? row.status === 'low' : row.status === 'out' || row.status === 'negative'))
+    statusFilter === 'all' ? scopedRows : scopedRows.filter(row => matchesStatus(row, statusFilter))
   ), [scopedRows, statusFilter]);
 
   const list = useProgressiveList<StockRow>(visibleRows, 50, `${deferredSearch}|${filterType}|${statusFilter}`);
 
-  const quickAudit = useCallback((itemId: string, variantId: string) => openAudit('adjust', itemId, variantId), [openAudit]);
+  const onRowAction = useCallback((action: RowAction, itemId: string) => {
+    if (action === 'count') openAudit('adjust', itemId);
+    else if (action === 'history') setHistoryItemId(itemId);
+    else setOpeningItemId(itemId);
+  }, [openAudit]);
 
   const submittingRef = useRef(false);
-  const handleAdjust = async (adjustment: StockAdjustment) => {
+  /** Saves each changed pile with its own `adjustStock` call; returns the piles that were saved. */
+  const handleCount = async (count: StockCountSubmission): Promise<string[]> => {
     if (!canEdit) {
       showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
-      return false;
+      return [];
     }
-    if (submittingRef.current) return false;
-    if (Number.isNaN(adjustment.newQty) || adjustment.newQty < 0) {
-      showToast('Invalid quantity', 'error');
-      return false;
-    }
-    const row = allRows.find(r => r.item.id === adjustment.itemId);
-    const invRecord = inventory.find(i => i.item_id === adjustment.itemId || (row && i.name.toLowerCase() === row.item.name.toLowerCase()));
+    if (submittingRef.current) return [];
+    const row = rowsById.get(count.itemId);
+    const invRecord = inventory.find(i => i.item_id === count.itemId || (row && i.name.toLowerCase() === row.item.name.toLowerCase()));
     if (!invRecord) {
-      showToast('Critical Error: Link to inventory ledger missing.', 'error');
-      return false;
+      showToast('Is item ka stock record nahi mila. Page refresh kar ke dobara koshish karein.', 'error');
+      return [];
     }
     submittingRef.current = true;
+    const saved: string[] = [];
+    const failed: string[] = [];
     try {
-      const ok = await adjustStock(invRecord.id, adjustment.newQty, adjustment.reason, adjustment.notes, adjustment.variantId);
-      if (!ok) {
-        showToast('Failed to adjust stock — system stock unchanged.', 'error');
-        return false;
+      for (const change of count.changes) {
+        let ok = false;
+        try {
+          ok = await adjustStock(invRecord.id, change.newQty, count.reason, count.notes, change.variantId);
+        } catch {
+          ok = false;
+        }
+        (ok ? saved : failed).push(ok ? change.variantId : change.name);
       }
-      showToast(`Stock synchronized for ${adjustment.targetName}`, 'success');
-      closeAudit();
-      return true;
-    } catch (err: any) {
-      showToast('Failed to adjust stock: ' + (err?.message || 'Error'), 'error');
-      return false;
     } finally {
       submittingRef.current = false;
     }
+    if (failed.length === 0) {
+      showToast(`${count.itemName}: stock count save ho gaya.`, 'success');
+      closeAudit();
+    } else if (saved.length > 0) {
+      showToast(`${saved.length} pile save ${saved.length > 1 ? 'hue' : 'hua'}, lekin ye nahi hua: ${failed.join(', ')}. Dobara koshish karein.`, 'warning');
+    } else {
+      showToast(`Stock count save nahi hua (${failed.join(', ')}). System stock wahi hai.`, 'error');
+    }
+    return saved;
+  };
+
+  const openingRow = openingItemId ? rowsById.get(openingItemId) : undefined;
+  const handleOpening = async (piles: OpeningStockPiles, notes: string) => {
+    if (!openingRow || !canEdit) return false;
+    const ok = await setOpeningStock(openingRow.item.id, piles, notes || undefined);
+    if (ok) {
+      showToast(`${openingRow.item.name}: opening stock save ho gaya.`, 'success');
+      setOpeningItemId('');
+    }
+    return ok;
   };
 
   const typeCounts = useMemo(() => {
@@ -181,6 +218,7 @@ const Inventory: React.FC = () => {
 
   const hasFilters = Boolean(searchTerm || filterType !== 'All' || statusFilter !== 'all');
   const clearFilters = () => { setSearchTerm(''); setFilterType('All'); setStatusFilter('all'); };
+  const historyRow = historyItemId ? rowsById.get(historyItemId) : undefined;
 
   return (
     <div className="flex flex-col gap-4 pb-8 lg:gap-6">
@@ -190,20 +228,26 @@ const Inventory: React.FC = () => {
         actions={
           <>
             <Button variant="secondary" leftIcon={<HistoryIcon />} onClick={() => openAudit('history')}>Audit history</Button>
-            <Button leftIcon={<ClipboardCheck />} onClick={() => openAudit('adjust')}>Audit stock</Button>
+            {canEdit && <Button leftIcon={<ClipboardCheck />} onClick={() => openAudit('adjust')}>Stock count</Button>}
           </>
         }
       />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Stock summary">
         <StatCard label="Total items" value={stats.totalItems} icon={<Package />} hint={hasFilters ? 'Filter ke mutabiq' : undefined} />
-        <StatCard label="Stock value (cost)" value={<Money amount={stats.totalValue} compact />} icon={<Layers />} tone="brand" />
+        <StatCard
+          label="Stock value (cost)"
+          value={<Money amount={stats.totalValue} compact />}
+          icon={<Layers />}
+          tone="brand"
+          hint={stats.retailValue > 0 ? <>Retail <Money amount={stats.retailValue} compact /></> : undefined}
+        />
         <StatCard
           label="Low stock"
           value={stats.low}
           icon={<AlertTriangle />}
           tone={stats.low > 0 ? 'warning' : 'neutral'}
-          hint={statusFilter === 'low' ? 'Filter laga hai' : stats.low > 0 ? 'Dekhein' : undefined}
+          hint={statusFilter === 'low' ? 'Filter laga hai' : stats.low > 0 ? 'Reorder level tak' : undefined}
           onClick={() => setStatusFilter(current => (current === 'low' ? 'all' : 'low'))}
         />
         <StatCard
@@ -215,6 +259,14 @@ const Inventory: React.FC = () => {
           onClick={() => setStatusFilter(current => (current === 'out' ? 'all' : 'out'))}
         />
       </section>
+
+      {stats.fix > 0 && statusFilter !== 'fix' && (
+        <p className="flex flex-wrap items-center gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-[13px] font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
+          <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{stats.fix} product{stats.fix > 1 ? 's' : ''} par purani ginti pari hai (multi-unit ya delete hue pack par). Stock count mein 0 karein.</span>
+          <Button size="sm" variant="secondary" onClick={() => setStatusFilter('fix')}>Dekhein</Button>
+        </p>
+      )}
 
       <div className="flex flex-col gap-3">
         <Toolbar>
@@ -236,6 +288,7 @@ const Inventory: React.FC = () => {
               { value: 'all', label: 'Sab' },
               { value: 'low', label: 'Low', count: stats.low },
               { value: 'out', label: 'Out', count: stats.out },
+              ...(stats.fix > 0 || statusFilter === 'fix' ? [{ value: 'fix' as const, label: 'Theek karein', count: stats.fix }] : []),
             ]}
           />
         </Toolbar>
@@ -255,16 +308,18 @@ const Inventory: React.FC = () => {
               <THead>
                 <tr>
                   <TH>Item</TH>
-                  <TH>Category</TH>
-                  <TH numeric>Stock</TH>
+                  <TH>On hand</TH>
+                  <TH numeric>Sellable</TH>
                   <TH numeric>Rate</TH>
                   <TH numeric>Value (cost)</TH>
                   <TH className="text-center">Status</TH>
-                  <TH className="w-16 text-right"><span className="sr-only">Audit</span></TH>
+                  <TH className="w-28 text-right"><span className="sr-only">Actions</span></TH>
                 </tr>
               </THead>
               <TBody>
-                {list.visibleItems.map(row => <StockTableRows key={row.item.id} row={row} onAudit={quickAudit} />)}
+                {list.visibleItems.map(row => (
+                  <StockTableRow key={row.item.id} row={row} canEdit={canEdit} canOpen={canOpenItem(row)} onAction={onRowAction} />
+                ))}
                 <LoadMoreRow sentinelRef={list.sentinelRef} hiddenCount={list.hiddenCount} onShowMore={list.showMore} onShowAll={list.showAll} colSpan={7} />
               </TBody>
             </Table>
@@ -272,7 +327,9 @@ const Inventory: React.FC = () => {
         ) : (
           <>
             <ul className="flex flex-col gap-2.5">
-              {list.visibleItems.map(row => <StockCard key={row.item.id} row={row} onAudit={quickAudit} />)}
+              {list.visibleItems.map(row => (
+                <StockCard key={row.item.id} row={row} canEdit={canEdit} canOpen={canOpenItem(row)} onAction={onRowAction} />
+              ))}
             </ul>
             <LoadMoreRow sentinelRef={list.sentinelRef} hiddenCount={list.hiddenCount} onShowMore={list.showMore} onShowAll={list.showAll} />
           </>
@@ -287,13 +344,33 @@ const Inventory: React.FC = () => {
             onTabChange={changeAuditTab}
             itemId={audit.itemId}
             onItemChange={changeAuditItem}
-            initialVariantId={auditVariant}
             rows={allRows}
             logs={inventoryLogs}
             canEdit={canEdit}
-            onSubmit={handleAdjust}
+            onSubmit={handleCount}
             onClose={closeAudit}
           />
+        </Suspense>
+      )}
+
+      {historyRow && (
+        <Suspense fallback={null}>
+          <StockHistoryDrawer
+            key={historyRow.item.id}
+            row={historyRow}
+            logs={logsByItem.get(historyRow.item.id) || NO_LOGS}
+            canEdit={canEdit}
+            canOpen={canOpenItem(historyRow)}
+            onCount={() => { setHistoryItemId(''); openAudit('adjust', historyRow.item.id); }}
+            onOpening={() => { setHistoryItemId(''); setOpeningItemId(historyRow.item.id); }}
+            onClose={() => setHistoryItemId('')}
+          />
+        </Suspense>
+      )}
+
+      {openingRow && canEdit && (
+        <Suspense fallback={null}>
+          <OpeningStockDialog key={openingRow.item.id} row={openingRow} onSubmit={handleOpening} onClose={() => setOpeningItemId('')} />
         </Suspense>
       )}
     </div>
