@@ -4,14 +4,40 @@ import { Badge, IconButton, Money, Skeleton, TD, TR } from '../ui';
 import type { Tone } from '../ui';
 import { cn } from '../../lib/cn';
 import { formatQty } from '../../lib/formatters';
-import type { CatalogRow, StockTone } from './catalogModel';
+import { STOCK_STATUS_LABEL, formatBaseQty } from '../../lib/stockRules';
+import type { CatalogRow } from './catalogModel';
 import { ProductThumb } from './ProductThumb';
 
-const STOCK_TONE: Record<StockTone, { tone: Tone; label: string; text: string; dot: string }> = {
-  ok: { tone: 'success', label: 'In stock', text: 'text-fg', dot: 'bg-success' },
-  low: { tone: 'warning', label: 'Low stock', text: 'text-warning-fg', dot: 'bg-warning' },
-  out: { tone: 'danger', label: 'Out of stock', text: 'text-danger-fg', dot: 'bg-danger' },
+type StockLook = { tone: Tone; short: string; text: string; dot: string };
+
+// One look per alert from the shared stock rule; inactive products get no alert colours.
+const STOCK_LOOK: Record<'ok' | 'low' | 'out' | 'minus' | 'inactive', StockLook> = {
+  ok: { tone: 'success', short: '', text: 'text-fg', dot: 'bg-success' },
+  low: { tone: 'warning', short: 'Low', text: 'text-warning-fg', dot: 'bg-warning' },
+  out: { tone: 'danger', short: 'Out', text: 'text-danger-fg', dot: 'bg-danger' },
+  minus: { tone: 'danger', short: 'Minus', text: 'text-danger-fg', dot: 'bg-danger' },
+  inactive: { tone: 'neutral', short: '', text: 'text-fg-muted', dot: 'bg-fg-faint' },
 };
+
+function stockLook(row: CatalogRow): StockLook {
+  if (row.item.isActive === false) return STOCK_LOOK.inactive;
+  return STOCK_LOOK[row.alert || 'ok'];
+}
+
+/** Hover text: status, pile by pile, what can be sold and the alert level. */
+export function stockTitle(row: CatalogRow): string {
+  const { reading } = row;
+  const parts = [row.item.isActive === false ? 'Inactive (no alerts)' : STOCK_STATUS_LABEL[reading.status]];
+  if (row.breakdown.length) parts.push(row.breakdown.join(' · '));
+  if (row.isSale && Math.abs(reading.sellableBase - reading.totalBase) > 0.0005) parts.push(`${formatBaseQty(reading.sellableBase, reading.unit)} bik sakta hai`);
+  parts.push(row.reorder > 0 ? `alert ${formatBaseQty(row.reorder, reading.unit)} par` : 'low-stock alert band');
+  return parts.join(' · ');
+}
+
+/** Packs or stray counts make one number ambiguous, so the table spells the piles out. */
+function hasPileDetail(row: CatalogRow): boolean {
+  return row.reading.piles.some(p => (p.kind === 'packed' || p.kind === 'orphan') && p.count !== 0);
+}
 
 export type DropPosition = 'above' | 'below' | null;
 
@@ -47,10 +73,11 @@ const DROP_LINE: Record<'above' | 'below', string> = {
 const stopClick = (event: React.SyntheticEvent) => event.stopPropagation();
 
 export function StockPill({ row, size = 'sm' }: { row: CatalogRow; size?: 'sm' | 'md' }) {
-  const s = STOCK_TONE[row.tone];
+  const s = stockLook(row);
   return (
-    <Badge tone={s.tone} dot size={size} title={`${s.label} · alert at ${formatQty(row.reorder)} ${row.item.unit}`}>
+    <Badge tone={s.tone} dot size={size} title={stockTitle(row)}>
       <span className="tabular-nums">{formatQty(row.totalBase, 3)}</span> {row.item.unit}
+      {s.short && <span className="font-bold">· {s.short}</span>}
     </Badge>
   );
 }
@@ -140,7 +167,7 @@ const openOnKey = (event: React.KeyboardEvent, open: () => void) => {
 export const ProductTableRow = memo(function ProductTableRow(props: CatalogItemProps & ReorderProps) {
   const { row, onOpen, reorderable, isFirst, isLast, isDragging, dropPosition, onMove, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd } = props;
   const { item } = row;
-  const s = STOCK_TONE[row.tone];
+  const s = stockLook(row);
   const inactive = item.isActive === false;
 
   return (
@@ -189,12 +216,15 @@ export const ProductTableRow = memo(function ProductTableRow(props: CatalogItemP
         </div>
       </TD>
       <TD className="py-2.5">
-        <span className="inline-flex items-center gap-2 whitespace-nowrap" title={`${s.label} · alert at ${formatQty(row.reorder)} ${item.unit}`}>
-          <span className={cn('size-2 rounded-full', s.dot)} aria-hidden="true" />
-          <span className={cn('font-semibold tabular-nums', s.text)}>{formatQty(row.totalBase, 3)}</span>
-          <span className="text-xs text-fg-subtle">{item.unit}</span>
-          {row.tone !== 'ok' && <Badge tone={s.tone}>{row.tone === 'out' ? 'Out' : 'Low'}</Badge>}
-        </span>
+        <div title={stockTitle(row)}>
+          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <span className={cn('size-2 rounded-full', s.dot)} aria-hidden="true" />
+            <span className={cn('font-semibold tabular-nums', s.text)}>{formatQty(row.totalBase, 3)}</span>
+            <span className="text-xs text-fg-subtle">{item.unit}</span>
+            {s.short && <Badge tone={s.tone}>{s.short}</Badge>}
+          </span>
+          {hasPileDetail(row) && <p className="mt-0.5 max-w-[16rem] truncate pl-4 text-[11px] text-fg-subtle">{row.breakdown.join(' · ')}</p>}
+        </div>
       </TD>
       <TD numeric className="py-2.5 font-medium text-fg-muted">
         <Money amount={item.cost_price} />
@@ -238,6 +268,7 @@ export const ProductListItem = memo(function ProductListItem(props: CatalogItemP
           {inactive && <Badge tone="neutral">Inactive</Badge>}
           {row.isSale && row.marginPct !== null && row.marginPct < 0 && <Badge tone="danger">Loss</Badge>}
         </div>
+        {hasPileDetail(row) && <p className="mt-1 truncate text-[11px] text-fg-subtle">{row.breakdown.join(' · ')}</p>}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <PriceText row={row} className="text-sm" />

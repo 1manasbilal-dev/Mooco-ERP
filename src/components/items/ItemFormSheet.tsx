@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useId, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Briefcase, ChefHat, Check, Factory, Lock, Plus, Ruler, Save, Trash2, Truck, X,
 } from 'lucide-react';
@@ -9,21 +9,44 @@ import { Badge, Button, Field, IconButton, Input, Money, SegmentedControl, Selec
 import { confirmAction } from '../ui/ConfirmDialog';
 import { cn } from '../../lib/cn';
 import { formatQty } from '../../lib/formatters';
+import { sellUnitContains } from '../../lib/sellUnits';
+import { formatBaseQty, pileBreakdown, readStock } from '../../lib/stockRules';
 import { detectUnitGroupId } from '../../lib/unitConversion';
 import { UnitSelector } from '../units/UnitSelector';
 import { SellUnitsTab, sellUnitDraftIssues, type SellUnitDraft, type SellUnitKind } from './SellUnitsTab';
 import { ImageUploadField } from './ImageUploadField';
+import { OpeningStockFields } from './OpeningStockFields';
 import { SideSheet } from './SideSheet';
 import { Switch } from './Switch';
-import { ITEM_TYPES, categoryOptions, profitBasisFor, profitOf } from './catalogModel';
+import {
+  EMPTY_OPENING_STOCK, ITEM_TYPES, canTakeOpeningStock, categoryOptions, checkOpeningStock, countOnUnit, pilesHoldingStock,
+  profitBasisFor, profitOf, type OpeningStockDraft,
+} from './catalogModel';
 
 const UnitManagerModal = lazy(() => import('../units/UnitManagerModal').then(m => ({ default: m.UnitManagerModal })));
 
 type FormTab = 'details' | 'recipe' | 'variants';
 
+const NO_STOCKS: Record<string, number> = {};
+const OPENING_NOTE = 'Opening stock (product setup)';
+
+/** Waits until a product just added shows up in the catalog list, and returns its id (null after `timeoutMs`). */
+async function waitForNewItem(read: () => ItemDefinition[], name: string, knownIds: Set<string>, timeoutMs = 10000): Promise<string | null> {
+  const key = name.trim().toLowerCase();
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const found = read().find(i => !knownIds.has(i.id) && i.name.trim().toLowerCase() === key);
+    if (found) return found.id;
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return null;
+}
+
 interface Props {
   mode: 'create' | 'edit';
   item: ItemDefinition | null;
+  /** Edit mode: scroll to the opening stock fields on open (from the detail view's "Opening stock" button). */
+  focusOpeningStock?: boolean;
   canDelete: boolean;
   /** Closes the sheet without asking; the sheet asks about unsaved changes itself. */
   onClose: () => void;
@@ -101,12 +124,18 @@ function FormSection({ title, description, aside, children }: { title: string; d
 }
 
 /** Add / edit product form in the side sheet: details, prices, stock alert, POS setup, recipe and sell units. */
-export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved, onDelete }: Props) {
-  const { items, inventory, categories, unitGroups, settings, addItem, updateItem, canPerform } = useDairy();
+export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete, onClose, onSaved, onDelete }: Props) {
+  const { items, inventory, inventoryLogs, categories, unitGroups, settings, addItem, updateItem, setOpeningStock, canPerform } = useDairy();
   const { showToast } = useToast();
   const titleId = useId();
   const isEdit = mode === 'edit' && Boolean(item);
   const canSave = isEdit ? canPerform('items', 'edit') : canPerform('items', 'create');
+  // Opening stock moves stock, so it needs the Inventory "Adjust stock" right as well.
+  const canAdjustStock = canPerform('inventory', 'edit');
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const formRef = useRef<HTMLFormElement>(null);
+  const openingRef = useRef<HTMLDivElement>(null);
 
   // Everything the form starts with, built once. The snapshot tells us later whether anything changed.
   const [initial] = useState(() => {
@@ -131,7 +160,8 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
       const nums: NumberDrafts = {
         cost: toDraft(clean.cost_price),
         sell: toDraft(clean.selling_price),
-        reorder: toDraft(clean.reorder_level || 10),
+        // 0 is a real setting (no alert), so only a missing level falls back.
+        reorder: toDraft(clean.reorder_level ?? 10),
         sortOrder: toDraft(clean.sort_order ?? 999),
         recipeBase: toDraft(clean.recipe_base_quantity, true),
         recipeOutput: toDraft(clean.recipe_expected_output, true),
@@ -165,6 +195,7 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
   const [variantKind, setVariantKind] = useState<SellUnitKind>('multi_unit');
   const [variantDraft, setVariantDraft] = useState<SellUnitDraft>(EMPTY_DRAFT);
   const [editingVariantIndex, setEditingVariantIndex] = useState(-1);
+  const [openingDraft, setOpeningDraft] = useState<OpeningStockDraft>(EMPTY_OPENING_STOCK);
 
   const patch = (next: Partial<ItemDefinition>) => setFormData(prev => ({ ...prev, ...next }));
   const setNum = (key: keyof NumberDrafts, value: string) => setNums(prev => ({ ...prev, [key]: value }));
@@ -177,13 +208,43 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
   const tab: FormTab = activeTab === 'recipe' && !showRecipe ? 'details' : activeTab;
 
   const liveInv = item ? inventory?.find(i => i.item_id === item.id) : undefined;
-  const liveLoose = item ? Number(liveInv?.quantity ?? (item as { stock?: number }).stock ?? 0) : null;
-  const liveVariantStocks = (liveInv?.variant_stocks || item?.variant_stocks || {}) as Record<string, number>;
-
-  // The base unit measures stock, cost and every pack size, so it cannot be relabelled while stock exists.
-  const unitLocked = isEdit && (
-    Math.abs(liveLoose || 0) > 0.0001 || Object.values(liveVariantStocks).some(v => Math.abs(Number(v) || 0) > 0.0001)
+  const liveLoose = item ? Number(liveInv?.quantity ?? (item as { stock?: number }).stock ?? 0) || 0 : null;
+  const liveVariantStocks = useMemo(
+    () => (liveInv?.variant_stocks || item?.variant_stocks || NO_STOCKS) as Record<string, number>,
+    [liveInv?.variant_stocks, item?.variant_stocks],
   );
+  // The saved product's stock, read with the shared rules (docs/stock-model.md). It drives every lock below.
+  const savedReading = useMemo(
+    () => (isEdit && item ? readStock(item, liveLoose ?? 0, liveVariantStocks) : null),
+    [isEdit, item, liveLoose, liveVariantStocks],
+  );
+
+  // The base unit measures stock, cost and every pack size, so it cannot be relabelled while any pile holds stock.
+  const unitLocked = Boolean(savedReading && pilesHoldingStock(savedReading));
+
+  // Opening stock: always offered while creating; on a saved product only before its first stock move.
+  const hasStockLogs = useMemo(
+    () => Boolean(item && (inventoryLogs || []).some(log => log.item_id === item.id)),
+    [inventoryLogs, item],
+  );
+  const openingOpen = !isSystem && (!isEdit || Boolean(savedReading && canTakeOpeningStock(savedReading, hasStockLogs)));
+  // Read again after the product saves, when this render's value may be out of date.
+  const openingOpenRef = useRef(openingOpen);
+  openingOpenRef.current = openingOpen;
+  const opening = useMemo(() => checkOpeningStock(openingDraft, formData.variants), [openingDraft, formData.variants]);
+  const openingTyped = Boolean(openingDraft.loose.trim() || Object.values(openingDraft.packs).some(v => v.trim()));
+  // Loose stock with loose sale off and no multi-unit can't be sold anywhere (describeItemStock warns the same).
+  const looseStuck = (liveLoose ?? 0) > 0 && formData.allow_loose_sale === false
+    && !(formData.variants || []).some(v => v.deduct_from_base === true && v.isActive !== false);
+
+  useEffect(() => {
+    if (!focusOpeningStock) return;
+    const timer = window.setTimeout(() => {
+      openingRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      openingRef.current?.querySelector<HTMLInputElement>('input:not([disabled])')?.focus({ preventScroll: true });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [focusOpeningStock]);
 
   const categoryChoices = useMemo(() => {
     const list = categoryOptions(['Uncategorized', ...categories], items);
@@ -212,13 +273,14 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
     unit: !unit ? 'Base unit chunein.' : '',
     cost: cost !== null && !(cost >= 0) ? 'Cost 0 ya us se zyada ho.' : '',
     sell: sell !== null && !(sell >= 0) ? 'Rate 0 ya us se zyada ho.' : '',
-    reorder: reorder === null || !(reorder > 0) ? 'Alert ki miqdar 0 se zyada likhein.' : '',
+    reorder: reorder !== null && !(reorder >= 0) ? 'Alert 0 ya us se zyada likhein (0 = alert band).' : '',
     sortOrder: isSale && (sortOrder === null || !Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > 999) ? '1 se 999 tak poora number likhein.' : '',
     quick: isSale && quick.invalid ? 'Sirf rupay ki raqam likhein, comma se alag (e.g. 50, 100).' : '',
     recipe: (recipeBase !== null && !(recipeBase >= 0)) || (recipeOutput !== null && !(recipeOutput >= 0)) ? 'Batch ki miqdar 0 ya us se zyada ho.' : '',
+    opening: openingOpen && canAdjustStock ? opening.firstError : '',
   };
   const errorTab: Record<keyof typeof errors, FormTab> = {
-    name: 'details', item_type: 'details', unit: 'details', cost: 'details', sell: 'details', reorder: 'details', sortOrder: 'details', quick: 'details', recipe: 'recipe',
+    name: 'details', item_type: 'details', unit: 'details', cost: 'details', sell: 'details', reorder: 'details', sortOrder: 'details', quick: 'details', recipe: 'recipe', opening: 'details',
   };
   // Errors show after the first Save; a duplicate name shows while typing.
   const shown = (key: keyof typeof errors) => ((showErrors || (key === 'name' && Boolean(duplicateOf))) && errors[key]) || undefined;
@@ -227,7 +289,7 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
   const pricing = profitOf(basis);
 
   const variantPending = editingVariantIndex >= 0 || Boolean(variantDraft.name.trim() || variantDraft.productQty.trim());
-  const isDirty = JSON.stringify([formData, nums, quickAmountsRaw]) !== snapshot || variantPending;
+  const isDirty = JSON.stringify([formData, nums, quickAmountsRaw]) !== snapshot || variantPending || openingTyped;
 
   const requestClose = async () => {
     if (submittingRef.current) return;
@@ -278,6 +340,16 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
     const isMulti = variantKind === 'multi_unit';
     const packItem = !isMulti && variantDraft.packId ? items.find(i => i.id === variantDraft.packId) : undefined;
     const existing = editingVariantIndex >= 0 ? variants[editingVariantIndex] : undefined;
+    // A count on this unit fixes its kind, and a ready-made pack's count also fixes its size (docs/stock-model.md).
+    const heldCount = countOnUnit(liveVariantStocks, existing?.id);
+    if (existing && heldCount !== 0) {
+      const wasMulti = existing.deduct_from_base === true;
+      if (wasMulti !== isMulti) { showToast(`${existing.name} par stock count hai, is liye qisam nahi badal sakti.`, 'warning'); return; }
+      if (!wasMulti && Math.abs(sellUnitContains(existing) - contains) > 0.0000001) {
+        showToast(`${formatQty(heldCount, 3)} × ${existing.name} stock mein hain, is liye size nahi badal sakta. Naya pack add karein.`, 'warning');
+        return;
+      }
+    }
     const packQty = parseFloat(variantDraft.packQty);
     const variant: ItemVariant = {
       id: existing?.id || `var_${Date.now()}`,
@@ -318,25 +390,76 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
   const removeVariant = (index: number) => {
     const target = (formData.variants || [])[index];
     if (!target) return;
-    const onHand = Number(liveVariantStocks[target.id] || 0);
-    if (target.deduct_from_base !== true && Math.abs(onHand) > 0.0001) {
-      showToast(`${target.name} ke abhi ${formatQty(onHand, 3)} packs stock mein hain. Pehle count karke 0 karein, ya isko hide kar dein.`, 'warning');
+    const onHand = countOnUnit(liveVariantStocks, target.id);
+    if (target.deduct_from_base !== true && onHand !== 0) {
+      showToast(`${formatQty(onHand, 3)} × ${target.name} abhi stock mein hain, is liye hata nahi sakte. Pehle Inventory mein count karke 0 karein, ya isko hide kar dein (stock Inventory mein dikhta rahega).`, 'warning');
       return;
     }
     patch({ variants: (formData.variants || []).filter((_, i) => i !== index) });
+    setOpeningDraft(prev => {
+      if (!(target.id in prev.packs)) return prev;
+      const packs = { ...prev.packs };
+      delete packs[target.id];
+      return { ...prev, packs };
+    });
     if (editingVariantIndex === index) resetVariantForm();
     else if (editingVariantIndex > index) setEditingVariantIndex(editingVariantIndex - 1);
   };
 
   // Hidden units stay on old bills and keep their stock; they just stop showing in POS.
-  const toggleVariantActive = (index: number) => {
-    const next = [...(formData.variants || [])];
-    if (!next[index]) return;
-    next[index] = { ...next[index], isActive: next[index].isActive === false };
-    patch({ variants: next });
+  const toggleVariantActive = async (index: number) => {
+    const target = (formData.variants || [])[index];
+    if (!target) return;
+    const hiding = target.isActive !== false;
+    const onHand = countOnUnit(liveVariantStocks, target.id);
+    if (hiding && target.deduct_from_base !== true && onHand !== 0 && !(await confirmAction({
+      title: `${target.name} POS mein chhupayen?`,
+      message: `${formatQty(onHand, 3)} × ${target.name} abhi stock mein hain.`,
+      consequences: [
+        'POS aur orders mein yeh pack nahi bikega.',
+        'Stock gayab nahi hota: Inventory mein "(hidden)" ke saath dikhta rahega aur total stock aur value mein gina jayega.',
+        'Stock khatam karna hai to Inventory mein count karein, ya pack wapas dikha kar bechein.',
+      ],
+      confirmLabel: 'Haan, chhupayen',
+      cancelLabel: 'Wapas',
+      tone: 'warning',
+    }))) return;
+    setFormData(prev => ({
+      ...prev,
+      variants: (prev.variants || []).map(v => (v.id === target.id ? { ...v, isActive: !hiding } : v)),
+    }));
+  };
+
+  // A pack's size is fixed by the stock it holds, so a different size is a new pack next to it.
+  const startNewPack = (from: ItemVariant) => {
+    setVariantKind('packaging');
+    setVariantDraft({ ...EMPTY_DRAFT, packId: from.packaging_item_id || '', packQty: String(from.packaging_qty || 1), fromBase: false });
+    setEditingVariantIndex(-1);
   };
 
   /* ---------- Save ---------- */
+
+  /**
+   * `addItem` resolves to the new product's id; where it only says `true` (older context), the id is
+   * read from the catalog list once the product arrives. On a saved product the offer is re-checked
+   * first: stock that arrived while the form was open (a purchase on another counter) must never be
+   * overwritten by an "opening" count.
+   */
+  const saveOpeningStock = async (knownId: string | null, knownIds: Set<string>) => {
+    if (isEdit && !openingOpenRef.current) {
+      showToast('Is dauran stock aa gaya, is liye opening stock save nahi kiya. Inventory mein stock count karein.', 'warning');
+      return;
+    }
+    const id = knownId || await waitForNewItem(() => itemsRef.current, trimmedName, knownIds);
+    if (!id) {
+      showToast('Product save ho gaya, lekin opening stock save nahi hua. Product khol kar dobara likhein.', 'warning');
+      return;
+    }
+    // On failure setOpeningStock shows its own message; the product itself is saved either way.
+    if (await setOpeningStock(id, opening.piles, OPENING_NOTE)) {
+      showToast(`Opening stock likh diya: ${formatBaseQty(opening.totalBase, unit)}`, 'success');
+    }
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -347,6 +470,12 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
     if (firstError) {
       setActiveTab(errorTab[firstError]);
       showToast(errors[firstError], 'warning');
+      // Put the cursor on the first field to fix, once the right tab has rendered.
+      window.requestAnimationFrame(() => {
+        const field = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+        field?.focus();
+        field?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
       return;
     }
     if (imageBusy) { showToast('Photo abhi process ho rahi hai, thora ruk kar save karein', 'warning'); return; }
@@ -364,7 +493,7 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
       item_type: Array.from(new Set(types)),
       cost_price: cost ?? 0,
       selling_price: sell ?? 0,
-      reorder_level: reorder as number,
+      reorder_level: reorder ?? 0,
       sort_order: isSale ? (sortOrder as number) : (formData.sort_order ?? 999),
       recipe_base_quantity: recipeBase ?? 0,
       recipe_expected_output: recipeOutput ?? 0,
@@ -372,13 +501,19 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
       quick_amounts: quick.values,
     };
 
+    // Opening stock is saved right after the product, as one "Opening Stock" move per product.
+    const wantsOpening = openingOpen && canAdjustStock && !opening.isEmpty;
+    const knownIds = new Set(itemsRef.current.map(i => i.id));
+
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
-      const ok = isEdit && item
+      const saved: unknown = isEdit && item
         ? await updateItem(item.id, finalData)
         : await addItem(finalData as Omit<ItemDefinition, 'id'>);
-      if (ok) {
+      if (saved) {
+        const savedId = isEdit && item ? item.id : typeof saved === 'string' ? saved : null;
+        if (wantsOpening) await saveOpeningStock(savedId, knownIds);
         submittingRef.current = false;
         onSaved();
         return;
@@ -421,7 +556,19 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
         <SegmentedControl aria-label="Form sections" variant="underline" value={tab} onChange={setActiveTab} options={tabOptions} className="mt-3" />
       </header>
 
-      <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col">
+      <form
+        ref={formRef}
+        onSubmit={handleSubmit}
+        noValidate
+        className="flex min-h-0 flex-1 flex-col"
+        onKeyDown={event => {
+          // Ctrl+S / Cmd+S saves from any field, like the rest of the app's forms.
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+            event.preventDefault();
+            formRef.current?.requestSubmit();
+          }
+        }}
+      >
         <div className="flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:px-6">
           {tab === 'details' && (
             <>
@@ -519,7 +666,15 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
                     disabled={isSystem || unitLocked}
                     onChange={(symbol, groupId) => patch({ unit: symbol, unit_group_id: groupId })}
                   />
-                  {unitLocked && <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-fg-subtle"><Lock className="size-3" />Stock maujood hai, is liye unit lock hai.</p>}
+                  {unitLocked && savedReading && (
+                    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-fg-subtle">
+                      <Lock className="mt-0.5 size-3 shrink-0" />
+                      <span>
+                        Unit lock hai: abhi stock hai ({pileBreakdown(savedReading).join(' · ')}). Unit badalne se yeh stock naye unit mein ghalat parha jata.
+                        Badalna ho to pehle Inventory mein har pile ka count 0 karein.
+                      </span>
+                    </p>
+                  )}
                   {shown('unit') && <p className="mt-1.5 text-xs font-semibold text-danger-fg">{errors.unit}</p>}
                 </div>
               </FormSection>
@@ -538,9 +693,13 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
                         className="font-semibold tabular-nums" value={nums.sell} onWheel={blurOnWheel} onChange={event => setNum('sell', event.target.value)} />
                     )}
                   </Field>
-                  <Field label="Low stock alert at" error={shown('reorder')}>
+                  <Field
+                    label={`Low stock alert${unit ? ` (${unit})` : ''}`}
+                    error={shown('reorder')}
+                    hint={Number(nums.reorder) > 0 ? `Total stock (loose + packs) ${nums.reorder}${unit ? ` ${unit}` : ''} ya kam ho to alert.` : '0 ya khali = koi alert nahi.'}
+                  >
                     {control => (
-                      <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix={unit || undefined} placeholder="10"
+                      <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix={unit || undefined} placeholder="0 = band"
                         className="tabular-nums" value={nums.reorder} onWheel={blurOnWheel} onChange={event => setNum('reorder', event.target.value)} />
                     )}
                   </Field>
@@ -567,6 +726,30 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
                   )
                 )}
               </FormSection>
+
+              {openingOpen && (
+                <div ref={openingRef}>
+                  <FormSection
+                    title="Opening stock"
+                    description={isEdit
+                      ? 'Is product ka abhi koi stock ya stock record nahi. Dukaan mein pehle se maal hai to yahan likhein.'
+                      : 'Dukaan mein abhi kitna maal hai? Save hone par Inventory mein "Opening Stock" ke naam se likha jayega.'}
+                    aside={<Badge tone="neutral">Optional</Badge>}
+                  >
+                    <OpeningStockFields
+                      baseUnit={unit}
+                      costRate={cost ?? 0}
+                      variants={formData.variants || []}
+                      draft={openingDraft}
+                      onChange={setOpeningDraft}
+                      check={opening}
+                      showErrors={showErrors}
+                      disabledReason={canAdjustStock ? undefined : 'Stock likhne ke liye Inventory "Adjust stock" ki ijazat chahiye.'}
+                      onOpenSellUnits={() => setActiveTab('variants')}
+                    />
+                  </FormSection>
+                </div>
+              )}
 
               {isSale && (
                 <FormSection title="POS setup" description="Cashier ke POS screen par yeh product kahan aur kaise khulega.">
@@ -659,7 +842,12 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
                       checked={formData.allow_loose_sale !== false}
                       onChange={next => patch({ allow_loose_sale: next })}
                       label="Loose sale"
-                      description={formData.allow_loose_sale !== false ? `Customer kitna bhi ${unit || 'quantity'} le sakta hai.` : 'Sirf packs mein bikta hai (Sell units tab).'}
+                      description={formData.allow_loose_sale !== false
+                        ? `Customer kitna bhi ${unit || 'quantity'} le sakta hai.`
+                        : <>
+                          Sirf packs mein bikta hai (Sell units tab).
+                          {looseStuck && <span className="mt-0.5 block font-semibold text-warning-fg">{formatBaseQty(liveLoose || 0, unit)} loose stock POS mein nahi bikega jab tak loose sale band hai (ya koi multi-unit na ho).</span>}
+                        </>}
                     />
                   )}
                 </div>
@@ -753,8 +941,9 @@ export default function ItemFormSheet({ mode, item, canDelete, onClose, onSaved,
               onSubmit={submitVariant}
               onEdit={editVariant}
               onRemove={removeVariant}
-              onToggleActive={toggleVariantActive}
+              onToggleActive={index => { void toggleVariantActive(index); }}
               onCancelEdit={() => resetVariantForm()}
+              onStartNewPack={startNewPack}
             />
           )}
         </div>

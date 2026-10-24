@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangle, Archive, ArrowRight, Banknote, Boxes, Briefcase, ChefHat, Factory, Pencil, RotateCcw, Scale,
+  AlertTriangle, Archive, ArrowRight, Banknote, Boxes, Briefcase, ChefHat, Factory, PackagePlus, Pencil, RotateCcw, Scale,
   ShoppingCart, Trash2, Truck, X, Zap,
 } from 'lucide-react';
 import type { ItemDefinition } from '../../types';
@@ -9,8 +9,9 @@ import type { Tone } from '../ui';
 import { cn } from '../../lib/cn';
 import { formatCurrency, formatQty } from '../../lib/formatters';
 import { buildQuickPreview, getQuickPresets } from '../../lib/posQuickEntry';
-import { describeItemStock, oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
-import { profitBasisFor, profitOf } from './catalogModel';
+import { availableSellUnits, oneUnitLabel, pricePerBase, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { STOCK_STATUS_LABEL, formatBaseQty, readStock } from '../../lib/stockRules';
+import { profitBasisFor, profitOf, stockAlert } from './catalogModel';
 import { ProductThumb } from './ProductThumb';
 
 export interface SellInPosEntry {
@@ -33,16 +34,22 @@ interface Props {
   onReactivate: () => void;
   onDeactivate: () => void;
   onSellInPos: (entry?: SellInPosEntry) => void;
+  /** True for a saved product with no stock yet and no stock history: it can still take opening stock. */
+  canSetOpeningStock?: boolean;
+  /** Opens the edit form, where the opening stock is entered. */
+  onOpeningStock?: () => void;
   /** Current catalog name for a recipe material, so renamed materials don't show their old name. */
   materialName?: (itemId: string) => string | undefined;
   /** id for the product name heading, so the surrounding sheet can use it as its label. */
   titleId?: string;
 }
 
-const STOCK_TONE: Record<'ok' | 'low' | 'out', { tone: Tone; text: string; bar: string }> = {
-  ok: { tone: 'success', text: 'In stock', bar: 'bg-success' },
-  low: { tone: 'warning', text: 'Low stock', bar: 'bg-warning' },
-  out: { tone: 'danger', text: 'Out of stock', bar: 'bg-danger' },
+const STOCK_LOOK: Record<'ok' | 'low' | 'out' | 'minus' | 'inactive', { tone: Tone; bar: string }> = {
+  ok: { tone: 'success', bar: 'bg-success' },
+  low: { tone: 'warning', bar: 'bg-warning' },
+  out: { tone: 'danger', bar: 'bg-danger' },
+  minus: { tone: 'danger', bar: 'bg-danger' },
+  inactive: { tone: 'neutral', bar: 'bg-fg-faint' },
 };
 
 const TYPE_TONE: Record<string, Tone> = { 'Sale product': 'success', 'Raw material': 'warning', 'Packaging material': 'info' };
@@ -82,7 +89,7 @@ function Metric({ label, value, sub, children }: { label: string; value: React.R
 /** Read-only product page: stock by pile, prices, profit, quick POS buttons and warnings. */
 export const ItemDetailView: React.FC<Props> = ({
   item, stock, variantStocks, allowNegativeStock, canEdit, canDelete, canOpenPos,
-  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos, materialName, titleId,
+  onClose, onEdit, onDelete, onReactivate, onDeactivate, onSellInPos, canSetOpeningStock, onOpeningStock, materialName, titleId,
 }) => {
   const isSale = Boolean(item.item_type?.includes('Sale product'));
   const rate = Number(item.selling_price) || 0;
@@ -90,18 +97,18 @@ export const ItemDetailView: React.FC<Props> = ({
   const looseAllowed = item.allow_loose_sale !== false;
   const qtyFirst = item.pos_primary_mode === 'qty';
   const activeVariants = useMemo(() => (item.variants || []).filter(v => v.isActive !== false), [item.variants]);
-  const reorder = Number(item.reorder_level) || 5;
-  const picture = useMemo(() => describeItemStock(item, stock, variantStocks), [item, stock, variantStocks]);
-  const onHand = picture.sellableBase;
-  const stockTone: 'out' | 'low' | 'ok' = onHand <= 0 ? 'out' : onHand <= reorder ? 'low' : 'ok';
-  const stockPct = Math.max(0, Math.min(100, (onHand / (reorder * 4 || 20)) * 100));
-  // Only pre-packed sizes hold their own count (dozen/tray draw from loose stock). Never add different sizes together.
-  const packedVariants = activeVariants.filter(v => v.deduct_from_base !== true);
-  const packsReady = packedVariants
-    .map(v => ({ name: v.name, count: Number(variantStocks[v.id]) || 0 }))
-    .filter(p => p.count !== 0)
-    .map(p => `${formatQty(p.count)} × ${p.name}`)
-    .join(' · ');
+  // One reading for the whole page (docs/stock-model.md): piles, totals, value, status and warnings.
+  const reading = useMemo(() => readStock(item, stock, variantStocks), [item, stock, variantStocks]);
+  const reorder = reading.reorderLevel;
+  const alert = stockAlert(reading, item.isActive !== false);
+  const look = STOCK_LOOK[item.isActive === false ? 'inactive' : alert || 'ok'];
+  const statusText = item.isActive === false ? 'Inactive' : STOCK_STATUS_LABEL[reading.status];
+  // The bar fills up to four times the alert level; without an alert level it only says "something" or "nothing".
+  const stockPct = reorder > 0
+    ? Math.max(0, Math.min(100, (reading.totalBase / (reorder * 4)) * 100))
+    : reading.totalBase > 0 ? 100 : 0;
+  const hasPacks = reading.piles.some(p => (p.kind === 'packed' || p.kind === 'orphan') && p.count !== 0);
+  const sellableDiffers = isSale && Math.abs(reading.sellableBase - reading.totalBase) > 0.0005;
 
   const [tab, setTab] = useState<'amount' | 'qty'>(qtyFirst ? 'qty' : 'amount');
   const preview = useMemo(() => buildQuickPreview(rate, item.unit, item.quick_amounts), [rate, item.unit, item.quick_amounts]);
@@ -123,7 +130,6 @@ export const ItemDetailView: React.FC<Props> = ({
 
   const canSell = canOpenPos && item.isActive && isSale && (rate > 0 || packPrices.length > 0);
   const sellLabel = !isSale ? 'Sale product nahi' : !item.isActive ? 'Inactive' : !canOpenPos ? 'POS ki ijazat nahi' : !(rate > 0 || packPrices.length > 0) ? 'Pehle rate set karein' : 'POS mein bechein';
-  const s = STOCK_TONE[stockTone];
 
   const quickButton = 'flex flex-col items-center justify-center rounded-control border border-line bg-surface p-2.5 text-center transition-[border-color,background-color,transform] duration-150 enabled:cursor-pointer enabled:hover:border-brand-accent enabled:hover:bg-brand-soft/60 enabled:active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -165,14 +171,18 @@ export const ItemDetailView: React.FC<Props> = ({
         <div className="grid grid-cols-2 gap-3">
           <Metric
             label="Stock"
-            value={<>{formatQty(picture.totalBase, 3)} <span className="text-xs font-semibold text-fg-subtle">{item.unit}</span></>}
-            sub={<>{packedVariants.length > 0 ? `loose ${formatQty(stock, 3)} · ${packsReady || 'koi pack nahi'} · ` : ''}alert {formatQty(reorder)} par</>}
+            value={<>{formatQty(reading.totalBase, 3)} <span className="text-xs font-semibold text-fg-subtle">{item.unit}</span></>}
+            sub={<>
+              {hasPacks && <span className="block">Loose + packs (neeche har pile)</span>}
+              {sellableDiffers && <span className="block">{formatBaseQty(reading.sellableBase, item.unit)} bik sakta hai</span>}
+              <span className="block">{reorder > 0 ? `Alert ${formatBaseQty(reorder, item.unit)} par` : 'Low-stock alert band'}</span>
+            </>}
           >
             <div className="mt-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
-                <div className={cn('h-full rounded-full', s.bar)} style={{ width: `${stockPct}%` }} />
+                <div className={cn('h-full rounded-full', look.bar)} style={{ width: `${stockPct}%` }} />
               </div>
-              <Badge tone={s.tone}>{s.text}</Badge>
+              <Badge tone={look.tone}>{statusText}</Badge>
             </div>
           </Metric>
           <Metric label="Selling price" value={priceHeadline.value} sub={priceHeadline.sub} />
@@ -188,39 +198,45 @@ export const ItemDetailView: React.FC<Props> = ({
           />
         </div>
 
-        <Section icon={<Boxes />} title="Stock by unit" aside={<span className="text-xs text-fg-subtle"><Money amount={picture.costValue} className="font-semibold text-fg-muted" /> at cost</span>}>
+        <Section icon={<Boxes />} title="Stock by unit" aside={<span className="text-xs text-fg-subtle"><Money amount={reading.costValue} className="font-semibold text-fg-muted" /> at cost</span>}>
           <div className="divide-y divide-line/70 overflow-hidden rounded-control border border-line text-sm">
-            {picture.piles.map(pile => (
-              <div key={pile.id} className={cn('flex items-center justify-between gap-3 px-3 py-2.5', !(pile.isActive || pile.kind === 'loose') && 'opacity-60')}>
+            {reading.piles.map(pile => (
+              <div key={pile.id} className={cn('flex items-center justify-between gap-3 px-3 py-2.5', !(pile.isActive || pile.kind === 'loose') && 'opacity-60', pile.kind === 'orphan' && 'opacity-100 bg-warning-soft/50')}>
                 <div className="min-w-0">
                   <span className="block truncate font-semibold text-fg">
-                    {pile.kind === 'loose' ? `Loose (${item.unit})` : `${pile.name} · ${formatQty(pile.contains, 3)} ${item.unit}`}
+                    {pile.kind === 'loose' ? `Loose (${item.unit})` : `${pile.name} · ${formatBaseQty(pile.contains, item.unit)}`}
                   </span>
                   <span className="text-[11px] text-fg-subtle">
-                    {pile.kind === 'loose' && (looseAllowed ? 'Base' : 'Base · loose nahi bikta')}
-                    {pile.kind === 'multi' && 'Loose se'}
-                    {pile.kind === 'packed' && (pile.isActive ? 'Apna stock' : 'Apna stock · hidden')}
-                    {pile.kind === 'orphan' && 'Purana count'}
+                    {pile.kind === 'loose' && (looseAllowed ? 'Base stock' : 'Base stock · loose sale band')}
+                    {pile.kind === 'multi' && `Multi-unit · loose se katta hai, apna count nahi`}
+                    {pile.kind === 'packed' && (pile.isActive ? 'Ready-made pack · apna count' : 'Ready-made pack · hidden: POS mein nahi, stock yahin hai')}
+                    {pile.kind === 'orphan' && 'Purana count: kisi pack ka nahi. Inventory stock count mein 0 karein.'}
                   </span>
                 </div>
                 <div className="shrink-0 text-right">
                   <span className={cn('block font-bold tabular-nums', pile.count < 0 ? 'text-danger-fg' : 'text-fg')}>
-                    {pile.kind === 'loose' && `${formatQty(pile.count, 3)} ${item.unit}`}
-                    {pile.kind === 'multi' && `≈ ${formatQty(pile.count, 2)} ${pile.name}`}
-                    {(pile.kind === 'packed' || pile.kind === 'orphan') && `${formatQty(pile.count, 3)} packs`}
+                    {pile.kind === 'loose' && formatBaseQty(pile.count, item.unit)}
+                    {pile.kind === 'multi' && `≈ ${formatQty(Math.floor(pile.count * 100) / 100, 2)} ${pile.name}`}
+                    {(pile.kind === 'packed' || pile.kind === 'orphan') && `${formatQty(pile.count, 3)} ×`}
                   </span>
-                  {pile.kind === 'packed' && <span className="text-[11px] text-fg-subtle">= {formatQty(pile.baseQty, 3)} {item.unit}</span>}
+                  {pile.kind === 'packed' && <span className="text-[11px] text-fg-subtle">= {formatBaseQty(pile.baseQty, item.unit)}</span>}
                 </div>
               </div>
             ))}
             <div className="flex items-center justify-between bg-surface-2 px-3 py-2.5 text-xs font-bold text-fg-muted">
-              <span>Total</span>
-              <span className="tabular-nums">{formatQty(picture.totalBase, 3)} {item.unit}</span>
+              <span>Total on hand{reading.hiddenPacks.length > 0 ? ' (hidden packs bhi)' : ''}</span>
+              <span className="tabular-nums">{formatBaseQty(reading.totalBase, item.unit)}</span>
             </div>
           </div>
-          {picture.warnings.length > 0 && (
+          {canSetOpeningStock && onOpeningStock && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-dashed border-line-strong px-3 py-2.5">
+              <p className="min-w-0 flex-1 text-xs text-fg-muted">Abhi koi stock aur stock record nahi. Dukaan mein pehle se maal hai to opening stock likhein.</p>
+              <Button size="sm" variant="secondary" leftIcon={<PackagePlus />} onClick={onOpeningStock}>Opening stock</Button>
+            </div>
+          )}
+          {reading.warnings.length > 0 && (
             <ul className="mt-3 space-y-1 rounded-control bg-warning-soft px-3 py-2.5" aria-label="Product warnings">
-              {picture.warnings.map(w => (
+              {reading.warnings.map(w => (
                 <li key={w} className="flex items-start gap-1.5 text-xs font-medium text-warning-fg">
                   <AlertTriangle className="mt-0.5 size-3 shrink-0" />{w}
                 </li>
@@ -303,7 +319,7 @@ export const ItemDetailView: React.FC<Props> = ({
                     </div>
                     <div className="text-right">
                       <span className="block text-sm font-bold tabular-nums text-fg">{rate > 0 ? formatCurrency(rate) : 'No price'}</span>
-                      <span className="text-[11px] text-fg-subtle">{formatQty(stock)} {item.unit} stock</span>
+                      <span className="text-[11px] text-fg-subtle">{formatBaseQty(stock, item.unit)} stock</span>
                     </div>
                   </div>
                 )}
@@ -312,7 +328,8 @@ export const ItemDetailView: React.FC<Props> = ({
                   const price = sellUnitPrice(rate, contains, v.selling_price);
                   const each = pricePerBase(price, contains);
                   const fromBase = v.deduct_from_base === true;
-                  const ready = fromBase ? (contains > 0 ? stock / contains : 0) : (Number(variantStocks[v.id]) || 0);
+                  // Same rule as the POS: a multi-unit divides loose stock, a ready-made pack has its own count.
+                  const ready = availableSellUnits(stock, Number(variantStocks[v.id]) || 0, v);
                   const differs = rate > 0 && Math.abs(each - rate) > 0.009;
                   const vOut = ready <= 0 && !allowNegativeStock;
                   return (
@@ -321,18 +338,18 @@ export const ItemDetailView: React.FC<Props> = ({
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-sm font-semibold text-fg">{oneUnitLabel(v.name, contains, item.unit)}</span>
-                            {fromBase ? <Badge tone="info">Multi-unit</Badge> : <Badge tone="warning">Packaged stock</Badge>}
+                            {fromBase ? <Badge tone="info">Loose se</Badge> : <Badge tone="warning">Ready-made pack</Badge>}
                           </div>
                           <span className="mt-0.5 block text-xs text-fg-subtle">
                             {formatCurrency(each)}/{item.unit}
                             {differs ? ` · loose ${formatCurrency(rate)}/${item.unit}` : ''}
-                            {fromBase ? ' · main stock se' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · alag shelf stock')}
+                            {fromBase ? ' · loose stock se katta hai' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · apna count')}
                           </span>
                         </div>
                         <div className="shrink-0 text-right">
                           <span className="block text-sm font-bold tabular-nums text-fg">{price > 0 ? formatCurrency(price) : 'No price'}</span>
-                          <span className={cn('text-[11px] font-semibold', ready <= 0 ? 'text-danger-fg' : ready <= 5 ? 'text-warning-fg' : 'text-success-fg')}>
-                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(ready, 1)} ${v.name} available` : `${formatQty(ready)} ${v.name} stock`}
+                          <span className={cn('text-[11px] font-semibold', ready <= 0 ? 'text-danger-fg' : alert === 'low' ? 'text-warning-fg' : 'text-success-fg')}>
+                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(Math.floor(ready * 10) / 10, 1)} ${v.name} ban sakte hain` : `${formatQty(ready, 3)} ${v.name} stock mein`}
                           </span>
                         </div>
                       </div>
@@ -370,7 +387,7 @@ export const ItemDetailView: React.FC<Props> = ({
           <Row label="Sale policy">
             {looseAllowed ? <Badge tone="success">Loose aur packs</Badge> : <Badge tone="warning">Sirf packs</Badge>}
           </Row>
-          <Row label="Low stock alert">{formatQty(reorder)} {item.unit}</Row>
+          <Row label="Low stock alert">{reorder > 0 ? `${formatBaseQty(reorder, item.unit)} (total stock)` : <span className="text-fg-subtle">Band (0)</span>}</Row>
         </Section>
 
         {item.recipe && item.recipe.length > 0 && (
