@@ -12,16 +12,18 @@ import { cn } from '../lib/cn';
 import { BatchCard } from '../components/milk-ops/BatchCard';
 import { BOARD_STAGES, stageLabel } from '../components/milk-ops/productionStages';
 import { pkDay } from '../components/milk-ops/milkOps';
+import { stockLookup } from '../components/milk-ops/batchStock';
 import type { BatchCompletion } from '../components/milk-ops/BatchDetailModal';
 
 const BatchDetailModal = lazy(() => import('../components/milk-ops/BatchDetailModal'));
 const ProductionHistory = lazy(() => import('../components/milk-ops/ProductionHistory'));
 
 type View = 'board' | 'history';
+const productKey = (name?: string | null) => String(name || '').trim().toLowerCase();
 const viewFromSearch = (search: string): View => (new URLSearchParams(search).get('view') === 'history' ? 'history' : 'board');
 
 const Production: React.FC = () => {
-  const { productionBatches, updateBatchStage, cancelBatch, items, settings, isDayLocked, getBusinessDate, canPerform } = useDairy();
+  const { productionBatches, updateBatchStage, cancelBatch, items, inventory, settings, isDayLocked, getBusinessDate, canPerform } = useDairy();
   const { showToast } = useToast();
   const canEdit = canPerform('production', 'edit');
   const location = useLocation();
@@ -58,16 +60,24 @@ const Production: React.FC = () => {
   const pendingRef = useRef(new Set<string>());
 
   const itemsById = useMemo(() => new Map<string, ItemDefinition>(items.map(item => [item.id, item])), [items]);
+  // Batches name their product; completion matches it trimmed and case-insensitive, so the sheet does too.
   const itemsByName = useMemo(() => {
     const map = new Map<string, ItemDefinition>();
-    for (const item of items) if (!map.has(item.name)) map.set(item.name, item);
+    for (const item of items) {
+      const key = productKey(item.name);
+      if (!map.has(key)) map.set(key, item);
+    }
     return map;
   }, [items]);
   const unitByProduct = useMemo(() => {
     const map = new Map<string, string>();
-    for (const [name, item] of itemsByName) map.set(name, item.unit || 'kg');
+    for (const batch of productionBatches) {
+      if (!map.has(batch.product_name)) map.set(batch.product_name, itemsByName.get(productKey(batch.product_name))?.unit || 'kg');
+    }
     return map;
-  }, [itemsByName]);
+  }, [productionBatches, itemsByName]);
+  const stockOf = useMemo(() => stockLookup(items, inventory), [items, inventory]);
+  const customUnits = useMemo(() => settings.inventory?.customUnits || [], [settings.inventory?.customUnits]);
 
   const batchesById = useMemo(() => new Map<string, ProductionBatch>(productionBatches.map(b => [b.id, b])), [productionBatches]);
 
@@ -81,12 +91,17 @@ const Production: React.FC = () => {
     let completedToday = 0;
     let milkUsedToday = 0;
     let profitToday = 0;
+    let profitKnown = 0;
     for (const batch of productionBatches) {
       if (batch.status === ProductionStage.COMPLETED) {
         if (pkDay(batch.completed_date || batch.start_date) === today) {
           completedToday += 1;
           milkUsedToday += Number(batch.quantity_input) || 0;
-          profitToday += Number(batch.financials?.gross_profit) || 0;
+          const financials = batch.financials || batch.details?.financials;
+          if (financials) {
+            profitKnown += 1;
+            profitToday += Number(financials.gross_profit) || 0;
+          }
         }
         continue;
       }
@@ -99,6 +114,8 @@ const Production: React.FC = () => {
     const active = byStage[ProductionStage.PROCESSING].length + byStage[ProductionStage.QUALITY].length + byStage[ProductionStage.PACKAGING].length;
     return {
       byStage, active, milkInProcess: cleanNumber(milkInProcess, 3), completedToday, milkUsedToday: cleanNumber(milkUsedToday, 3), profitToday,
+      // Batches completed without saved figures can't be counted; a plain Rs 0 would read as "no profit".
+      profitMissing: completedToday - profitKnown,
     };
   }, [productionBatches, today]);
 
@@ -237,21 +254,21 @@ const Production: React.FC = () => {
           hint={board.byStage[ProductionStage.PACKAGING].length > 0 ? `${board.byStage[ProductionStage.PACKAGING].length} finish par` : undefined}
           onClick={activeView === 'board' ? undefined : () => selectView('board')}
         />
-        <StatCard label="Doodh process mein" value={`${formatQty(board.milkInProcess)} L`} icon={<Droplets />} tone="info" />
+        <StatCard label="Doodh process mein" value={`${formatQty(board.milkInProcess, 3)} L`} icon={<Droplets />} tone="info" />
         <StatCard
           label="Aaj complete"
           value={board.completedToday}
           icon={<CheckCircle2 />}
           tone="success"
-          hint={board.completedToday > 0 ? `${formatQty(board.milkUsedToday)} L doodh` : undefined}
+          hint={board.completedToday > 0 ? `${formatQty(board.milkUsedToday, 3)} L doodh` : undefined}
           onClick={activeView === 'history' ? undefined : () => selectView('history')}
         />
         <StatCard
           label="Aaj ka profit"
-          value={<Money amount={board.profitToday} compact />}
+          value={board.completedToday > 0 && board.profitMissing === board.completedToday ? '—' : <Money amount={board.profitToday} compact />}
           icon={<TrendingUp />}
           tone={board.profitToday < 0 ? 'danger' : board.profitToday > 0 ? 'success' : 'neutral'}
-          hint="Complete batches"
+          hint={board.profitMissing > 0 ? `${board.profitMissing} batch ka profit save nahi hua` : 'Complete batches'}
         />
       </section>
 
@@ -356,9 +373,10 @@ const Production: React.FC = () => {
           <BatchDetailModal
             key={selectedBatch.id}
             batch={selectedBatch}
-            productDef={itemsByName.get(selectedBatch.product_name)}
+            productDef={itemsByName.get(productKey(selectedBatch.product_name))}
             itemsById={itemsById}
-            customUnits={settings.inventory?.customUnits || []}
+            stockOf={stockOf}
+            customUnits={customUnits}
             canEdit={canEdit}
             isTodayLocked={isTodayLocked}
             lockedDate={today}
