@@ -67,7 +67,8 @@ export enum AdjustmentReason {
   SUPPLY_RETURN = 'Supply Return',
   SALES_RETURN = 'Sales Return',
   PRODUCTION_CANCEL = 'Production Cancellation',
-  PRODUCTION_USAGE = 'Production Usage'
+  PRODUCTION_USAGE = 'Production Usage',
+  OPENING_STOCK = 'Opening Stock'
 }
 
 export type ProductSource = 'Supplier' | 'Production' | 'Both';
@@ -842,6 +843,23 @@ export interface InventoryLog {
   difference: number;
   reason: AdjustmentReason | string;
   notes?: string;
+  /**
+   * Pile detail. The loose columns above only ever hold the loose base delta; pack moves ride here.
+   * Older rows use `variant_id` + `variant_delta`, newer ones `variant_deltas`; read both (see `logStockDelta`).
+   */
+  details?: {
+    loose_delta?: number;
+    variant_id?: string;
+    variant_delta?: number;
+    variant_deltas?: Record<string, number>;
+    [key: string]: unknown;
+  } | null;
+}
+
+/** Target counts for `setOpeningStock`: loose in the base unit, packs by ready-made variant id. Omitted piles stay as they are. */
+export interface OpeningStockPiles {
+  loose?: number;
+  packs?: Record<string, number>;
 }
 
 export interface FinancialAccount {

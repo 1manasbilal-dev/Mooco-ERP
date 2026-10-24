@@ -47,7 +47,7 @@ import {
   AllocationEntry, ProductionBatch, POSBill, Customer, DailySupplyEntry, RetailClosingEntry,
   CustomerTransaction, SupplierTransaction, UnitDefinition, UnitGroup, ItemVariant,
   ItemDefinition, ExpenseEntry, RecurringExpense, ExpenseVendor, ExpenseVendorTransaction,
-  InventoryLog, FinancialAccount, BankTransaction, ManualAccount, JournalEntry,
+  InventoryLog, OpeningStockPiles, FinancialAccount, BankTransaction, ManualAccount, JournalEntry,
   AppUser, AppRole, PermissionModule, ShiftSession, DayClosingEntry,
   BusinessDay, CashDrawer, CashHandover, CashHandoverStatus, CashRemittance, CashVariance, ShiftCashEvent
 } from '../types';
@@ -333,6 +333,8 @@ interface DairyContextType {
   deleteItem: (id: string) => Promise<boolean>;
   reorderItems: (orderedItems: { id: string; sort_order: number }[]) => Promise<boolean>;
   adjustStock: (itemId: string, newQty: number, reason: AdjustmentReason | string, notes?: string, variantId?: string) => Promise<boolean>;
+  /** Opening stock for a catalog item (`items.id`): sets each given pile to the target count. See docs/stock-model.md. */
+  setOpeningStock: (itemId: string, piles: OpeningStockPiles, notes?: string) => Promise<boolean>;
   syncItemAndInventoryStock: (itemId: string, newStock: number, newVariantStocks?: Record<string, number>) => void;
   setInventory: React.Dispatch<React.SetStateAction<InventoryItem[]>>;
 
@@ -4305,6 +4307,50 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         fetchData(STOCK);
         return true;
      } catch(err) { console.error(err); return false; }
+  };
+
+  // Opening stock: the way to put stock on a product without a purchase (new product, first count).
+  // Each given pile moves by the difference to its target, like a stock count, in one adjust_item_stock
+  // call, and one log with reason Opening Stock records all piles so reports treat it as an intake.
+  const setOpeningStock = async (itemId: string, piles: OpeningStockPiles, notes?: string): Promise<boolean> => {
+    try {
+      const { data: currentItem, error } = await supabase.from('items').select('*').eq('id', itemId).single();
+      if (error || !currentItem) { showToast('Product nahi mila.', 'error'); return false; }
+      const variants: any[] = currentItem.variants || [];
+      const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
+      const looseDelta = piles.loose === undefined ? 0 : roundQuantity((Number(piles.loose) || 0) - oldLoose);
+      const packDeltas: Record<string, number> = {};
+      for (const [variantId, target] of Object.entries(piles.packs || {})) {
+        const variant = variants.find(v => v.id === variantId);
+        if (!variant || variant.deduct_from_base === true) {
+          showToast(`${variant?.name || variantId} ka alag stock nahi hota; loose ${currentItem.unit || ''} mein likhein.`, 'warning');
+          return false;
+        }
+        const delta = roundQuantity((Number(target) || 0) - (Number((currentItem.variant_stocks || {})[variantId]) || 0));
+        if (delta !== 0) packDeltas[variantId] = delta;
+      }
+      if (looseDelta === 0 && Object.keys(packDeltas).length === 0) return true;
+      const { error: updateError } = await adjustItemStock(itemId, looseDelta, Object.keys(packDeltas).length ? packDeltas : undefined);
+      if (updateError) throw updateError;
+      setInventory(prev => prev.map(i => i.item_id !== itemId ? i : {
+        ...i,
+        quantity: roundQuantity((i.quantity || 0) + looseDelta),
+        variant_stocks: Object.entries(packDeltas).reduce((acc, [id, d]) => ({ ...acc, [id]: roundQuantity((acc[id] || 0) + d) }), { ...(i.variant_stocks || {}) } as Record<string, number>),
+      }));
+      const { error: logError } = await supabase.from('inventory_logs').insert([{
+        id: `log_${generateUUID()}`, date: new Date().toISOString(), item_id: itemId, item_name: currentItem.name,
+        old_quantity: oldLoose, new_quantity: roundQuantity(oldLoose + looseDelta), difference: looseDelta,
+        reason: AdjustmentReason.OPENING_STOCK, notes: notes || 'Opening stock',
+        details: { loose_delta: looseDelta, variant_deltas: packDeltas },
+      }]);
+      if (logError) showToast('Stock set ho gaya, lekin log save nahi hua.', 'warning');
+      fetchData(STOCK);
+      return true;
+    } catch (err) {
+      console.error(err);
+      showToast('Opening stock save nahi hua. Dobara koshish karein.', 'error');
+      return false;
+    }
   };
 
   // One return per bill at a time, also across tabs: two clicks or two tabs could post the same
@@ -9285,7 +9331,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     addPurchase, returnPurchase, deletePurchase, returnMaterialPurchase, deleteMaterialPurchase, addBulkMaterialPurchase, recordSupplierPayment,
     addSupplier, updateSupplier, deleteSupplier, deleteSupplierTransaction,
     allocateBulkMilk, allocateFromRetailStock,
-    addItem, updateItem, deleteItem, reorderItems, adjustStock, syncItemAndInventoryStock,
+    addItem, updateItem, deleteItem, reorderItems, adjustStock, setOpeningStock, syncItemAndInventoryStock,
     createBatch, discardBatch, trimBatchToSource, updateBatchStage, cancelBatch,
     addSale, processSalesReturn, updateSalePaymentMode, recordDailySupply, performRetailClosing, postClosingStockSale,
     addCustomer, updateCustomer, deleteCustomer, recordCustomerPayment, deleteCustomerTransaction,
