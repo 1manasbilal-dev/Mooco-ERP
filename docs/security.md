@@ -36,7 +36,13 @@ Every REST/RPC call ─▶ PostgREST
 * `app_private` is not exposed by the Data API, so its helpers cannot be called directly.
 * User admin RPCs (`app_create_user`, `app_update_user`, `app_delete_user`) now require the
   `user_management` permission, and only a Super Admin can create/edit/delete a Super Admin.
-  `app_roles` is readable by operators but writable only by user managers (no self-promotion).
+  `app_roles` is readable by operators but writable only by the Owner / Super Admin
+  (`20261023119000_app_roles_owner_only.sql`; before that, by user managers except their own role).
+* The all-or-nothing money RPCs (`20261023110000` .. `20261023118000`: sales return, milk return,
+  write-off / settle, expense edit, day close, journal voucher, bank entry, new account, daily
+  supply) check the operator's role rights on the server (`app_private.can_perform`, the client's
+  `canPerform` rule) and refuse dates inside the closed books or on a locked day
+  (`app_private.assert_books_open`). Tables are still open to every operator (see the gaps below).
 * The three PIN RPCs are callable only by `service_role` (the Edge Function).
 
 ## Files
@@ -106,7 +112,13 @@ functions/tables created later are not anon-accessible. Phase 1 alone keeps the 
   `process_sales_return`, `delete_supplier_transaction_effects`, `checkout_customer_order`) end
   with `grant execute ... to anon, authenticated`. Phase 2 revokes those grants and the gate blocks
   anon regardless, but re-running such a migration later re-adds the anon grant — change those
-  lines to `to authenticated` when they are next edited.
+  lines to `to authenticated` when they are next edited (`20261023111000` already restates
+  `process_sales_return` as `authenticated, service_role`).
+* A money flow that writes more than one row belongs in one SECURITY DEFINER function: lock the
+  rows it reads, take an idempotency id from the client, post cash/bank through
+  `app_private.post_bank_tx` (balance and ledger row together), check rights with
+  `app_private.assert_can` and dates with `app_private.assert_books_open`. Add PGlite checks to
+  `supabase/tests/pglite/run.mjs` (happy path, same id twice, failure in the middle, permission).
 
 ## Rollback (emergency only — reopens the hole)
 
