@@ -3,14 +3,16 @@ import { createPortal } from 'react-dom';
 import { AlertCircle, ArrowRight, Check, Minus, Plus, ShoppingCart, X, Zap } from 'lucide-react';
 import { AvailableProduct } from './PosTypes';
 import { PosProductImage } from './PosProductImage';
-import { formatCurrency, formatQty, cleanNumber } from '../../lib/formatters';
+import { formatCurrency, formatQty, cleanNumber, cleanQty } from '../../lib/formatters';
 import {
   calculateQuickEntry,
   getQuickPresets,
   hasConfiguredCashShortcuts,
   stepQuickQuantity,
 } from '../../lib/posQuickEntry';
-import { qtyAfterUnitSwitch, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { cartLineContains, qtyAfterUnitSwitch } from '../../lib/sellUnits';
+import { cn } from '../../lib/cn';
+import { defaultSellOption, optionStockText, posSellOptions, sellQtyProblem } from './posStock';
 import { Button, IconButton } from '../ui';
 
 interface Props {
@@ -33,20 +35,23 @@ export default function PosQuickAmountModal(props: Props) {
 
 export { PosQuickAmountModal };
 
-const LOW_STOCK_LIMIT = 5;
-
 function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, addToCart, showToast, onAdded }: Props & { product: AvailableProduct; key?: string }) {
-  const variants = product.variants || [];
+  // Hidden packs are left out; loose only when loose sale is on. Each option knows its stock after the cart.
+  const options = useMemo(() => posSellOptions(product, cart), [product, cart]);
+  const variants = useMemo(() => (product.variants || []).filter(v => v.isActive !== false), [product.variants]);
   const looseAllowed = product.allow_loose_sale !== false;
   const isKgItem = (product.unit || '').toLowerCase() === 'kg';
   const isLiterItem = ['l', 'liter', 'liters'].includes((product.unit || '').toLowerCase());
-  const seededVariantId = initialEntry?.variantId && variants.some(v => v.id === initialEntry.variantId) ? initialEntry.variantId : null;
-  const [variantId, setVariantId] = useState(seededVariantId || (looseAllowed ? 'base' : variants.find(v => Number(product.variant_stocks?.[v.id]) > 0)?.id || variants[0]?.id || 'base'));
+  const seededVariantId = initialEntry?.variantId && options.some(o => o.id === initialEntry.variantId) ? initialEntry.variantId : null;
+  // A loose shortcut (no variant) from the product page stays on loose even when loose stock is empty.
+  const requested = seededVariantId || (initialEntry && !initialEntry.variantId && looseAllowed ? 'base' : null);
+  const [variantId, setVariantId] = useState(() => defaultSellOption(options, requested)?.id || 'base');
+  const option = options.find(o => o.id === variantId);
   const variant = variants.find(v => v.id === variantId);
-  const packaged = variantId !== 'base' || !looseAllowed;
-  const contains = variant ? sellUnitContains(variant) : 1;
-  const fromBase = !variant || variant.deduct_from_base === true;
-  const rate = variant ? sellUnitPrice(Number(product.price) || 0, contains, variant.selling_price) : (Number(product.price) || 0);
+  const packaged = option ? option.kind !== 'loose' : !looseAllowed;
+  const contains = option?.contains || 1;
+  const fromBase = option?.kind !== 'packed';
+  const rate = option ? option.price : (Number(product.price) || 0);
   const unit = variant?.name || product.unit || 'Unit';
   const isFractional = !packaged && (isKgItem || isLiterItem);
   const minQty = isFractional ? (isKgItem ? 0.25 : 0.5) : 1;
@@ -71,15 +76,15 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   const entry = calculateQuickEntry(amount, 'amount', rate, packaged);
   const total = entry.total;
 
-  const mainStock = Number(product.stock) || 0;
-  const packedStock = Number(product.variant_stocks?.[variantId]) || 0;
-  const reserved = fromBase ? reservedBaseQty(cart, product.id) : cart.filter(item => item.id === product.id && (item.variantId || 'base') === variantId).reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-  const stockPool = fromBase ? Math.max(0, mainStock - reserved) : Math.max(0, packedStock - reserved);
-  const remaining = fromBase && variant ? stockPool / contains : stockPool;
+  // What this unit can still sell after the cart, in its own unit (packs whole, dozen may be 1.5).
+  const remaining = option?.available ?? 0;
   const sameUnitInCart = cart.filter(item => item.id === product.id && (item.variantId || 'base') === variantId).reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-  const stockError = !entry.error && !allowNegativeStock && entry.qty > remaining + .01 ? `Only ${formatQty(remaining, 3)} ${unit} available after your cart.` : '';
+  const stockError = !option
+    ? 'Is product ki koi unit abhi bikri ke liye nahi hai.'
+    : !entry.error ? (sellQtyProblem(product.name, option, entry.qty, allowNegativeStock, product.unit || 'unit') || '') : '';
   const error = submitError || stockError || entry.error;
   const canAdd = !error;
+  const leftAfter = option && !entry.error ? cleanQty(remaining - entry.qty) : null;
 
   // Presets: Cash buttons for loose items, pack counts for packaged items
   const cashPresets = useMemo(() => {
@@ -94,8 +99,14 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
 
   const customCash = hasConfiguredCashShortcuts(product.quick_amounts);
 
-  const stockTone = remaining <= 0 && !allowNegativeStock ? 'out' : remaining <= LOW_STOCK_LIMIT ? 'low' : 'ok';
-  const stockLabel = allowNegativeStock && remaining <= 0 ? 'Stock override on' : stockTone === 'out' ? 'Out of stock' : `${formatQty(remaining, 3)} ${unit} left`;
+  // The shared low-stock rule (reorder level, base unit), applied to what will be left after the cart.
+  const { reading } = product.stock_view;
+  const cartBase = cart.reduce((sum, line) => line.id === product.id ? sum + (Number(line.qty) || 0) * cartLineContains(line) : sum, 0);
+  const lowAfterCart = reading.reorderLevel > 0 && reading.totalBase - cartBase <= reading.reorderLevel;
+  const stockTone = remaining <= 0 ? (allowNegativeStock ? 'low' : 'out') : (lowAfterCart || reading.status === 'minus') ? 'low' : 'ok';
+  const stockLabel = remaining <= 0
+    ? (allowNegativeStock ? 'No stock · minus allowed' : 'Out of stock')
+    : `${formatQty(remaining, 3)} ${unit} left`;
 
   useLayoutEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
@@ -120,15 +131,13 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   const refocus = () => { if (window.matchMedia('(pointer: fine)').matches) { input.current?.focus(); input.current?.select(); } };
 
   const switchVariant = (next: string) => {
+    const nextOption = options.find(item => item.id === next);
+    if (!nextOption) return;
     setVariantId(next);
-    const v = variants.find(item => item.id === next);
-    const nextContains = v ? sellUnitContains(v) : 1;
-    const nextRate = v ? sellUnitPrice(Number(product.price) || 0, nextContains, v.selling_price) : (Number(product.price) || 0);
     // Keep the same stock quantity like the cart does: 24 loose eggs become 2 Dozen, not 24 Dozen.
     const currentQty = entry.error || entry.qty <= 0 ? 1 : entry.qty;
-    const nextIsPack = next !== 'base' || !looseAllowed;
-    const switched = qtyAfterUnitSwitch(currentQty, contains, nextContains, nextIsPack);
-    setAmount(String(cleanNumber(switched.qty * nextRate)));
+    const switched = qtyAfterUnitSwitch(currentQty, contains, nextOption.contains, nextOption.kind !== 'loose');
+    setAmount(String(cleanNumber(switched.qty * nextOption.price)));
     setSubmitError('');
     setTappedPreset(null);
   };
@@ -224,22 +233,28 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
         </div>
 
         <div className="pos-quick-body">
-          {variants.length > 0 && (
+          {variants.length > 0 && options.length > 0 && (
             <>
-              <div className="pos-quick-section-label"><span>Unit / packaging</span></div>
+              <div className="pos-quick-section-label"><span>Unit / packaging</span><span>Stock cart ke baad</span></div>
               <div className="pos-quick-units" role="group" aria-label="Unit / packaging">
-                {looseAllowed && (
-                  <button type="button" aria-pressed={variantId === 'base'} onClick={() => switchVariant('base')}>
-                    <strong>1 {product.unit}</strong>
-                    <span>{formatCurrency(product.price)}</span>
-                  </button>
-                )}
-                {variants.map(v => {
-                  const size = sellUnitContains(v);
+                {options.map(o => {
+                  const title = o.kind === 'loose' ? `1 ${product.unit}` : `${o.name} (${formatQty(o.contains, 3)} ${product.unit})`;
+                  const empty = o.available <= 0;
                   return (
-                    <button key={v.id} type="button" aria-pressed={variantId === v.id} onClick={() => switchVariant(v.id)}>
-                      <strong>{v.name} ({formatQty(size, 3)} {product.unit})</strong>
-                      <span>{formatCurrency(sellUnitPrice(Number(product.price) || 0, size, v.selling_price))}</span>
+                    <button
+                      key={o.id}
+                      type="button"
+                      aria-pressed={variantId === o.id}
+                      aria-label={`${title}, ${formatCurrency(o.price)}, ${optionStockText(o, product.unit)}`}
+                      disabled={empty && !allowNegativeStock && variantId !== o.id}
+                      className="disabled:cursor-not-allowed disabled:opacity-55"
+                      onClick={() => switchVariant(o.id)}
+                    >
+                      <strong>{title}</strong>
+                      <span>{formatCurrency(o.price)}</span>
+                      <small className={cn('text-[11px] font-semibold tabular-nums', empty ? (allowNegativeStock ? 'text-warning-fg' : 'text-danger-fg') : 'text-fg-subtle')}>
+                        {empty ? (o.pileLeft < 0 ? 'Minus stock' : 'Out of stock') : optionStockText(o, product.unit)}
+                      </small>
                     </button>
                   );
                 })}
@@ -298,7 +313,11 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
                 {humanQtyBadge && <span className="pos-quick-tag">{humanQtyBadge}</span>}
                 {amount && Number(amount) > 0 && !packaged && <span className="pos-quick-tag">{formatCurrency(Number(amount))} custom amount</span>}
               </span>
-              <span>{allowNegativeStock ? 'Stock override enabled' : `${formatQty(remaining, 3)} ${unit} available`}</span>
+              <span>
+                {`${formatQty(remaining, 3)} ${unit} available`}
+                {leftAfter !== null && leftAfter >= 0 && ` · ${formatQty(leftAfter, 3)} left after this`}
+                {leftAfter !== null && leftAfter < 0 && allowNegativeStock && ` · ${formatQty(-leftAfter, 3)} minus (allowed)`}
+              </span>
             </div>
           </div>
 

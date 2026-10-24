@@ -7,7 +7,8 @@ import { HeldOrder, PosNewCustomerData, LastCompletedSale } from './PosTypes';
 import { formatQty, formatCurrency, cleanQty } from '../../lib/formatters';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { stepQuickQuantity, stepWholeQuantity } from '../../lib/posQuickEntry';
-import { sellLineCaption, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { sellLineCaption, sellUnitContains } from '../../lib/sellUnits';
+import { optionStockText, type PosSellOption } from './posStock';
 import { cn } from '../../lib/cn';
 import { Button, EmptyState, Field, IconButton, Input, Kbd, Label, Modal, Money, SegmentedControl, confirmAction, controlClass } from '../ui';
 import { printReceipt } from './printReceipt';
@@ -340,6 +341,9 @@ interface PosEditItemModalProps {
   editVariantId: string;
   onSellUnitChange: (variantId: string) => void;
   items: any[];
+  /** Units this product sells now, with stock after the rest of the cart (this line left out). */
+  sellOptions: PosSellOption[];
+  allowNegativeStock: boolean;
   onRemove: (item: any) => void;
   handleSaveEditItem: () => void;
 }
@@ -356,6 +360,8 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
   editVariantId,
   onSellUnitChange,
   items,
+  sellOptions,
+  allowNegativeStock,
   onRemove,
   handleSaveEditItem,
 }) => {
@@ -365,7 +371,17 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
   const variants = (productDef?.variants || []).filter((v: any) => v.isActive !== false);
   const baseUnit = productDef?.unit || editingCartItem.baseUnit || editingCartItem.unit || 'Unit';
   const selectedVariant = editVariantId !== 'base' ? variants.find((v: any) => v.id === editVariantId) : null;
+  // The line's own pack was hidden after it was added: say so instead of quietly showing it as loose.
+  const hiddenUnit = editVariantId !== 'base' && !selectedVariant
+    ? (productDef?.variants || []).find((v: any) => v.id === editVariantId)
+    : null;
   const looseEdit = !selectedVariant;
+  const selectedOption = hiddenUnit ? undefined : sellOptions.find(o => o.id === (selectedVariant ? selectedVariant.id : 'base'));
+  const typedQty = parseFloat(editQty) || 0;
+  // Stock left in the selected unit's pile once this line (at the typed quantity) is on the bill.
+  const leftAfter = selectedOption
+    ? (selectedOption.kind === 'packed' ? selectedOption.pileLeft - typedQty : (selectedOption.pileLeft - typedQty * selectedOption.contains) / selectedOption.contains)
+    : null;
   const editContains = selectedVariant ? sellUnitContains(selectedVariant) : 1;
   // Labels follow the unit picked in this dialog, not the line's unit before the change.
   const selectedUnitName = looseEdit ? baseUnit : (selectedVariant.name || 'Pack');
@@ -384,21 +400,27 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
     handleEditQtyChange(cleanQty(next).toString());
   };
   const close = () => setEditingCartItem(null);
-  const unitOption = (id: string, title: string, price: number) => {
-    const selected = editVariantId === id;
+  const unitOption = (option: PosSellOption) => {
+    const selected = editVariantId === option.id;
+    const title = option.kind === 'loose' ? `1 ${baseUnit}` : `${option.name} (${formatQty(option.contains, 3)} ${baseUnit})`;
+    const empty = option.available <= 0;
     return (
       <button
-        key={id}
+        key={option.id}
         type="button"
         aria-pressed={selected}
-        onClick={() => onSellUnitChange(id)}
+        aria-label={`${title}, ${formatCurrency(option.price)}, ${optionStockText(option, baseUnit)}`}
+        onClick={() => onSellUnitChange(option.id)}
         className={cn(
           'flex min-h-12 cursor-pointer flex-col justify-center rounded-control border px-3 py-2 text-left transition-colors duration-150',
           selected ? 'border-brand-accent bg-brand-soft ring-1 ring-inset ring-brand-accent' : 'border-line bg-surface hover:border-line-strong hover:bg-surface-2',
         )}
       >
         <span className="truncate text-[13px] font-bold text-fg">{title}</span>
-        <Money amount={price} className={cn('text-xs font-semibold', selected ? 'text-brand-fg' : 'text-fg-subtle')} />
+        <Money amount={option.price} className={cn('text-xs font-semibold', selected ? 'text-brand-fg' : 'text-fg-subtle')} />
+        <span className={cn('text-[11px] font-semibold tabular-nums', empty ? (allowNegativeStock ? 'text-warning-fg' : 'text-danger-fg') : 'text-fg-subtle')}>
+          {optionStockText(option, baseUnit)}
+        </span>
       </button>
     );
   };
@@ -419,18 +441,19 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
       }
     >
       <div className="space-y-4">
-        {variants.length > 0 && (
+        {hiddenUnit && (
+          <p role="status" className="rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
+            {hiddenUnit.name || 'Ye pack'} ab hidden hai, is liye bik nahi sakta. Neeche se doosri unit chunein ya line hata dein.
+          </p>
+        )}
+        {(variants.length > 0 || hiddenUnit) && sellOptions.length > 0 && (
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <Label className="mb-0">Unit / packaging</Label>
               <span className="text-[11px] text-fg-subtle">Abhi: {editingCartItem.unit}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {productDef?.allow_loose_sale !== false && unitOption('base', `1 ${baseUnit}`, productDef?.selling_price || 0)}
-              {variants.map((v: any) => {
-                const contains = sellUnitContains(v);
-                return unitOption(v.id, `${v.name} (${formatQty(contains, 3)} ${baseUnit})`, sellUnitPrice(productDef?.selling_price || 0, contains, v.selling_price));
-              })}
+              {sellOptions.map(unitOption)}
             </div>
           </div>
         )}
@@ -464,6 +487,13 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
             />
             <IconButton variant="secondary" aria-label="Increase edited quantity" icon={<Plus />} onClick={() => step(1)} />
           </div>
+          {leftAfter !== null && (
+            <p className={cn('mt-1.5 text-[11px] font-semibold tabular-nums', leftAfter < -0.0005 ? (allowNegativeStock ? 'text-warning-fg' : 'text-danger-fg') : 'text-fg-subtle')}>
+              {leftAfter < -0.0005
+                ? `${formatQty(-leftAfter, 3)} ${selectedUnitName} stock se zyada${allowNegativeStock ? ' (minus stock allowed)' : ''}`
+                : `Is bill ke baad ${formatQty(leftAfter, 3)} ${selectedUnitName} baqi`}
+            </p>
+          )}
         </div>
 
         <div>
