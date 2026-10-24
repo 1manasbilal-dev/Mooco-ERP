@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { logBaseDelta, logStockDelta, pileBreakdown, readStock, sellableLabel } from '../stockRules';
+import { logBaseDelta, logStockDelta, pileBreakdown, readStock, sellableLabel, stockCountLines, stockCountMoves } from '../stockRules';
 
 const dahi = {
   name: 'Dahi',
@@ -36,6 +36,25 @@ describe('readStock', () => {
     const packOnly = { ...dahi, allow_loose_sale: false, variants: dahi.variants.slice(0, 2).map(v => ({ ...v, isActive: true })) };
     expect(sellableLabel(readStock(packOnly, 0, { v_half: 8 }))).toBe('8 500 g tub');
     expect(sellableLabel(readStock(packOnly, 0, { v_half: 8, v_kg: 2 }))).toBe('6 kg');
+  });
+});
+
+describe('alerts and stock counts', () => {
+  it('raises alerts only for active products', () => {
+    expect(readStock(dahi, 0, {})).toMatchObject({ status: 'out', alert: true, isActive: true });
+    expect(readStock({ ...dahi, is_active: false }, 0, {})).toMatchObject({ status: 'out', alert: false, isActive: false });
+    expect(readStock({ ...dahi, isActive: false }, 20, {}).alert).toBe(false);
+    expect(readStock(dahi, 20, {}).alert).toBe(false);
+  });
+
+  it('moves only the piles that were counted, ignores unknown ids and clears stray counts', () => {
+    const r = readStock(dahi, 4, { v_half: 6, v_kg: 2, v_dozen: 3 });
+    expect(stockCountLines(r).map(l => [l.id, l.kind, l.current])).toEqual([
+      ['loose', 'loose', 4], ['v_half', 'packed', 6], ['v_kg', 'packed', 2], ['v_dozen', 'stray', 3],
+    ]);
+    expect(stockCountMoves(r, { packs: { v_kg: 0, nope: 5 } })).toEqual({ looseDelta: 0, packDeltas: { v_kg: -2 } });
+    expect(stockCountMoves(r, { loose: 4.5, packs: { v_half: 6, v_dozen: 7 } })).toEqual({ looseDelta: 0.5, packDeltas: { v_dozen: -3 } });
+    expect(stockCountMoves(r, { loose: null })).toEqual({ looseDelta: 0, packDeltas: {} });
   });
 });
 
