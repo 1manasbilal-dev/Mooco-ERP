@@ -7,6 +7,7 @@ import { formatQty } from '../../lib/formatters';
 import { Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl } from '../ui';
 import { Avatar, varietyDot } from './ProcurementUI';
 import { dayOf, pkTime, settlementOf, shortDay } from './procurementData';
+import { purchaseLinePile, purchasePileText, purchaseQtyText, returnableQty, returnedQty } from './purchaseStock';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -18,10 +19,12 @@ const PurchaseLogDrawer: React.FC<{
   mode: 'milk' | 'supplies';
   entries: any[];
   suppliersById: Map<string, any>;
+  /** Supplies: the catalog, to show which pile (loose or a pack) each line went to. */
+  itemsById?: Map<string, any>;
   today: string;
   onClose: () => void;
   onReturn: (entry: any) => void;
-}> = ({ mode, entries, suppliersById, today, onClose, onReturn }) => {
+}> = ({ mode, entries, suppliersById, itemsById, today, onClose, onReturn }) => {
   const isMilk = mode === 'milk';
   const [scope, setScope] = useState<'today' | 'all'>('today');
   const [query, setQuery] = useState('');
@@ -134,7 +137,7 @@ const PurchaseLogDrawer: React.FC<{
                         {day === today ? 'Today' : shortDay(day)}
                       </p>
                     )}
-                    <LogRow entry={entry} supplierName={suppliersById.get(entry.supplier_id)?.name} isMilk={isMilk} onReturn={onReturn} />
+                    <LogRow entry={entry} supplierName={suppliersById.get(entry.supplier_id)?.name} item={isMilk ? undefined : itemsById?.get(entry.item_id)} isMilk={isMilk} onReturn={onReturn} />
                   </React.Fragment>
                 );
               })}
@@ -148,12 +151,17 @@ const PurchaseLogDrawer: React.FC<{
   );
 };
 
-const LogRow = memo(function LogRow({ entry, supplierName, isMilk, onReturn }: { entry: any; supplierName?: string; isMilk: boolean; onReturn: (entry: any) => void }) {
+const LogRow = memo(function LogRow({ entry, supplierName, item, isMilk, onReturn }: { entry: any; supplierName?: string; item?: any; isMilk: boolean; onReturn: (entry: any) => void }) {
   const name = supplierName || entry.supplier_name || 'Spot Cash Purchase';
   const isReturned = entry.status === 'Returned';
   const { amount, paid, due } = settlementOf(entry);
   const mode = entry.payment_mode || entry.details?.payment_mode;
   const time = pkTime(entry.date);
+  // Supplies: the line in its own unit and the pile it went to ("Loose +100 kg", "500 g pouch packs +10").
+  const pile = isMilk ? null : purchaseLinePile(entry, item);
+  const qty = Number(entry.quantity) || 0;
+  const returned = isMilk ? 0 : returnedQty(entry);
+  const canReturn = isMilk ? !isReturned : returnableQty(entry) > 0;
   return (
     <div className={cn('mb-2 rounded-control border p-3 text-xs transition-colors', isReturned ? 'border-danger/25 bg-danger-soft/40 opacity-75' : 'border-line bg-surface hover:border-line-strong')}>
       <div className="flex items-start gap-2.5">
@@ -173,15 +181,21 @@ const LogRow = memo(function LogRow({ entry, supplierName, isMilk, onReturn }: {
                 {formatQty(entry.quantity)} L · {entry.milk_type} · {entry.shift}{time ? ` · ${time}` : ''}
               </>
             ) : (
-              <>{entry.item_name} · {formatQty(entry.quantity)} {entry.unit}{time ? ` · ${time}` : ''}</>
+              <span className="min-w-0 truncate">{entry.item_name} · <b className="font-semibold tabular-nums text-fg">{purchaseQtyText(qty, entry.unit, pile || { kind: 'loose' })}</b>{time ? ` · ${time}` : ''}</span>
             )}
           </p>
+          {pile && (
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-fg-subtle">
+              <Badge tone={pile.kind === 'pack' ? 'info' : 'success'} className="h-5 px-1.5 text-[10px]">{purchasePileText(qty, pile)}</Badge>
+              {returned > 0 && <span className="font-semibold">{purchaseQtyText(returned, entry.unit, pile)} wapas</span>}
+            </p>
+          )}
           <div className="mt-2 flex items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
               {paid > 0 && <Badge tone="success">Paid <Money amount={paid} />{mode ? ` · ${mode}` : ''}</Badge>}
               {due > 0.5 && amount > 0 && <Badge tone="danger">Khata <Money amount={due} /></Badge>}
             </div>
-            {!isReturned && (
+            {canReturn && (
               <Button variant="secondary" size="sm" leftIcon={<RotateCcw />} onClick={() => onReturn(entry)} title="Return to supplier">
                 Return
               </Button>
