@@ -20,9 +20,10 @@ npm-debug.log*
 supabase/.temp/
 supabase/.branches/
 
-# Local tooling (.claude/settings.json is shared: cloud sessions read its hooks)
+# Local tooling (.claude/settings.json and .claude/skills/ are shared with cloud sessions)
 .claude/*
 !.claude/settings.json
+!.claude/skills/
 .cursor/
 .qa-customer-orders/
 screenshots/

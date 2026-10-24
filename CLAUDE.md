@@ -13,3 +13,4 @@
 ## Talking to the owner
 
 - The owner reads Roman Urdu. Ask questions in short, simple Roman Urdu.
+- Write the closing message of every turn, and every answer to the owner's questions, with the `aasan-jawab` skill (`.claude/skills/aasan-jawab/`).
