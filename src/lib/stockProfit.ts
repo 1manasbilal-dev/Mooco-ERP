@@ -32,6 +32,11 @@ export interface StockProfitReport {
   validRange: boolean;
 }
 import { cleanNumber } from './formatters';
+import { saleLineStock, sellUnitContains, type SaleLineCatalog } from './sellUnits';
+import { logBaseDelta, logStockDelta } from './stockRules';
+import { convertQuantity } from './unitConversion';
+
+type LogVariant = { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean };
 
 const profitNumber = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0;
 const n = profitNumber;
@@ -104,53 +109,45 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
   const findItem = (id?: string, name?: string) => itemsById.get(id) || itemsByName.get(lower(name));
   const milkItem = (type: string) => items.find(item => lower(item.name).includes(lower(type)) && lower(item.name).includes('milk'));
   const itemBucket = (item: ProfitRecord, variantId?: string) => {
-    if (variantId && variantId !== 'loose') {
+    if (variantId && variantId !== 'loose' && variantId !== 'base') {
       const variant = records(item.variants).find(v => v.id === variantId);
       if (!variant) issue('missing_variant', 'Pack size is missing; its cost requires review.', `${item.name} / ${variantId}`);
-      return addBucket(`item:${item.id}:${variantId}`, `${item.name} — ${variant?.name || variantId}`, 'Packed stock', 'packs', n(item.variant_stocks?.[variantId]), n(item.cost_price) * n(variant?.quantity_in_base_unit));
+      // A pack pile is counted in packs, so its cost rate is per pack: cost per base unit × pack size.
+      return addBucket(`item:${item.id}:${variantId}`, `${item.name} — ${variant?.name || variantId}`, 'Packed stock', 'packs', n(item.variant_stocks?.[variantId]), n(item.cost_price) * sellUnitContains(variant));
     }
     return addBucket(`item:${item.id}:loose`, item.name, 'Counter / warehouse', item.unit || 'units', n(item.stock), n(item.cost_price));
   };
-  const isBaseDeductedLine = (item: ProfitRecord | undefined, line: ProfitRecord) => {
-    const vId = line.variantId || line.variant_id;
-    if (!vId || vId === 'loose' || vId === 'base' || line.isLoose) return true;
-    // The bill's own snapshot wins over today's catalog; an explicit false means a packed line.
-    const flag = line.deductFromBase ?? line.deduct_from_base;
-    if (flag === true) return true;
-    if (flag === false) return false;
-    const variant = item ? records(item.variants).find(v => v.id === vId) : undefined;
-    return Boolean(variant?.deduct_from_base);
-  };
-  const lineBaseFactor = (item: ProfitRecord | undefined, line: ProfitRecord) => {
-    if (n(line.stockDeduction) > 0) return n(line.stockDeduction);
-    const vId = line.variantId || line.variant_id;
-    const variant = item && vId ? records(item.variants).find(v => v.id === vId) : undefined;
-    return n(variant?.quantity_in_base_unit) > 0 ? n(variant?.quantity_in_base_unit) : 1;
-  };
-  const lineStockQty = (line: ProfitRecord) => {
+  const isMultiUnit = (item: ProfitRecord, variantId: string) => records(item.variants).some(v => v.id === variantId && v.deduct_from_base === true);
+  // One rule for every bill line (docs/stock-model.md): the bill's snapshot wins, then today's catalog.
+  const lineStock = (line: ProfitRecord) => {
     const item = findItem(line.itemId || line.item_id, line.name || line.item_name);
-    const vId = line.variantId || line.variant_id;
-    if (isBaseDeductedLine(item, line) && vId && vId !== 'loose' && vId !== 'base' && !line.isLoose) {
-      return qty(n(line.qty) * lineBaseFactor(item, line));
-    }
-    return n(line.qty);
+    return { item, stock: saleLineStock(line, item as SaleLineCatalog) };
   };
+  const lineStockQty = (line: ProfitRecord) => lineStock(line).stock.stockQty;
   const lineBucket = (line: ProfitRecord) => {
-    const item = findItem(line.itemId || line.item_id, line.name || line.item_name);
+    const { item, stock } = lineStock(line);
     if (!item) {
       issue('missing_item', 'A transaction refers to a product missing from the item register.', line.name || line.item_name || line.itemId);
       return addBucket(`missing:${line.itemId || line.name}`, line.name || 'Missing product', 'Unmatched stock', line.unit || 'units');
     }
-    if (isBaseDeductedLine(item, line)) {
-      return itemBucket(item);
+    return stock.fromBase ? itemBucket(item) : itemBucket(item, stock.variantId);
+  };
+  /** Litres (milk pool, batches) in a milk item's stock unit: ×1000 for an ml item. A non-volume item can't take litres. */
+  const litresIn = (item: ProfitRecord, liters: number) => {
+    const converted = convertQuantity(liters, 'L', item.unit || 'L');
+    if (converted === null) {
+      issue('milk_unit', 'Milk in litres moved into a product that is not stocked in L or ml; its quantity is taken as is.', item.name);
+      return liters;
     }
-    return itemBucket(item, line.variantId || line.variant_id);
+    return converted;
   };
   items.forEach(item => {
     itemBucket(item);
     Object.keys(item.variant_stocks || {}).forEach(id => {
-      const variant = records(item.variants).find(v => v.id === id);
-      if (variant?.deduct_from_base && n(item.variant_stocks?.[id]) === 0) return;
+      // A count on a dozen/tray is a stray number, not stock: it gets no bucket and no value.
+      if (isMultiUnit(item, id)) return;
+      // A deleted pack that holds nothing has no history worth a row.
+      if (!records(item.variants).some(v => v.id === id) && n(item.variant_stocks?.[id]) === 0) return;
       itemBucket(item, id);
     });
   });
@@ -173,9 +170,12 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
   purchaseDocuments.forEach(p => {
     if (lower(p.status) === 'cancelled') return;
     // A ready-made pack bought as packs was stocked into that pack's own pile, counted in packs.
-    const packId = !p.isMilk && p.variant_id ? String(p.variant_id) : '';
+    // Saved as `stocked_as: 'packs'` since that field exists; older rows only name the variant, and
+    // only a ready-made pack (never a dozen/tray) holds its own count.
+    const packId = !p.isMilk && p.variant_id && lower(p.stocked_as) !== 'loose' ? String(p.variant_id) : '';
     const packItem = packId ? findItem(p.item_id, p.item_name) : undefined;
-    const intoPack = Boolean(packItem && records(packItem.variants).some(v => v.id === packId));
+    const packVariant = packItem ? records(packItem.variants).find(v => v.id === packId) : undefined;
+    const intoPack = Boolean(packVariant && (lower(p.stocked_as) === 'packs' || packVariant.deduct_from_base !== true));
     const id = p.isMilk ? rawBucket(p) : intoPack ? itemBucket(packItem!, packId) : lineBucket({ itemId: p.item_id, name: p.item_name });
     const conv = intoPack ? 1 : (!p.isMilk && n(p.conversion_factor) > 0 ? n(p.conversion_factor) : 1);
     const purchaseUnitRate = n(p.rate || p.rate_per_liter) || (n(p.quantity) > 0 ? n(p.total_amount) / n(p.quantity) : 0);
@@ -209,7 +209,8 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     const purchase = purchasesById.get(allocation.purchase_id);
     return purchase ? rawBucket(purchase) : addBucket(`raw:${allocation.purchase_id || allocation.id}`, `${allocation.milk_type || 'Raw'} milk`, 'Unallocated milk', 'L', n(allocation.remaining_quantity ?? (n(allocation.original_quantity) - n(allocation.allocated_quantity))), n(allocation.average_rate));
   };
-  const transfer = (id: string, date: string, from: string, to: string, quantity: number, description: string, order = 20) => addEvent({ id, date, order, description, kind: 'Transfer', changes: [{ id: from, quantity: -quantity }, { id: to, quantity }], source: from, destinations: [{ id: to, quantity, weight: 1 }] });
+  // `toQuantity` is the same stock in the destination's unit (litres out of the pool, ml into an ml-stocked milk item).
+  const transfer = (id: string, date: string, from: string, to: string, quantity: number, description: string, order = 20, toQuantity = quantity) => addEvent({ id, date, order, description, kind: 'Transfer', changes: [{ id: from, quantity: -quantity }, { id: to, quantity: toQuantity }], source: from, destinations: [{ id: to, quantity: toQuantity, weight: 1 }] });
   // Separate delivery stock prevents an allocation being counted as a sale.
   const supplyBucket = (allocation: ProfitRecord) => {
     // Only the first call creates the bucket; later calls would rescan every delivery for nothing.
@@ -227,16 +228,24 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
       const dest = lower(h.destination);
       if (dest === 'production') return; // Batch inputs below own this transfer.
       let to: string;
+      let toQuantity = n(h.quantity);
       if (dest === 'home delivery') to = supplyBucket(a);
       else if (dest === 'retail counter') {
-        const log = logs.find(l => lower(l.reason) === 'allocation' && n(l.difference) > 0 && String(l.notes || '').includes(`Purchase #${a.purchase_id}`) && profitDay(l.date) === profitDay(h.allocated_at) && Math.abs(n(l.difference) - n(h.quantity)) < EPS && !usedLogs.has(l.id));
+        // The log is in the item's unit; older code wrote litres even for an ml item, so accept either.
+        const matchesQty = (l: ProfitRecord) => {
+          const logItem = findItem(l.item_id, l.item_name);
+          return Math.abs(n(l.difference) - n(h.quantity)) < EPS || (logItem ? Math.abs(n(l.difference) - litresIn(logItem, n(h.quantity))) < EPS : false);
+        };
+        const log = logs.find(l => lower(l.reason) === 'allocation' && n(l.difference) > 0 && String(l.notes || '').includes(`Purchase #${a.purchase_id}`) && profitDay(l.date) === profitDay(h.allocated_at) && !usedLogs.has(l.id) && matchesQty(l));
         const item = findItem(log?.item_id, log?.item_name) || milkItem(a.milk_type);
         if (!item) { issue('allocation_item', 'Retail milk allocation has no matching milk product.', a.milk_type); return; }
         to = itemBucket(item);
+        // What the stock log says moved is what the counter got; without one, the litres in the item's unit.
+        toQuantity = log ? n(log.difference) : litresIn(item, n(h.quantity));
         if (log) usedLogs.add(log.id);
       } else { issue('allocation_destination', 'An allocation has an unknown destination.', a.milk_type); return; }
       usedHistory.add(historyId);
-      transfer(`allocation:${historyId}`, h.allocated_at || a.date, raw, to, n(h.quantity), 'Milk allocation');
+      transfer(`allocation:${historyId}`, h.allocated_at || a.date, raw, to, n(h.quantity), 'Milk allocation', 20, toQuantity);
     });
     if (!history.length && n(a.allocated_quantity) > EPS && !a.returned_from_batch_id) {
       const retailLogs = logs.filter(l => !usedLogs.has(l.id) && lower(l.reason) === 'allocation' && n(l.difference) > 0 && (String(l.id).includes(a.id) || String(l.notes || '').includes(`Purchase #${a.purchase_id}`)));
@@ -246,7 +255,9 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
           const item = findItem(log.item_id, log.item_name) || milkItem(a.milk_type);
           if (!item) { issue('allocation_item', 'Retail milk allocation has no matching product.', a.milk_type); return; }
           usedLogs.add(log.id);
-          transfer(`allocation-log:${log.id}`, log.date, raw, itemBucket(item), n(log.difference), 'Milk allocation recovered from stock log');
+          // The log is in the item's unit; the pool is in litres.
+          const liters = convertQuantity(n(log.difference), item.unit || 'L', 'L') ?? n(log.difference);
+          transfer(`allocation-log:${log.id}`, log.date, raw, itemBucket(item), liters, 'Milk allocation recovered from stock log', 20, n(log.difference));
         });
         if (Math.abs(loggedQty - n(a.allocated_quantity)) > 0.001) issue('allocation_history', 'Stock allocation logs do not match the allocated milk quantity.', `${a.milk_type} / ${a.id}`);
         return;
@@ -255,7 +266,7 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
       if (lower(a.destination) === 'home delivery') transfer(`allocation:${a.id}`, a.date, raw, supplyBucket(a), n(a.allocated_quantity), 'Legacy delivery allocation');
       if (lower(a.destination) === 'retail counter') {
         const item = milkItem(a.milk_type);
-        if (item) transfer(`allocation:${a.id}`, a.date, raw, itemBucket(item), n(a.allocated_quantity), 'Legacy retail allocation');
+        if (item) transfer(`allocation:${a.id}`, a.date, raw, itemBucket(item), n(a.allocated_quantity), 'Legacy retail allocation', 20, litresIn(item, n(a.allocated_quantity)));
       }
     }
   });
@@ -269,11 +280,14 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     breakdown.forEach((part, index) => {
       const allocation = allocations.find(a => a.id === part.allocationId || a.purchase_id === part.allocationId);
       const item = findItem(String(part.allocationId || '').replace(/^inv_/, '')) || milkItem(part.milkType);
-      const from = part.source === 'retail' && item ? itemBucket(item) : allocation ? rawForAllocation(allocation) : '';
+      const fromCounter = part.source === 'retail' && item;
+      const from = fromCounter ? itemBucket(item) : allocation ? rawForAllocation(allocation) : '';
       if (!from) { issue('batch_source', 'A production milk source cannot be linked to its original stock.', batch.batch_number); return; }
-      transfer(`batch-in:${batch.id}:${index}`, batch.start_date, from, wip, n(part.quantity), 'Milk into production', 25);
+      // Batches are in litres; counter milk leaves in the item's own unit (ml for an ml item).
+      const outQty = fromCounter ? litresIn(item, n(part.quantity)) : n(part.quantity);
+      transfer(`batch-in:${batch.id}:${index}`, batch.start_date, from, wip, outQty, 'Milk into production', 25, n(part.quantity));
       if (part.source === 'retail') {
-        const log = logs.find(l => !usedLogs.has(l.id) && l.item_id === item?.id && lower(l.reason) === 'allocation' && n(l.difference) < 0 && Math.abs(n(l.difference) + n(part.quantity)) < EPS && profitDay(l.date) === profitDay(batch.start_date));
+        const log = logs.find(l => !usedLogs.has(l.id) && l.item_id === item?.id && lower(l.reason) === 'allocation' && n(l.difference) < 0 && (Math.abs(n(l.difference) + outQty) < EPS || Math.abs(n(l.difference) + n(part.quantity)) < EPS) && profitDay(l.date) === profitDay(batch.start_date));
         if (log) usedLogs.add(log.id);
       } else if (allocation) {
         const history = records(allocation.allocation_history || allocation.details?.allocation_history);
@@ -329,17 +343,23 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
         if (!matItem) return;
         const matLog = logs.find(l => l.id === `log_prod_mat_${batch.id}_${mat.item_id}` || (!usedLogs.has(l.id) && l.item_id === matItem.id && lower(l.reason) === 'production usage' && Math.abs(n(l.difference) + matQty) < EPS && profitDay(l.date) === profitDay(completion)));
         if (matLog) usedLogs.add(matLog.id);
-        const matBucket = itemBucket(matItem);
-        addEvent({
-          id: `batch-mat:${batch.id}:${matIdx}`,
+        // A material taken partly from ready-made packs (loose first, then whole packs, the rest of the
+        // last pack back to loose) leaves each pile as its usage log says; otherwise it all came from loose.
+        const matDelta = matLog ? logStockDelta(matLog) : undefined;
+        const packMoves = matDelta ? Object.entries(matDelta.packDeltas).filter(([id]) => !isMultiUnit(matItem, id)) : [];
+        const pileMoves = packMoves.length
+          ? [...(matDelta!.looseDelta ? [{ id: itemBucket(matItem), quantity: matDelta!.looseDelta }] : []), ...packMoves.map(([id, delta]) => ({ id: itemBucket(matItem, id), quantity: delta }))]
+          : [{ id: itemBucket(matItem), quantity: -matQty }];
+        pileMoves.forEach((move, pileIdx) => addEvent({
+          id: `batch-mat:${batch.id}:${matIdx}${pileIdx ? `:${pileIdx}` : ''}`,
           date: completion,
           order: 28,
           kind: 'Transfer',
           description: `Production material: ${matItem.name}`,
-          changes: [{ id: matBucket, quantity: -matQty }, { id: wip, quantity: 0 }],
-          source: matBucket,
+          changes: [{ id: move.id, quantity: move.quantity }, { id: wip, quantity: 0 }],
+          source: move.id,
           destinations: [{ id: wip, quantity: 0, weight: 1 }]
-        });
+        }));
       });
     }
     const extra = n(recipeSnapshot?.external_conversion_cost);
@@ -369,12 +389,32 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     const discountFactor = beforeDiscount > 0 ? n(sale.total) / beforeDiscount : 0;
     const lineRefundTotal = refundLines.reduce((sum, line) => sum + n(line.qty) * n(line.price) * discountFactor, 0);
     const refundTotal = sale.refund_amount != null ? n(sale.refund_amount) : lineRefundTotal;
+    // A return goes back to the pile its bill line left, sized as sold: the sold line's snapshot fills
+    // what the return entry did not save (same rule as the sales-return screen).
+    const soldLines = records(sale.items);
+    const lineId = (line: ProfitRecord) => line.itemId || line.item_id;
+    const lineVariant = (line: ProfitRecord) => line.variantId || line.variant_id || undefined;
+    const soldLineOf = (line: ProfitRecord): ProfitRecord => {
+      const byIndex = Number.isInteger(line.lineIndex) ? soldLines[line.lineIndex] : undefined;
+      if (byIndex && lineId(byIndex) === lineId(line)) return byIndex;
+      return soldLines.find(l => lineId(l) === lineId(line) && lineVariant(l) === lineVariant(line)) || {};
+    };
+    const asSold = (line: ProfitRecord): ProfitRecord => {
+      const sold = soldLineOf(line);
+      return {
+        ...line,
+        isLoose: line.isLoose ?? sold.isLoose,
+        stockDeduction: line.stockDeduction ?? sold.stockDeduction,
+        deductFromBase: line.deductFromBase ?? line.deduct_from_base ?? sold.deductFromBase ?? sold.deduct_from_base,
+      };
+    };
     returns.forEach((line, index) => {
       const date = line.returnDate || sale.returned_at;
       const isReplacement = line.action === 'replace';
       const restock = line.restock !== 'scrap_spoilage';
       const amount = !isReplacement && lineRefundTotal > 0 ? -refundTotal * (n(line.qty) * n(line.price) * discountFactor / lineRefundTotal) : 0;
-      addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(line), quantity: lineStockQty(line), returnOf: `sale:${sale.id}` }] : [] });
+      const stockLine = asSold(line);
+      addEvent({ id: `sale-return:${sale.id}:${index}`, date, order: 60, description: `Return: ${sale.bill_number || sale.id}`, kind: isReplacement ? 'Replacement' : 'Sales return', amount, changes: isReplacement ? [] : restock ? [{ id: lineBucket(stockLine), quantity: lineStockQty(stockLine), returnOf: `sale:${sale.id}` }] : [] });
     });
   });
   // A delivery points at its allocation by id or by purchase id; the first allocation in list order wins.
@@ -416,32 +456,38 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
     }
     if (['purchase', 'production', 'sales return', 'supply return'].includes(reason)) return; // Document owns movement.
     const item = findItem(log.item_id, log.item_name) || items.find(i => String(log.item_name || '').startsWith(i.name + ' ('));
-    if (!item) { if (Math.abs(n(log.difference)) > EPS) issue('unknown_log', 'A stock adjustment has no matching product.', log.item_name); return; }
-    const variant = records(item.variants).find(v => log.item_name === `${item.name} (${v.name})`);
-    const logVariantId = log.details?.variant_id || log.variant_id;
+    // Every log shape is read one way (stockRules.logStockDelta). Very old rows kept the pack move in
+    // top-level columns instead of details; they are read as the same `variant_id` + `variant_delta` shape.
+    const legacyPack = !log.details?.variant_id && !log.details?.variant_deltas && log.variant_id
+      ? { variant_id: log.variant_id, variant_delta: log.variant_delta ?? log.variant_qty, ...(log.loose_delta != null ? { loose_delta: log.loose_delta } : {}) }
+      : {};
+    const read = logStockDelta({ ...log, details: { ...legacyPack, ...(log.details || {}) } });
+    const moves = Math.abs(read.looseDelta) > EPS || Object.keys(read.packDeltas).length > 0;
+    if (!item) { if (moves) issue('unknown_log', 'A stock adjustment has no matching product.', log.item_name); return; }
+    if (read.unrecordedPacks) issue('variant_log', 'A stock count changed pack stock without naming the pack; only its loose part is in this report.', item.name);
+    const named = records(item.variants).find(v => log.item_name === `${item.name} (${v.name})`);
+    const structured = Object.keys(read.packDeltas).length > 0 || log.details?.loose_delta != null;
+    const namedPack = Boolean(named && !structured && named.deduct_from_base !== true);
     const changes: { id: string; quantity: number }[] = [];
-    if (logVariantId && logVariantId !== 'loose') {
-      // Variant logs carry the pack-count change and any loose change separately.
-      const variantDelta = n(log.details?.variant_delta ?? log.variant_delta ?? log.variant_qty);
-      const looseDelta = n(log.details?.loose_delta ?? log.loose_delta);
-      if (variantDelta) changes.push({ id: itemBucket(item, logVariantId), quantity: variantDelta });
-      if (looseDelta) changes.push({ id: itemBucket(item), quantity: looseDelta });
-    } else if (variant) {
-      changes.push({ id: itemBucket(item, variant.id), quantity: n(log.difference) });
-    } else if (log.details?.loose_delta === undefined && /variant/i.test(String(log.notes || ''))) {
-      // Old variant audits stored a pack-count difference without naming the pack; never post it to loose stock.
-      if (Math.abs(n(log.difference)) > EPS) issue('variant_log', 'A pack stock adjustment does not name its pack size; it was left out of loose stock.', item.name);
-      return;
+    if (namedPack) {
+      // Old rows named the pack in item_name ("Dahi (500 g tub)") and kept its count change in the columns.
+      if (read.looseDelta) changes.push({ id: itemBucket(item, named!.id), quantity: read.looseDelta });
     } else {
-      changes.push({ id: itemBucket(item), quantity: n(log.difference) });
+      if (read.looseDelta) changes.push({ id: itemBucket(item), quantity: read.looseDelta });
+      Object.entries(read.packDeltas).forEach(([id, quantity]) => {
+        // Clearing a stray count on a dozen/tray moves no stock (it never had a bucket).
+        if (isMultiUnit(item, id) && !buckets.has(`item:${item.id}:${id}`)) return;
+        changes.push({ id: itemBucket(item, id), quantity });
+      });
     }
-    const delta = changes.reduce((sum, change) => sum + change.quantity, 0);
+    // Gain or loss is judged in base units: 2 packs out and 0.1 kg loose in is a loss.
+    const baseDelta = namedPack ? read.looseDelta * sellUnitContains(named) : logBaseDelta(read, records(item.variants) as LogVariant[]);
     if (reason === 'allocation') {
       issue('unlinked_allocation_log', 'An allocation stock movement is not linked to its source history.', item.name);
       // Preserve unmatched movement, but prevent it being labelled verified profit.
     }
     if (!changes.length) return;
-    const loss = /spoil|wastage|consumption|theft|loss|production usage/.test(reason) || ['sale', 'pos sale'].includes(reason) || (reason === 'stock count correction' && delta < 0);
+    const loss = /spoil|wastage|consumption|theft|loss|production usage/.test(reason) || ['sale', 'pos sale'].includes(reason) || (reason === 'stock count correction' && baseDelta < 0);
     addEvent({ id: `log:${log.id}`, date: log.date, order: 50, description: `${log.reason}: ${item.name}`, kind: loss ? 'Stock loss' : 'Adjustment', changes });
   });
   source.retailClosings.map(flattenProfitRecord).forEach(closing => {
@@ -565,6 +611,8 @@ export function buildStockProfitReport(source: StockProfitSource, start: string,
 export interface PackStockValue {
   id: string; name: string; count: number; contains: number;
   costEach: number; retailEach: number; costValue: number; retailValue: number;
+  /** False for a pack hidden from sale. Its stock is still on hand and still valued. */
+  isActive: boolean;
 }
 export interface ItemStockValue {
   looseQty: number; packs: PackStockValue[]; packedBaseQty: number; totalBaseQty: number;
@@ -572,7 +620,8 @@ export interface ItemStockValue {
   costValue: number; retailValue: number; costMissing: boolean;
 }
 /**
- * One valuation rule for every screen: loose stock plus active pre-packed counts, at cost.
+ * One valuation rule for every screen, the same as `readStock` (docs/stock-model.md): loose stock
+ * plus every ready-made pack pile at cost, hidden packs included (they are physical stock).
  * Multi-unit sizes (dozen, tray) are drawn from loose stock, so their stored counts are ignored.
  * Negative quantities stay visible but are valued at zero.
  */
@@ -583,16 +632,16 @@ export function itemStockValue(
 ): ItemStockValue {
   const costRate = n(item.cost_price);
   const sellRate = n(item.selling_price);
-  const loose = n(looseQty);
+  const loose = qty(n(looseQty));
   const packs: PackStockValue[] = records(item.variants)
-    .filter(v => v && v.id && v.isActive !== false && v.deduct_from_base !== true)
+    .filter(v => v && v.id && v.deduct_from_base !== true)
     .map(v => {
-      const count = n(variantStocks?.[v.id]);
-      const contains = n(v.quantity_in_base_unit) > 0 ? n(v.quantity_in_base_unit) : 1;
+      const count = qty(n(variantStocks?.[v.id]));
+      const contains = sellUnitContains(v);
       const costEach = costRate * contains;
       const retailEach = n(v.selling_price) > 0 ? n(v.selling_price) : sellRate * contains;
       const valued = Math.max(0, count);
-      return { id: v.id, name: v.name || 'Pack', count, contains, costEach, retailEach, costValue: valued * costEach, retailValue: valued * retailEach };
+      return { id: v.id, name: v.name || 'Pack', count, contains, costEach, retailEach, costValue: valued * costEach, retailValue: valued * retailEach, isActive: v.isActive !== false };
     });
   const packedBaseQty = qty(packs.reduce((sum, p) => sum + p.count * p.contains, 0));
   const looseCostValue = Math.max(0, loose) * costRate;

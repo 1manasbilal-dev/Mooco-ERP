@@ -133,13 +133,13 @@ describe('itemStockValue', () => {
     variant_stocks: { dz: 99, p6: 2, old: 4 }
   };
 
-  it('values loose plus active packed stock, ignoring dozen views', () => {
+  it('values loose plus every packed pile, hidden packs included, ignoring dozen views', () => {
     const value = itemStockValue(eggs);
-    expect(value.packs.map(p => p.id)).toEqual(['p6']);
-    expect(value.packedBaseQty).toBe(12);
-    expect(value.totalBaseQty).toBe(22);
-    expect(value.costValue).toBe(10 * 20 + 2 * 120);
-    expect(value.retailValue).toBe(10 * 25 + 2 * 110);
+    expect(value.packs.map(p => [p.id, p.isActive])).toEqual([['p6', true], ['old', false]]);
+    expect(value.packedBaseQty).toBe(12 + 120);
+    expect(value.totalBaseQty).toBe(142);
+    expect(value.costValue).toBe(10 * 20 + 2 * 120 + 4 * 600);
+    expect(value.retailValue).toBe(10 * 25 + 2 * 110 + 4 * 750);
     expect(value.costMissing).toBe(false);
   });
 
