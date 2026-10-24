@@ -2,10 +2,10 @@ import React, { memo } from 'react';
 import { Banknote, Minus, Plus, RotateCcw, Trash2, Undo2, Wallet } from 'lucide-react';
 import type { POSBill } from '../../types';
 import { cn } from '../../lib/cn';
-import { cleanNumber, cleanQty, formatCurrency } from '../../lib/formatters';
+import { cleanNumber, cleanQty, formatCurrency, formatQty } from '../../lib/formatters';
 import { Badge, Button, Field, IconButton, Input, Modal, Money, Select } from '../ui';
 import { ChoiceCard, SummaryRow } from './SalesBits';
-import type { ReturnItemSelection } from './salesHistoryUtils';
+import { returnIsScrap, returnLinePile, type ReturnItemSelection } from './salesHistoryUtils';
 
 type AccountOption = { id: string; name: string; type: string; balance: number; isActive?: boolean };
 
@@ -44,9 +44,25 @@ export interface SaleReturnDialogProps {
 const FORM_ID = 'sale-return-form';
 const maxReturnQty = (item: ReturnItemSelection) => (item.remainingQty !== undefined ? item.remainingQty : item.soldQty);
 
-const ReturnLine = memo(function ReturnLine({ item, index, onToggle, onQtyChange }: {
+type StockMode = 'restock' | 'scrap' | 'replace';
+
+/** "Wapas: +24 pcs loose stock mein" — which pile this line moves, in the words the cashier reads. */
+function pileText(item: ReturnItemSelection, mode: StockMode): string {
+  if (mode === 'scrap') return 'Stock mein wapas nahi jayega (spoilage)';
+  const qty = item.isSelected ? item.returnQty : 0;
+  const pile = returnLinePile(item, qty);
+  // "2 × 500 g tub" for packs, "24 pcs" for loose (a dozen line counted in pieces).
+  const amount = qty <= 0 || pile.amount === null ? ''
+    : pile.kind === 'pack' ? `${formatQty(pile.amount, 3)} × ${pile.unit}` : `${formatQty(pile.amount, 3)} ${pile.unit}`.trim();
+  const where = amount && pile.kind === 'pack' ? 'pack stock' : pile.name;
+  if (mode === 'replace') return amount ? `Naya maal: ${amount} ${where} se niklega` : `Naya maal ${where} se niklega`;
+  return amount ? `Wapas: +${amount} ${where} mein` : `${where} mein wapas jayega`;
+}
+
+const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQtyChange }: {
   item: ReturnItemSelection;
   index: number;
+  mode: StockMode;
   onToggle: (index: number) => void;
   onQtyChange: (index: number, qty: number) => void;
 }) {
@@ -71,14 +87,19 @@ const ReturnLine = memo(function ReturnLine({ item, index, onToggle, onQtyChange
         <span className="min-w-0">
           <span className="block truncate text-sm font-semibold text-fg">{item.name}</span>
           <span className="block text-xs tabular-nums text-fg-subtle">
-            Sold: {cleanQty(item.soldQty)} {unit} • {formatCurrency(item.price)}/{unit}
+            Sold: {formatQty(item.soldQty, 3)} {unit} • {formatCurrency(item.price)}/{unit}
           </span>
           {exhausted ? (
             <Badge className="mt-1">Pura wapas ho chuka</Badge>
           ) : (
-            <span className={cn('block text-xs font-medium tabular-nums', returnedBefore > 0 ? 'text-warning-fg' : 'text-fg-subtle')}>
-              Baqi: {cleanQty(max)} {unit}{returnedBefore > 0 ? ` (pehle ${returnedBefore} ${unit} wapas)` : ''}
-            </span>
+            <>
+              <span className={cn('block text-xs font-medium tabular-nums', returnedBefore > 0 ? 'text-warning-fg' : 'text-fg-subtle')}>
+                Wapas ho sakta hai: {formatQty(max, 3)} {unit}{returnedBefore > 0 ? ` (pehle ${formatQty(returnedBefore, 3)} ${unit} wapas)` : ''}
+              </span>
+              <span className={cn('mt-0.5 block text-xs font-medium tabular-nums', mode === 'scrap' ? 'text-fg-faint' : 'text-brand-fg')}>
+                {pileText(item, mode)}
+              </span>
+            </>
           )}
         </span>
       </label>
@@ -141,6 +162,10 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
   const itemsValue = items.reduce((sum, item) => sum + (item.isSelected && item.returnQty > 0 ? item.returnQty * item.price : 0), 0);
   const adjustment = cleanNumber(refundAmount - itemsValue, 2);
   const isReplace = returnAction === 'replace';
+  const finalReason = returnReason === 'Other' ? customReturnReason : returnReason;
+  // Same rule processSalesReturn applies: a "spoiled / defective" reason never puts stock back.
+  const reasonForcesScrap = !isReplace && restockOption === 'restock' && returnIsScrap('restock', finalReason);
+  const stockMode: StockMode = isReplace ? 'replace' : returnIsScrap(restockOption, finalReason) ? 'scrap' : 'restock';
   const showRefundPayment = returnAction === 'refund' && sale.payment_mode !== 'Credit';
   const refundAccounts = accounts
     .filter(a => a.isActive !== false)
@@ -186,7 +211,7 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
             </div>
             <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-control bg-surface ring-1 ring-inset ring-line">
               {items.map((item, idx) => (
-                <ReturnLine key={idx} item={item} index={idx} onToggle={onToggleItem} onQtyChange={onQtyChange} />
+                <ReturnLine key={idx} item={item} index={idx} mode={stockMode} onToggle={onToggleItem} onQtyChange={onQtyChange} />
               ))}
             </ul>
           </section>
@@ -195,7 +220,7 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
             <p id={`${FORM_ID}-resolution`} className="mb-2 text-xs font-semibold text-fg-muted">Resolution Method</p>
             <div className="grid grid-cols-2 gap-2">
               <ChoiceCard selected={returnAction === 'refund'} onSelect={() => onReturnActionChange('refund')} icon={<Banknote />} title="Refund Money" />
-              <ChoiceCard selected={isReplace} onSelect={() => onReturnActionChange('replace')} icon={<RotateCcw />} title="Replace Milk" />
+              <ChoiceCard selected={isReplace} onSelect={() => onReturnActionChange('replace')} icon={<RotateCcw />} title="Replace Item" />
             </div>
           </div>
 
@@ -270,6 +295,11 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
                   title="Restock to Counter"
                 />
               </div>
+              {reasonForcesScrap && (
+                <p role="status" className="mt-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
+                  Reason "{finalReason}" kharab maal batata hai, is liye stock wapas nahi jayega (spoilage). Maal theek hai to reason badlein.
+                </p>
+              )}
             </div>
           )}
 

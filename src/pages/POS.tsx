@@ -8,7 +8,8 @@ import { cleanNumber, cleanQty, formatQty, formatCurrency } from '../lib/formatt
 import { checkoutCustomerOrder, getCustomerOrder } from '../lib/customerOrders';
 import { CustomerOrder } from '../types';
 import { stepWholeQuantity } from '../lib/posQuickEntry';
-import { cartLineContains, cartLineUsesMainStock, qtyAfterUnitSwitch, reservedBaseQty, sellUnitContains, sellUnitPrice } from '../lib/sellUnits';
+import { cartLineContains, cartLineUsesMainStock, qtyAfterUnitSwitch, sellUnitContains, sellUnitPrice } from '../lib/sellUnits';
+import { cartPileLines, pileShortages, posSellOptions, posStockView, sellQtyProblem, shortageText, type PosSellProduct } from '../components/pos/posStock';
 import { ShoppingCart, ClipboardCheck, ArrowLeft, AlertCircle, Banknote, Lock, Clock, Printer, ArrowRight, RefreshCw } from 'lucide-react';
 import { HeldOrder, AvailableProduct, PosNewCustomerData, LastCompletedSale } from '../components/pos/PosTypes';
 import { PosHeaderAnalytics } from '../components/pos/PosHeaderAnalytics';
@@ -36,11 +37,6 @@ const PosReceiptModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ defaul
 const PosNewCustomerModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosNewCustomerModal }))));
 const PosEditItemModal = lazy(lazyRetry(() => loadPosModals().then(m => ({ default: m.PosEditItemModal }))));
 const PosShiftModal = lazy(lazyRetry(() => loadShiftModal().then(m => ({ default: m.PosShiftModal }))));
-
-/** Packs of one packed variant already sitting in the cart, excluding one line. Packed twin of reservedBaseQty. */
-const reservedPackedQty = (cart: any[], productId: string, variantId: string, exceptCartItemId?: string): number => cleanQty(cart
-  .filter(line => line.id === productId && line.variantId === variantId && line.cartItemId !== exceptCartItemId && !cartLineUsesMainStock(line))
-  .reduce((sum, line) => sum + (Number(line.qty) || 0), 0));
 
 const getLineTotal = (item: any) => {
   if (item.customTotal !== undefined && item.customTotal !== null && !isNaN(item.customTotal)) {
@@ -408,6 +404,8 @@ const POS: React.FC = () => {
     prevCustomerIdRef.current = selectedCustomerId;
   }, [selectedCustomerId, paymentMode]);
 
+  // Last built card per product, so unchanged products keep their identity between catalog updates.
+  const productCache = useRef(new Map<string, { itemDef: unknown; stockItem: unknown; allowNegative: boolean; product: AvailableProduct }>());
   const allAvailableProducts: AvailableProduct[] = useMemo(() => {
     const sellableItems = (items || []).filter(i =>
       i && i.isActive &&
@@ -424,21 +422,29 @@ const POS: React.FC = () => {
       if (inv.name !== undefined && !firstByName.has(inv.name)) firstByName.set(inv.name, index);
     });
 
-    return sellableItems.map(itemDef => {
+    const allowNegative = Boolean(settings.inventory.allowNegativeStock);
+    const previous = productCache.current;
+    const next = new Map<string, { itemDef: unknown; stockItem: unknown; allowNegative: boolean; product: AvailableProduct }>();
+    const products = sellableItems.map(itemDef => {
       const byId = firstById.get(itemDef.id);
       const byName = firstByName.get(itemDef.name);
       const stockIndex = byId === undefined ? byName : byName === undefined ? byId : Math.min(byId, byName);
       const stockItem: any = stockIndex === undefined ? undefined : (inventory || [])[stockIndex];
+      // A sale changes one or two rows; every other card keeps its product object, so it does not re-render.
+      const cached = previous.get(itemDef.id);
+      if (cached && cached.itemDef === itemDef && cached.stockItem === stockItem && cached.allowNegative === allowNegative) {
+        next.set(itemDef.id, cached);
+        return cached.product;
+      }
       const vStocks = stockItem?.variant_stocks || itemDef.variant_stocks || {};
       const looseStock = stockItem ? (stockItem.quantity || 0) : (itemDef.stock || 0);
-      const totalVariantStock = (itemDef.variants || []).reduce((sum: number, v: any) => sum + (Number(vStocks[v.id]) || 0), 0);
       const isLooseAllowed = itemDef.allow_loose_sale !== false;
-      const sellsFromMainStock = (itemDef.variants || []).some((v: any) => v.isActive !== false && v.deduct_from_base === true);
-      const isAvailable = (isLooseAllowed || sellsFromMainStock)
-        ? (looseStock > 0 || totalVariantStock > 0 || settings.inventory.allowNegativeStock)
-        : (totalVariantStock > 0 || settings.inventory.allowNegativeStock);
+      const stockView = posStockView(itemDef, looseStock, vStocks);
+      // Sellable now: loose (when loose sale or a dozen/tray sells it) and active packs. Hidden packs and
+      // stray multi-unit counts never make a card tappable. "Allow negative stock" sells past zero.
+      const isAvailable = stockView.hasSellUnit && (stockView.reading.sellableBase > 0 || allowNegative);
 
-      return {
+      const product: AvailableProduct = {
         id: itemDef.id,
         name: itemDef.name,
         price: itemDef.selling_price || 0,
@@ -447,7 +453,7 @@ const POS: React.FC = () => {
         stock: looseStock,
         variants: itemDef.variants || [],
         variant_stocks: vStocks,
-        total_variant_stock: totalVariantStock,
+        stock_view: stockView,
         is_available: isAvailable,
         quick_amounts: itemDef.quick_amounts || [],
         pos_primary_mode: itemDef.pos_primary_mode || (isLooseAllowed ? 'amount' : 'qty'),
@@ -455,7 +461,11 @@ const POS: React.FC = () => {
         image_url: itemDef.image_url,
         sort_order: itemDef.sort_order !== undefined && itemDef.sort_order !== null ? Number(itemDef.sort_order) : 999
       };
-    }).sort((a, b) => {
+      next.set(itemDef.id, { itemDef, stockItem, allowNegative, product });
+      return product;
+    });
+    productCache.current = next;
+    return products.sort((a, b) => {
       const orderA = a.sort_order ?? 999;
       const orderB = b.sort_order ?? 999;
       if (orderA !== orderB) return orderA - orderB;
@@ -534,12 +544,63 @@ const POS: React.FC = () => {
     return map;
   }, [cart]);
 
-  // Live stock for a product. A cart line's own stock copy is from add time and goes stale after other sales.
-  const liveStock = (line: any, variantId?: string) => {
-    const live: any = allAvailableProducts.find(p => p.id === line.id) || (items || []).find(i => i.id === line.id);
-    const main = live?.stock ?? line.stock;
-    const packed = variantId ? (live?.variant_stocks?.[variantId] ?? line.variant_stocks?.[variantId]) : 0;
-    return { main: Number(main) || 0, packed: Number(packed) || 0 };
+  const productById = useMemo(() => new Map(allAvailableProducts.map(p => [p.id, p])), [allAvailableProducts]);
+
+  // Live stock and sell units for a product. A cart line's own copy is from add time and goes stale after other sales.
+  const liveProduct = (line: any): PosSellProduct => {
+    const live: any = productById.get(line.id) || (items || []).find(i => i.id === line.id);
+    return {
+      id: line.id,
+      unit: live?.unit || line.baseUnit || line.unit,
+      price: Number(live?.price ?? live?.selling_price ?? line.price) || 0,
+      allow_loose_sale: live ? live.allow_loose_sale : line.allow_loose_sale,
+      variants: live?.variants || line.variants || [],
+      stock: Number(live?.stock ?? line.stock) || 0,
+      variant_stocks: live?.variant_stocks || line.variant_stocks || {},
+    };
+  };
+
+  /**
+   * Why `qty` of this unit can't go on the bill (null when it can). `qty` is the whole line when
+   * `exceptCartItemId` is that line, else the amount being added on top of the cart.
+   * Hidden packs and loose sale off are refused; the "allow negative stock" setting skips the stock check.
+   */
+  const sellCheck = (line: any, variantId: string | undefined, exceptCartItemId?: string) => {
+    const product = liveProduct(line);
+    const optionId = variantId && variantId !== 'base' ? variantId : 'base';
+    const option = posSellOptions(product, cart, exceptCartItemId).find(o => o.id === optionId);
+    const name = line.name || 'Product';
+    let unitProblem: string | null = null;
+    if (!option) {
+      const variant = (product.variants || []).find(v => v.id === optionId);
+      unitProblem = optionId === 'base'
+        ? `${name}: loose sale band hai. Pack ya unit chunein.`
+        : variant
+          ? `${name}: ${variant.name || 'ye pack'} hidden hai, is liye bik nahi sakta. Unit badlein ya line hata dein.`
+          : `${name}: ye pack ab catalog mein nahi hai. Unit badlein ya line hata dein.`;
+    }
+    return { product, option, name, unitProblem };
+  };
+  const sellProblem = (line: any, variantId: string | undefined, qty: number, exceptCartItemId?: string): string | null => {
+    const { product, option, name, unitProblem } = sellCheck(line, variantId, exceptCartItemId);
+    if (!option) return unitProblem;
+    return sellQtyProblem(name, option, qty, Boolean(settings.inventory.allowNegativeStock), product.unit || 'unit');
+  };
+
+  /** Last check before saving: every line still sellable and, all lines added up per pile, enough stock. */
+  const cartStockProblem = (): string | null => {
+    for (const line of cart) {
+      const { unitProblem } = sellCheck(line, line.variantId, line.cartItemId);
+      if (unitProblem) return unitProblem;
+    }
+    if (settings.inventory.allowNegativeStock) return null;
+    const short = pileShortages(cartPileLines(cart), id => {
+      const product = liveProduct({ id });
+      return { loose: Number(product.stock) || 0, packs: product.variant_stocks };
+    });
+    if (short.length === 0) return null;
+    const lines = short.map(row => shortageText(row, (items || []).find(i => i.id === row.itemId)));
+    return `Stock kam hai — ${lines.join('; ')}. Qty kam karein ya stock theek karein.`;
   };
 
   const subtotal = useMemo(() => {
@@ -679,18 +740,9 @@ const POS: React.FC = () => {
     const finalPrice = priceOverride !== undefined ? priceOverride : product.price;
     const finalDeduction = contains;
 
-    if (!fromBase && !packedQtyIsWhole(qty)) {
-      showToast(`${variantName || 'Packs'} must be sold in whole numbers`, 'warning');
-      return false;
-    }
-    const stockNow = liveStock(product, variantId);
-    const availableStock = fromBase ? stockNow.main : stockNow.packed;
-    const requestedStock = fromBase
-      ? reservedBaseQty(cart, product.id) + (qty * finalDeduction)
-      : reservedPackedQty(cart, product.id, variantId!) + qty;
-
-    if (!settings.inventory.allowNegativeStock && requestedStock > availableStock + 0.01) {
-      showToast(`Insufficient stock for ${product.name}${variantName ? ` (${variantName})` : ''}`, 'warning');
+    const problem = sellProblem(product, variantId, qty);
+    if (problem) {
+      showToast(problem, 'warning');
       return false;
     }
 
@@ -725,14 +777,11 @@ const POS: React.FC = () => {
   });
 
   const enoughStock = (item: any, nextQty: number) => {
-    const fromBase = cartLineUsesMainStock(item);
-    const stockNow = liveStock(item, fromBase ? undefined : item.variantId);
-    const available = fromBase ? stockNow.main : stockNow.packed;
-    const requested = fromBase
-      ? reservedBaseQty(cart, item.id, item.cartItemId) + (nextQty * cartLineContains(item))
-      : reservedPackedQty(cart, item.id, item.variantId, item.cartItemId) + nextQty;
-    if (!settings.inventory.allowNegativeStock && requested > available + 0.01) {
-      showToast('Max stock reached', 'warning');
+    // Lowering a line is always allowed, even when stock has run short since it was added.
+    if (nextQty <= (Number(item.qty) || 0)) return true;
+    const problem = sellProblem(item, item.variantId, nextQty, item.cartItemId);
+    if (problem) {
+      showToast(problem, 'warning');
       return false;
     }
     return true;
@@ -923,13 +972,14 @@ const POS: React.FC = () => {
       showToast(`${newVariantName || 'Packs'} must be sold in whole numbers`, "warning");
       return;
     }
-    const stockNow = liveStock(editingCartItem, fromBase ? undefined : variant.id);
-    const availableStock = fromBase ? stockNow.main : stockNow.packed;
-    const totalDeduction = fromBase
-      ? reservedBaseQty(cart, editingCartItem.id, editingCartItem.cartItemId) + (parsedQty * newDeduction)
-      : reservedPackedQty(cart, editingCartItem.id, variant.id, editingCartItem.cartItemId) + parsedQty;
-    if (!settings.inventory.allowNegativeStock && totalDeduction > availableStock + 0.01) {
-      showToast("Insufficient stock for requested quantity", "warning");
+    // Same unit, same or lower quantity: nothing more leaves the shelf, so only the unit itself is checked.
+    const sameUnit = (editingCartItem.variantId || 'base') === (variant ? variant.id : 'base');
+    const lowering = sameUnit && parsedQty <= (Number(editingCartItem.qty) || 0);
+    const stockProblem = lowering
+      ? sellCheck(editingCartItem, variant?.id, editingCartItem.cartItemId).unitProblem
+      : sellProblem(editingCartItem, variant?.id, parsedQty, editingCartItem.cartItemId);
+    if (stockProblem) {
+      showToast(stockProblem, "warning");
       return;
     }
 
@@ -1075,6 +1125,12 @@ const POS: React.FC = () => {
     const brokenPack = !bookingId && cart.find(line => !cartLineUsesMainStock(line) && !packedQtyIsWhole(Number(line.qty) || 0));
     if (brokenPack) {
       showToast(`${brokenPack.name}: ${brokenPack.variantName || 'Packs'} must be sold in whole numbers`, 'warning');
+      return false;
+    }
+    // A restored draft or parked bill was checked against the stock of its own time.
+    const stockProblem = bookingId ? null : cartStockProblem();
+    if (stockProblem) {
+      showToast(stockProblem, 'warning');
       return false;
     }
 
@@ -1679,6 +1735,8 @@ const POS: React.FC = () => {
             editVariantId={editVariantId}
             onSellUnitChange={applySellUnit}
             items={items || []}
+            sellOptions={posSellOptions(liveProduct(editingCartItem), cart, editingCartItem.cartItemId)}
+            allowNegativeStock={Boolean(settings.inventory.allowNegativeStock)}
             onRemove={handleRemoveEditedItem}
             handleSaveEditItem={handleSaveEditItem}
           />

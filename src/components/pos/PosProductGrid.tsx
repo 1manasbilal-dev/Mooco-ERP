@@ -2,10 +2,12 @@ import React, { memo, useRef, useState } from 'react';
 import { Check, LayoutGrid, Package, Plus } from 'lucide-react';
 import { AvailableProduct } from './PosTypes';
 import { PosProductImage } from './PosProductImage';
-import { EmptyState, SearchInput } from '../ui';
+import { Badge, EmptyState, SearchInput } from '../ui';
+import type { Tone } from '../ui/Badge';
 import { cn } from '../../lib/cn';
 import { formatQty, formatMoneyRaw } from '../../lib/formatters';
-import { availableSellUnits, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import type { StockStatus } from '../../lib/stockRules';
 
 interface PosProductGridProps {
   searchProduct: string;
@@ -32,7 +34,7 @@ interface PosProductGridProps {
 /** Loose items, packs and products with cash shortcuts open quick entry; anything else adds one unit. */
 const opensQuickEntry = (product: AvailableProduct) =>
   product.allow_loose_sale !== false
-  || (Array.isArray(product.variants) && product.variants.length > 0)
+  || (Array.isArray(product.variants) && product.variants.some((v: any) => v.isActive !== false))
   || (Array.isArray(product.quick_amounts) && product.quick_amounts.length > 0);
 
 export const PosProductGrid = memo(function PosProductGrid({
@@ -171,11 +173,13 @@ function CategoryChip({ label, count, active, icon, onClick }: { label: string; 
   );
 }
 
-const STOCK_TONE = {
-  ok: { dot: 'bg-success', text: 'text-fg-subtle' },
-  low: { dot: 'bg-warning', text: 'text-warning-fg' },
-  out: { dot: 'bg-danger', text: 'text-danger-fg' },
-} as const;
+/** One badge per card: the sellable label, coloured by the shared status (docs/stock-model.md). */
+const STOCK_BADGE: Record<StockStatus, { tone: Tone; variant: 'soft' | 'solid'; word: string }> = {
+  ok: { tone: 'success', variant: 'soft', word: '' },
+  low: { tone: 'warning', variant: 'soft', word: 'Low' },
+  out: { tone: 'danger', variant: 'soft', word: 'Out of stock' },
+  minus: { tone: 'danger', variant: 'solid', word: 'Minus' },
+};
 
 interface PosProductCardProps {
   product: AvailableProduct;
@@ -190,11 +194,15 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
   const activeVariants = (product.variants || []).filter((v: any) => v.isActive !== false);
   const hasVariants = activeVariants.length > 0;
   const isLooseAllowed = product.allow_loose_sale !== false;
-  const totalVStock = product.total_variant_stock || 0;
-  // Dozen / tray units sell from main stock even when loose sale is off.
-  const mainStockUnits = activeVariants.filter((v: any) => v.deduct_from_base === true);
-  const usesMainStock = isLooseAllowed || mainStockUnits.length > 0;
-  const isPhysicallyOut = usesMainStock ? (product.stock <= 0 && totalVStock <= 0) : totalVStock <= 0;
+  const sellOptionCount = activeVariants.length + (isLooseAllowed ? 1 : 0);
+  const { status, label, detail, reading, hasSellUnit } = product.stock_view;
+  const badge = STOCK_BADGE[status];
+  // Out: nothing sellable. Minus: say what is still sellable, if anything, next to the warning.
+  const stockText = status === 'out'
+    ? badge.word
+    : status === 'minus' && reading.sellableBase <= 0
+      ? 'Minus stock'
+      : badge.word ? `${badge.word} · ${label}` : label;
 
   // An empty pack price follows the loose rate times its size, as at checkout.
   const variantPrices = hasVariants ? activeVariants.map((v: any) => sellUnitPrice(product.price, sellUnitContains(v), v.selling_price)).filter((p: number) => p > 0) : [];
@@ -206,30 +214,21 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
     ? (activeVariants[0]?.name?.replace(new RegExp(product.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '').trim() || activeVariants[0]?.name || 'Pack')
     : 'Pack';
 
-  const onlyMainUnit = !isLooseAllowed && mainStockUnits.length === 1 ? mainStockUnits[0] : null;
-  const mainSellable = onlyMainUnit ? availableSellUnits(product.stock, 0, onlyMainUnit) : product.stock;
-  const stockValue = usesMainStock ? (product.stock > 0 ? mainSellable : totalVStock) : totalVStock;
-  const stockTone = isPhysicallyOut ? 'out' : stockValue > 5 ? 'ok' : 'low';
-  const stockLabel = isPhysicallyOut
-    ? 'Out of stock'
-    : usesMainStock && product.stock > 0
-      ? (onlyMainUnit ? `${formatQty(mainSellable)} ${onlyMainUnit.name || 'Pack'}` : `${formatQty(product.stock)} ${product.unit}`)
-      : `${formatQty(totalVStock)} Packs`;
-
   const isPackPricing = !isLooseAllowed && hasVariants;
   const priceMain = isPackPricing
     ? (minVPrice === maxVPrice ? formatMoneyRaw(minVPrice) : `${formatMoneyRaw(minVPrice)}–${formatMoneyRaw(maxVPrice)}`)
     : formatMoneyRaw(product.price);
   const priceSuffix = isPackPricing ? (minVPrice === maxVPrice ? singleVariantCleanLabel : '') : product.unit;
   const inCart = inCartQty > 0;
-  const tone = STOCK_TONE[stockTone];
 
   return (
     <button
       type="button"
       data-pos-product={product.id}
       data-in-cart={inCart}
-      aria-label={`${product.name}, Rs ${priceMain}${priceSuffix ? ` per ${priceSuffix}` : ''}, ${isAvailable ? stockLabel : 'out of stock'}${inCart ? `, ${formatQty(inCartQty)} ${product.unit} in cart` : ''}`}
+      data-stock={status}
+      title={detail ? `${product.name}: ${detail}` : product.name}
+      aria-label={`${product.name}, Rs ${priceMain}${priceSuffix ? ` per ${priceSuffix}` : ''}, ${stockText}${detail ? ` (${detail})` : ''}${inCart ? `, ${formatQty(inCartQty)} ${product.unit} in cart` : ''}`}
       onClick={() => onSelect(product)}
       onContextMenu={event => { event.preventDefault(); onContext(product); }}
       disabled={!isAvailable}
@@ -241,9 +240,9 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
       )}
     >
       <PosProductImage className="aspect-[4/3] w-full rounded-xl" name={product.name} imageUrl={product.image_url} isAvailable={isAvailable}>
-        {hasVariants && (
-          <span className="absolute left-2 top-2 z-[2] rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-fg-muted shadow-e1 ring-1 ring-inset ring-line">
-            {activeVariants.length} {activeVariants.length === 1 ? 'pack' : 'packs'}
+        {sellOptionCount > 1 && (
+          <span className="absolute left-2 top-2 z-[2] rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-fg-muted shadow-e1 ring-1 ring-inset ring-line" title="Units / packs you can pick">
+            {sellOptionCount} sizes
           </span>
         )}
         {inCart && (
@@ -254,7 +253,7 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
         )}
         {!isAvailable && (
           <span className="absolute inset-0 z-[4] grid place-items-center bg-surface/55">
-            <span className="rounded-full bg-danger px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-white shadow-e1">Out of stock</span>
+            <span className="rounded-full bg-danger px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-white shadow-e1">{hasSellUnit ? (status === 'minus' ? 'Minus stock' : 'Out of stock') : 'Not for sale'}</span>
           </span>
         )}
       </PosProductImage>
@@ -271,10 +270,9 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
               {priceSuffix && <span className="min-w-0 truncate text-[11px] font-semibold text-fg-subtle">/{priceSuffix}</span>}
             </p>
             {isAvailable && (
-              <p className={cn('mt-1.5 flex items-center gap-1.5 truncate text-[11px] font-semibold tabular-nums', tone.text)}>
-                <span className={cn('size-1.5 shrink-0 rounded-full', tone.dot)} aria-hidden="true" />
-                <span className="truncate">{stockLabel}</span>
-              </p>
+              <Badge tone={badge.tone} variant={badge.variant} dot className="mt-1.5 h-5 max-w-full px-2 tabular-nums" title={detail || undefined}>
+                <span className="truncate">{stockText}</span>
+              </Badge>
             )}
           </div>
           <span

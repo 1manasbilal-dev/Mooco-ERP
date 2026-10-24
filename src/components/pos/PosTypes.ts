@@ -1,3 +1,5 @@
+import type { PosStockView } from './posStock';
+
 export interface HeldOrder {
   id: string;
   cart: any[];
@@ -17,10 +19,13 @@ export interface AvailableProduct {
   price: number;
   unit: string;
   category: string[];
+  /** Loose pile in the base unit. */
   stock: number;
   variants: any[];
+  /** Ready-made pack counts by variant id (may hold hidden packs and stray multi-unit counts). */
   variant_stocks: Record<string, number>;
-  total_variant_stock: number;
+  /** The one stock reading for this card (docs/stock-model.md). */
+  stock_view: PosStockView;
   is_available: boolean;
   quick_amounts: number[];
   pos_primary_mode?: 'amount' | 'qty';
