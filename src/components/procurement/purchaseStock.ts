@@ -30,7 +30,7 @@ export interface PurchaseUnit {
   factor: number;
   /** The ready-made pack this unit stocks into (kind 'pack'). */
   variantId?: string;
-  /** Short option text: "Bag · 50 kg". */
+  /** Option text: "Bag (50 kg)", "500 g pouch (0.5 kg)", "kg (base)". */
   label: string;
   /** "1 Bag = 50 kg". Empty for the base unit. */
   equals: string;
@@ -50,6 +50,8 @@ type CatalogItem = StockItemLike & { id?: string; name?: string; unit?: string; 
 
 const lower = (value: unknown) => String(value ?? '').trim().toLowerCase();
 const isWhole = (value: number) => Math.abs(value - Math.round(value)) < 1e-9;
+/** "1 Bag = 50 kg"; "1 × 500 g pouch = 0.5 kg" when the name starts with a number (not "1 500 g"). */
+const oneOf = (name: string, factor: number, base: string) => `1 ${/^\d/.test(name) ? '× ' : ''}${name} = ${formatBaseQty(factor, base)}`;
 
 /**
  * Every unit this product can be bought in, in the order the picker shows them: base, its
@@ -73,7 +75,7 @@ export function purchaseUnitsFor(item: CatalogItem | null | undefined, customUni
     const factor = sellUnitContains(v);
     units.push({
       key: `pack:${v.id}`, unit: name, kind: 'pack', factor, variantId: v.id,
-      label: `${name} · pack`, equals: `1 ${name} = ${formatBaseQty(factor, base)}`, lands: `${name} packs`, isBase: false,
+      label: `${name} (${formatBaseQty(factor, base)})`, equals: oneOf(name, factor, base), lands: `${name} packs`, isBase: false,
     });
   });
   variants.filter(v => v.deduct_from_base === true).forEach(v => {
@@ -83,7 +85,7 @@ export function purchaseUnitsFor(item: CatalogItem | null | undefined, customUni
     const factor = sellUnitContains(v);
     units.push({
       key: `multi:${v.id}`, unit: name, kind: 'multi', factor,
-      label: `${name} · ${formatBaseQty(factor, base)}`, equals: `1 ${name} = ${formatBaseQty(factor, base)}`, lands: 'Loose stock', isBase: false,
+      label: `${name} (${formatBaseQty(factor, base)})`, equals: oneOf(name, factor, base), lands: 'Loose stock', isBase: false,
     });
   });
   getAllAvailableUnits(customUnits)
@@ -96,7 +98,7 @@ export function purchaseUnitsFor(item: CatalogItem | null | undefined, customUni
       taken.add(lower(u.symbol));
       units.push({
         key: `unit:${u.symbol}`, unit: u.symbol, kind: 'convert', factor,
-        label: `${u.symbol} → ${base}`, equals: `1 ${u.symbol} = ${formatBaseQty(factor, base)}`, lands: 'Loose stock', isBase: false,
+        label: `${u.symbol} (${formatBaseQty(factor, base)})`, equals: oneOf(u.symbol, factor, base), lands: 'Loose stock', isBase: false,
       });
     });
   return units;
@@ -115,6 +117,35 @@ export interface LineUnitFields {
 export function findLineUnit(line: Pick<LineUnitFields, 'unit' | 'unitKey'>, units: PurchaseUnit[]): PurchaseUnit | undefined {
   if (line.unitKey) return units.find(u => u.key === line.unitKey);
   return units.find(u => lower(u.unit) === lower(line.unit));
+}
+
+/**
+ * The unit and rate a new bill line starts with: the unit this product was last bought in (with
+ * that rate) while it still exists at the same size; else its first ready-made pack when the product
+ * only sells as packs; else the base unit at the current average cost.
+ */
+export function defaultPurchaseUnit(
+  item: CatalogItem,
+  units: PurchaseUnit[],
+  last?: (PurchaseRow & { rate?: number }) | null,
+): { unit: PurchaseUnit; rate: number } {
+  const base = units[0];
+  const cost = Number(item.cost_price) || 0;
+  if (last && base) {
+    const packId = last.details?.variant_id;
+    const match = packId
+      ? units.find(u => u.variantId === packId)
+      : units.find(u => u.kind !== 'pack' && lower(u.unit) === lower(last.unit));
+    const lastFactor = Number(last.details?.conversion_factor) > 0 ? Number(last.details?.conversion_factor) : 1;
+    if (match && Math.abs(match.factor - lastFactor) < 1e-9) {
+      const rate = Number(last.rate);
+      return { unit: match, rate: rate > 0 ? cleanNumber(rate, 2) : cleanNumber(cost * match.factor, 2) };
+    }
+  }
+  const isSale = !item.item_type || item.item_type.includes('Sale product');
+  const packOnly = isSale && item.allow_loose_sale === false && !units.some(u => u.kind === 'multi');
+  const unit = (packOnly && units.find(u => u.kind === 'pack')) || base;
+  return { unit, rate: cleanNumber(cost * (unit?.factor || 1), 2) };
 }
 
 /** "10 × 500 g pouch = 5 kg", "2 Bag = 100 kg", "2.5 L = 2500 ml", "12 kg". */
@@ -369,7 +400,7 @@ export function pileOnHandInUnit(pile: PurchasePile, stock: PileStock): number {
 /** Why a return quantity can't be used, or ''. */
 export function returnQtyProblem(qty: number, max: number, pile: Pick<PurchasePile, 'kind'>, unit: string): string {
   if (!Number.isFinite(qty) || qty <= 0) return 'Return quantity 0 se zyada likhein.';
-  if (qty > max + 0.0005) return `Is purchase se sirf ${formatQty(max, 3)} ${unit} wapas ho sakta hai.`;
+  if (qty > max + 0.0005) return `Is purchase se sirf ${purchaseQtyText(max, unit, pile)} wapas ho sakta hai.`;
   if (pile.kind === 'pack' && !isWhole(qty)) return `${unit} poore number mein wapas karein (aadha pack nahi).`;
   return '';
 }

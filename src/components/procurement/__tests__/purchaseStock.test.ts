@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  billLineProblem, conversionText, costChangeText, landingPreview, pileOnHandInUnit, pileStockOf, purchaseLinePile, purchasePileText,
+  billLineProblem, conversionText, costChangeText, defaultPurchaseUnit, landingPreview, pileOnHandInUnit, pileStockOf, purchaseLinePile, purchasePileText,
   purchaseQtyText, purchaseUnitsFor, rateForUnit, rateFromTotal, returnableQty, returnQtyProblem, type PurchaseUnit,
 } from '../purchaseStock';
 
@@ -28,7 +28,7 @@ describe('purchaseUnitsFor', () => {
   it('offers base, active packs, multi-units and exact weight conversions, in that order', () => {
     const units = purchaseUnitsFor(rusk);
     expect(units[0]).toMatchObject({ key: 'base', unit: 'kg', kind: 'base', factor: 1 });
-    expect(units[1]).toMatchObject({ key: 'pack:v_pouch', kind: 'pack', factor: 0.5, variantId: 'v_pouch', equals: '1 500 g pouch = 0.5 kg' });
+    expect(units[1]).toMatchObject({ key: 'pack:v_pouch', kind: 'pack', factor: 0.5, variantId: 'v_pouch', equals: '1 × 500 g pouch = 0.5 kg' });
     expect(units[2]).toMatchObject({ key: 'multi:v_bag', kind: 'multi', factor: 20 });
     // Hidden packs are not offered: the save would stock them as loose.
     expect(units.some(u => u.unit === '1 kg box')).toBe(false);
@@ -91,6 +91,18 @@ describe('bill line checks', () => {
     const rebased = purchaseUnitsFor({ ...rusk, unit: 'g' });
     expect(billLineProblem({ ...line, unit: 'kg', unitKey: 'base', conversion_factor: 1 }, rebased)).toMatch(/ab is product mein nahi/);
     expect(billLineProblem(line, [])).toMatch(/catalog mein nahi/);
+  });
+
+  it('starts a new line in the last bought unit and rate, or the pack for pack-only products', () => {
+    const lastBag = { unit: 'Bag', rate: 7900, details: { conversion_factor: 20 } };
+    expect(defaultPurchaseUnit(rusk, units, lastBag)).toEqual({ unit: unitOf(units, 'multi:v_bag'), rate: 7900 });
+    // The bag was resized since: start fresh.
+    expect(defaultPurchaseUnit(rusk, units, { ...lastBag, details: { conversion_factor: 25 } }).unit.key).toBe('base');
+    const lastPouch = { unit: 'old name', rate: 0, details: { variant_id: 'v_pouch', conversion_factor: 0.5 } };
+    expect(defaultPurchaseUnit(rusk, units, lastPouch)).toEqual({ unit: pouch, rate: 200 });
+    const packsOnly = { ...rusk, variants: rusk.variants.filter(v => v.id !== 'v_bag') };
+    expect(defaultPurchaseUnit(packsOnly, purchaseUnitsFor(packsOnly)).unit.key).toBe('pack:v_pouch');
+    expect(defaultPurchaseUnit(rusk, units)).toEqual({ unit: units[0], rate: 400 });
   });
 
   it('keeps the price per base unit when the unit changes, and the quantity when the total changes', () => {
@@ -167,7 +179,7 @@ describe('returns', () => {
     expect(returnableQty({ ...packRow, status: 'Returned' })).toBe(0);
     const pile = purchaseLinePile(packRow, rusk);
     expect(returnQtyProblem(8, 8, pile, '500 g pouch')).toBe('');
-    expect(returnQtyProblem(9, 8, pile, '500 g pouch')).toMatch(/sirf 8 500 g pouch/);
+    expect(returnQtyProblem(9, 8, pile, '500 g pouch')).toMatch(/sirf 8 × 500 g pouch wapas/);
     expect(returnQtyProblem(1.5, 8, pile, '500 g pouch')).toMatch(/poore number/);
     expect(returnQtyProblem(0, 8, pile, 'x')).toMatch(/0 se zyada/);
     expect(returnQtyProblem(1.5, 3, purchaseLinePile(looseRow, rusk), 'Bag')).toBe('');
