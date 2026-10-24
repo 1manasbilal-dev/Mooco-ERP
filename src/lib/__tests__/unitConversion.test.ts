@@ -5,7 +5,10 @@ import {
   convertQuantity,
   describeUnitRole,
   detectUnitGroupId,
-  getAllAvailableUnits
+  getAllAvailableUnits,
+  normalizeUnit,
+  unitFactor,
+  unitTypeOf
 } from '../unitConversion';
 import type { UnitDefinition } from '../../types';
 
@@ -47,11 +50,35 @@ describe('convertQuantity', () => {
     expect(convertQuantity(Infinity, 'g', 'kg')).toBe(0);
   });
 
-  it('rounds to four decimals without float noise', () => {
+  it('rounds to the stock precision of three decimals without float noise', () => {
     expect(convertQuantity(3, 'g', 'kg')).toBe(0.003);
-    expect(convertQuantity(10, 'tola', 'kg')).toBe(0.1166);
+    expect(convertQuantity(10, 'tola', 'kg')).toBe(0.117);
     expect(convertQuantity(0.1, 'kg', 'g')).toBe(100);
+    expect(convertQuantity(1.23456, 'kg', 'kg')).toBe(1.235);
     expect(Object.is(convertQuantity(-0.01, 'g', 'kg'), 0)).toBe(true);
+  });
+
+  it('reads the spellings shops type for litres, kilos and pieces', () => {
+    expect(convertQuantity(2.5, 'Ltr', 'ml')).toBe(2500);
+    expect(convertQuantity(750, 'ML', 'ltrs')).toBe(0.75);
+    expect(convertQuantity(1, 'kgs', 'g')).toBe(1000);
+    expect(convertQuantity(2, 'doz', 'nos')).toBe(24);
+    expect(convertQuantity(1, undefined as unknown as string, 'kg')).toBeNull();
+  });
+
+  it("lets a custom unit's own symbol win over an alias", () => {
+    const custom: UnitDefinition[] = [{ id: 'u_ltr', name: 'Big ltr can', symbol: 'ltr', factor: 5, isBase: false, type: 'Volume' }];
+    expect(convertQuantity(1, 'ltr', 'L', custom)).toBe(5);
+    expect(convertQuantity(1, 'ltr', 'L')).toBe(1);
+  });
+
+  it('gives an unrounded factor for rates and the unit group', () => {
+    expect(unitFactor('L', 'ml')).toBe(1000);
+    expect(unitFactor('kg', 'L')).toBeNull();
+    expect(unitFactor('pcs', 'pcs')).toBe(1);
+    expect(unitTypeOf('Ltr')).toBe('Volume');
+    expect(unitTypeOf('bucket')).toBeNull();
+    expect(normalizeUnit(' Kgs ')).toBe('kg');
   });
 
   it('uses custom units, which can override a system unit', () => {

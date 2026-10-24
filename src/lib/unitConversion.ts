@@ -1,5 +1,5 @@
 import { UnitDefinition, UnitGroup } from '../types';
-import { cleanNumber } from './formatters';
+import { cleanQty } from './formatters';
 
 /**
  * Built-in units, including Pakistani dairy measures (pao, maund, dozen).
@@ -249,17 +249,26 @@ const UNIT_ALIASES: Record<string, string> = {
   litre: 'L',
   litres: 'L',
   l: 'L',
+  lt: 'L',
+  lts: 'L',
+  ltr: 'L',
+  ltrs: 'L',
   milliliter: 'ml',
   milliliters: 'ml',
+  millilitre: 'ml',
+  millilitres: 'ml',
   mls: 'ml',
   kilogram: 'kg',
   kilograms: 'kg',
   kilo: 'kg',
   kilos: 'kg',
+  kgs: 'kg',
   gram: 'g',
   grams: 'g',
   gm: 'g',
   gms: 'g',
+  grm: 'g',
+  grms: 'g',
   paao: 'pao',
   paw: 'pao',
   paaon: 'pao',
@@ -269,6 +278,7 @@ const UNIT_ALIASES: Record<string, string> = {
   piece: 'pcs',
   pieces: 'pcs',
   pc: 'pcs',
+  nos: 'pcs',
   units: 'unit',
   packet: 'pack',
   packets: 'pack',
@@ -276,6 +286,8 @@ const UNIT_ALIASES: Record<string, string> = {
   pkts: 'pack',
   dozen: 'dz',
   dozens: 'dz',
+  doz: 'dz',
+  dzn: 'dz',
   bottles: 'btl',
   bottle: 'btl',
   boxes: 'box',
@@ -288,12 +300,15 @@ const UNIT_ALIASES: Record<string, string> = {
 
 const normalizeUnitSymbol = (symbol: string): string => {
   if (!symbol) return '';
-  const clean = symbol.trim().toLowerCase();
+  const clean = String(symbol).trim().toLowerCase();
   if (UNIT_ALIASES[clean]) return UNIT_ALIASES[clean];
   // Standard symbols keep their own casing
   const match = STANDARD_SYSTEM_UNITS.find(u => u.symbol.toLowerCase() === clean);
-  return match ? match.symbol : symbol.trim();
+  return match ? match.symbol : String(symbol).trim();
 };
+
+/** The standard spelling of a unit: 'Ltr' → 'L', 'kgs' → 'kg', 'ML' → 'ml'. Unknown names come back trimmed. */
+export const normalizeUnit = (symbol?: string | null): string => normalizeUnitSymbol(symbol || '');
 
 /**
  * Returns all active units combining system defaults and user custom units.
@@ -369,8 +384,11 @@ const findUnitDefinition = (
   if (!symbolOrId) return undefined;
   const normalized = normalizeUnitSymbol(symbolOrId);
   const all = getAllAvailableUnits(customUnits);
+  const raw = String(symbolOrId).trim().toLowerCase();
 
   return (
+    // A unit's own symbol wins over an alias, so a custom 'ltr' or 'kgs' unit keeps its own factor.
+    all.find(u => u.symbol.toLowerCase() === raw) ||
     all.find(u => u.symbol.toLowerCase() === normalized.toLowerCase()) ||
     all.find(u => u.id === symbolOrId) ||
     all.find(u => u.name.toLowerCase() === symbolOrId.toLowerCase())
@@ -391,9 +409,14 @@ export const detectUnitGroupId = (
   return 'ug_count';
 };
 
+/** Volume, Mass or Count for a known unit; null for a name the app does not know. */
+export const unitTypeOf = (symbol?: string | null, customUnits: UnitDefinition[] = []): UnitDefinition['type'] | null =>
+  findUnitDefinition(symbol || '', customUnits)?.type || null;
+
 /**
- * Converts a quantity from one unit to another within the same category.
- * Returns null if units are incompatible.
+ * Converts a quantity from one unit to another within the same category (L ↔ ml, kg ↔ g ↔ pao, dz ↔ pcs).
+ * Returns null when the units are in different groups (kg vs L) or unknown: the caller must stop or ask,
+ * never fall back to the raw number. The result keeps the stock precision of 3 decimals.
  */
 export const convertQuantity = (
   quantity: number,
@@ -402,10 +425,12 @@ export const convertQuantity = (
   customUnits: UnitDefinition[] = []
 ): number | null => {
   if (!Number.isFinite(quantity)) return 0;
-  if (fromSymbol.toLowerCase() === toSymbol.toLowerCase()) return quantity;
+  const from = String(fromSymbol ?? '').trim();
+  const to = String(toSymbol ?? '').trim();
+  if (from.toLowerCase() === to.toLowerCase()) return cleanQty(quantity);
 
-  const fromUnit = findUnitDefinition(fromSymbol, customUnits);
-  const toUnit = findUnitDefinition(toSymbol, customUnits);
+  const fromUnit = findUnitDefinition(from, customUnits);
+  const toUnit = findUnitDefinition(to, customUnits);
 
   if (!fromUnit || !toUnit) return null;
   if (fromUnit.type !== toUnit.type) return null;
@@ -417,7 +442,21 @@ export const convertQuantity = (
   const inBase = quantity * fromFactor;
   const result = inBase / toFactor;
 
-  return cleanNumber(result, 4);
+  return cleanQty(result);
+};
+
+/**
+ * How many of `toSymbol` make one `fromSymbol` (1 L → 1000 ml), unrounded, for converting rates:
+ * a price per L divided by this is the price per ml. Null when the units don't convert.
+ */
+export const unitFactor = (fromSymbol: string, toSymbol: string, customUnits: UnitDefinition[] = []): number | null => {
+  const from = String(fromSymbol ?? '').trim();
+  const to = String(toSymbol ?? '').trim();
+  if (from.toLowerCase() === to.toLowerCase()) return 1;
+  const fromUnit = findUnitDefinition(from, customUnits);
+  const toUnit = findUnitDefinition(to, customUnits);
+  if (!fromUnit || !toUnit || fromUnit.type !== toUnit.type) return null;
+  return (Number(fromUnit.factor) || 1) / (Number(toUnit.factor) || 1);
 };
 
 /**
