@@ -1,22 +1,29 @@
-import React, { memo, useState } from 'react';
-import { Archive, Boxes, Briefcase, ChevronDown, ChevronUp, ClipboardCheck, Factory, Lock, Package, Truck } from 'lucide-react';
-import { Badge, IconButton, Money, TD, TR } from '../ui';
+import React, { memo } from 'react';
+import { AlertTriangle, Boxes, Briefcase, ClipboardCheck, EyeOff, Factory, History as HistoryIcon, Lock, Package, PackagePlus, Truck } from 'lucide-react';
+import { Badge, Button, IconButton, Money, TD, TR } from '../ui';
 import { cn } from '../../lib/cn';
-import { formatCurrency, formatQty } from '../../lib/formatters';
-import { STATUS_BADGE, type StockRow, type StockStatus } from './inventoryStock';
+import { formatCurrency } from '../../lib/formatters';
+import { formatBaseQty } from '../../lib/stockRules';
+import { STATUS_BADGE, type StockRow } from './inventoryStock';
 
-type AuditHandler = (itemId: string, variantId: string) => void;
+export type RowAction = 'count' | 'history' | 'opening';
+type ActionHandler = (action: RowAction, itemId: string) => void;
 
 const SOURCE_ICON: Record<string, React.ReactNode> = {
   Supplier: <Truck aria-hidden="true" />,
   Production: <Factory aria-hidden="true" />,
 };
 
-const qtyTone = (status: StockStatus) =>
-  status === 'negative' || status === 'out' ? 'text-danger-fg' : status === 'low' ? 'text-warning-fg' : 'text-fg';
+const qtyTone = (row: StockRow) =>
+  !row.alerting ? 'text-fg-muted'
+    : row.status === 'minus' || row.status === 'out' ? 'text-danger-fg'
+    : row.status === 'low' ? 'text-warning-fg'
+    : 'text-fg';
 
-export function StatusBadge({ status }: { status: StockStatus }) {
-  const badge = STATUS_BADGE[status];
+/** The one status of a row. Inactive products get no stock alerts. */
+export function StatusBadge({ row }: { row: Pick<StockRow, 'alerting' | 'status'> }) {
+  if (!row.alerting) return <Badge dot>Inactive</Badge>;
+  const badge = STATUS_BADGE[row.status];
   return <Badge tone={badge.tone} variant={badge.solid ? 'solid' : 'soft'} dot={!badge.solid}>{badge.label}</Badge>;
 }
 
@@ -28,6 +35,7 @@ function ItemThumb({ row, size = 'md' }: { row: StockRow; size?: 'sm' | 'md' }) 
         'flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-2 text-fg-subtle ring-1 ring-inset ring-line [&_svg]:size-4',
         size === 'sm' ? 'size-9' : 'size-10',
         item.isSystem && 'bg-brand-soft text-brand-fg',
+        !row.isActive && 'opacity-60',
       )}
     >
       {item.image_url ? (
@@ -41,31 +49,59 @@ function ItemMeta({ row }: { row: StockRow }) {
   const { item } = row;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-fg-subtle">
+      <span className="truncate">{item.category?.[0] || 'Uncategorized'}</span>
+      <span aria-hidden="true">·</span>
       <span className="inline-flex items-center gap-1 [&_svg]:size-3">{SOURCE_ICON[item.source] || <Briefcase aria-hidden="true" />}{item.source}</span>
       {item.isSystem && <Badge>System</Badge>}
-      {row.packaged.length > 0 && <Badge tone="warning" icon={<Archive aria-hidden="true" />}>{formatQty(row.packCount)} packs</Badge>}
-      {row.multiUnits.length > 0 && <Badge tone="info" icon={<Boxes aria-hidden="true" />}>Multi-unit</Badge>}
     </div>
   );
 }
 
-/** "≈ 2.5 Dozen · 1 Tray": loose stock expressed in the item's bigger units. */
-const multiUnitText = (row: StockRow) =>
-  row.multiUnits
-    .map(mu => `${formatQty(mu.quantity_in_base_unit > 0 ? row.quantity / mu.quantity_in_base_unit : 0, 1)} ${mu.name}`)
-    .join(' · ');
-
-function StockQty({ row }: { row: StockRow }) {
-  if (row.packagedOnly) {
-    return (
-      <span className={cn('font-bold tabular-nums', qtyTone(row.status))}>
-        {formatQty(row.packCount)} <span className="text-[11px] font-semibold text-fg-subtle">packs</span>
-      </span>
-    );
-  }
+/**
+ * Pile by pile ("4 kg loose", "6 × 500 g tub", "2 × 1 kg tub (hidden)"), never one "N packs" figure.
+ * Stray counts come last with a warning, because only a stock count can clear them.
+ */
+function PileList({ row, className }: { row: StockRow; className?: string }) {
+  const piles = row.pileDetail ? row.piles : [];
+  if (piles.length === 0 && row.stray.length === 0) return null;
   return (
-    <span className={cn('font-bold tabular-nums', qtyTone(row.status))}>
-      {formatQty(row.quantity, 3)} <span className="text-[11px] font-semibold text-fg-subtle">{row.item.unit}</span>
+    <ul className={cn('flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-medium tabular-nums text-fg-subtle', className)} aria-label="Stock piles">
+      {piles.map(part => {
+        const hidden = part.endsWith('(hidden)');
+        return (
+          <li key={part} className={cn('inline-flex items-center gap-1', part.startsWith('-') && 'text-danger-fg', hidden && 'italic')}>
+            {hidden && <EyeOff className="size-3 shrink-0" aria-hidden="true" />}
+            {part}
+          </li>
+        );
+      })}
+      {row.stray.map(part => (
+        <li key={part} className="inline-flex items-center gap-1 font-semibold text-warning-fg">
+          <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+          {part}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function OnHand({ row }: { row: StockRow }) {
+  return (
+    <span className={cn('font-bold tabular-nums', qtyTone(row))}>
+      {formatBaseQty(row.reading.totalBase, '')}
+      <span className="ml-1 text-[11px] font-semibold text-fg-subtle">{row.reading.unit}</span>
+    </span>
+  );
+}
+
+/** What the POS can sell now. Only sale products have it; it is shown dimmed when part of the stock can't be sold. */
+function Sellable({ row }: { row: StockRow }) {
+  if (!row.isProduct) return <span className="text-fg-faint">—</span>;
+  const sellable = Math.max(0, row.reading.sellableBase);
+  const short = sellable < Math.max(0, row.reading.totalBase);
+  return (
+    <span className={cn('font-semibold tabular-nums', sellable <= 0 ? 'text-fg-faint' : short ? 'text-warning-fg' : 'text-fg-muted')} title={short ? 'Kuch stock hidden pack ya band loose sale mein hai' : undefined}>
+      {formatBaseQty(sellable, row.reading.unit)}
     </span>
   );
 }
@@ -81,114 +117,95 @@ function RateCell({ row }: { row: StockRow }) {
 function ValueCell({ row }: { row: StockRow }) {
   return (
     <>
-      <Money amount={row.valuation.costValue} className="font-bold text-fg" />
-      {row.valuation.costMissing ? (
+      <Money amount={row.reading.costValue} className="font-bold text-fg" />
+      {row.costMissing ? (
         <span className="block text-[11px] font-semibold text-warning-fg">Cost set nahi</span>
-      ) : row.isProduct && row.valuation.retailValue > 0 ? (
-        <span className="block text-[11px] font-medium text-fg-subtle">Retail {formatCurrency(row.valuation.retailValue)}</span>
+      ) : row.isProduct && row.retailValue > 0 ? (
+        <span className="block text-[11px] font-medium text-fg-subtle">Retail {formatCurrency(row.retailValue)}</span>
       ) : null}
     </>
   );
 }
 
-interface TableRowsProps {
+interface RowProps {
   row: StockRow;
-  onAudit: AuditHandler;
+  canEdit: boolean;
+  /** No movements yet and nothing on hand: offer "Opening stock" instead of a count. */
+  canOpen: boolean;
+  onAction: ActionHandler;
 }
 
-/** One item in the desktop table, plus a sub-row per pre-packed size. */
-export const StockTableRows = memo(function StockTableRows({ row, onAudit }: TableRowsProps) {
+function RowActions({ row, canEdit, canOpen, onAction, compact }: RowProps & { compact?: boolean }) {
   const { item } = row;
   return (
-    <>
-      <TR className={cn('hover:bg-surface-2/60', row.status === 'negative' && 'bg-danger-soft/40')}>
-        <TD>
-          <div className="flex items-center gap-3">
-            <ItemThumb row={row} size="sm" />
-            <div className="min-w-0">
-              <p className="truncate font-semibold text-fg">{item.name}</p>
-              <ItemMeta row={row} />
-            </div>
+    <div className={cn('flex items-center justify-end gap-1', compact && 'gap-1.5')}>
+      {canEdit && canOpen ? (
+        <Button size="sm" variant="soft" leftIcon={<PackagePlus />} onClick={() => onAction('opening', item.id)} aria-label={`${item.name}: opening stock`}>
+          Opening stock
+        </Button>
+      ) : canEdit ? (
+        <IconButton size="sm" variant={compact ? 'secondary' : 'ghost'} aria-label={`${item.name}: stock count`} title="Stock count" icon={<ClipboardCheck />} onClick={() => onAction('count', item.id)} />
+      ) : null}
+      <IconButton size="sm" variant={compact ? 'secondary' : 'ghost'} aria-label={`${item.name}: stock history`} title="Stock history" icon={<HistoryIcon />} onClick={() => onAction('history', item.id)} />
+    </div>
+  );
+}
+
+/** One product in the desktop table: on hand with its piles, sellable, rate, value and one status. */
+export const StockTableRow = memo(function StockTableRow(props: RowProps) {
+  const { row } = props;
+  const { item } = row;
+  return (
+    <TR className={cn('hover:bg-surface-2/60', row.alerting && row.status === 'minus' && 'bg-danger-soft/40')}>
+      <TD>
+        <div className="flex items-center gap-3">
+          <ItemThumb row={row} size="sm" />
+          <div className="min-w-0">
+            <p className={cn('truncate font-semibold', row.isActive ? 'text-fg' : 'text-fg-muted')}>{item.name}</p>
+            <ItemMeta row={row} />
           </div>
-        </TD>
-        <TD className="text-xs text-fg-muted">{item.category?.[0] || 'Uncategorized'}</TD>
-        <TD numeric>
-          <StockQty row={row} />
-          {!row.packagedOnly && row.multiUnits.length > 0 && (
-            <span className="block text-[11px] font-medium text-info-fg">≈ {multiUnitText(row)}</span>
-          )}
-        </TD>
-        <TD numeric className="font-medium text-fg-muted">
-          <RateCell row={row} />
-          <span className="block text-[10px] font-semibold uppercase tracking-wider text-fg-faint">{row.isProduct ? 'Sale' : 'Cost'}</span>
-        </TD>
-        <TD numeric><ValueCell row={row} /></TD>
-        <TD className="text-center"><StatusBadge status={row.status} /></TD>
-        <TD className="text-right">
-          <IconButton size="sm" aria-label={`${item.name}: stock audit`} icon={<ClipboardCheck />} onClick={() => onAudit(item.id, 'loose')} />
-        </TD>
-      </TR>
-      {row.packaged.map(v => {
-        const count = Number(row.variantStocks[v.id]) || 0;
-        const pack = row.valuation.packs.find(p => p.id === v.id);
-        return (
-          <TR key={v.id} className="bg-surface-2/40 hover:bg-surface-2/70">
-            <TD className="py-2.5 pl-12">
-              <div className="flex items-center gap-2.5">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-warning-soft text-warning-fg [&_svg]:size-3.5"><Archive aria-hidden="true" /></span>
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-semibold text-fg-muted">{v.name}</p>
-                  <p className="text-[11px] text-fg-subtle">Pre-packed</p>
-                </div>
-              </div>
-            </TD>
-            <TD className="py-2.5 text-xs tabular-nums text-fg-subtle">{formatQty(v.quantity_in_base_unit, 3)} {item.unit} / pack</TD>
-            <TD numeric className="py-2.5">
-              <span className={cn('tabular-nums', count < 0 ? 'text-danger-fg' : count > 0 ? 'text-fg' : 'text-fg-faint')}>{formatQty(count)}</span>
-              <span className="ml-1 text-[11px] font-semibold text-fg-subtle">packs</span>
-            </TD>
-            <TD numeric className="py-2.5 text-xs font-medium text-fg-muted">{formatCurrency(v.selling_price || row.rate * v.quantity_in_base_unit)}</TD>
-            <TD numeric className="py-2.5 text-xs font-medium text-fg-subtle">(<Money amount={pack?.costValue || 0} />)</TD>
-            <TD className="py-2.5 text-center">
-              {count < 0 ? <Badge tone="danger" variant="solid">Minus</Badge> : count > 0 ? <Badge tone="success">In stock</Badge> : <Badge tone="danger">Out</Badge>}
-            </TD>
-            <TD className="py-2.5 text-right">
-              <IconButton size="sm" aria-label={`${v.name}: packed stock audit`} icon={<ClipboardCheck />} onClick={() => onAudit(item.id, v.id)} />
-            </TD>
-          </TR>
-        );
-      })}
-    </>
+        </div>
+      </TD>
+      <TD className="min-w-[10rem]">
+        <OnHand row={row} />
+        <PileList row={row} className="mt-0.5" />
+        {row.multiUnitHint && <span className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-info-fg"><Boxes className="size-3" aria-hidden="true" />≈ {row.multiUnitHint}</span>}
+      </TD>
+      <TD numeric><Sellable row={row} /></TD>
+      <TD numeric className="font-medium text-fg-muted">
+        <RateCell row={row} />
+        <span className="block text-[10px] font-semibold uppercase tracking-wider text-fg-faint">{row.isProduct ? 'Sale' : 'Cost'}</span>
+      </TD>
+      <TD numeric><ValueCell row={row} /></TD>
+      <TD className="text-center"><StatusBadge row={row} /></TD>
+      <TD className="text-right"><RowActions {...props} /></TD>
+    </TR>
   );
 });
 
-/** One item as a card on phones. */
-export const StockCard = memo(function StockCard({ row, onAudit }: TableRowsProps) {
+/** One product as a card on phones. */
+export const StockCard = memo(function StockCard(props: RowProps) {
+  const { row } = props;
   const { item } = row;
-  const [showPacks, setShowPacks] = useState(false);
   return (
-    <li className={cn('rounded-card border bg-surface p-3.5 shadow-e1', row.status === 'negative' ? 'border-danger/40' : 'border-line')}>
+    <li className={cn('rounded-card border bg-surface p-3.5 shadow-e1', row.alerting && row.status === 'minus' ? 'border-danger/40' : 'border-line')}>
       <div className="flex items-start gap-3">
         <ItemThumb row={row} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold leading-snug text-fg">{item.name}</p>
-          <p className="text-[11px] text-fg-subtle">{item.category?.[0] || 'Uncategorized'}</p>
+          <p className={cn('text-sm font-semibold leading-snug', row.isActive ? 'text-fg' : 'text-fg-muted')}>{item.name}</p>
           <ItemMeta row={row} />
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <StatusBadge status={row.status} />
-          <IconButton size="sm" variant="secondary" aria-label={`${item.name}: stock audit`} icon={<ClipboardCheck />} onClick={() => onAudit(item.id, 'loose')} />
-        </div>
+        <StatusBadge row={row} />
       </div>
 
       <dl className="mt-3 grid grid-cols-3 gap-2 rounded-control bg-surface-2 px-3 py-2.5 text-xs">
         <div className="min-w-0">
-          <dt className="text-fg-subtle">{row.packagedOnly ? 'Packs' : 'Stock'}</dt>
-          <dd className="mt-0.5 text-sm"><StockQty row={row} /></dd>
+          <dt className="text-fg-subtle">On hand</dt>
+          <dd className="mt-0.5 text-sm"><OnHand row={row} /></dd>
         </div>
         <div className="min-w-0 text-center">
-          <dt className="text-fg-subtle">{row.isProduct ? 'Sale rate' : 'Cost rate'}</dt>
-          <dd className="mt-0.5 text-sm font-semibold text-fg-muted"><RateCell row={row} /></dd>
+          <dt className="text-fg-subtle">Sellable</dt>
+          <dd className="mt-0.5 text-sm"><Sellable row={row} /></dd>
         </div>
         <div className="min-w-0 text-right">
           <dt className="text-fg-subtle">Value (cost)</dt>
@@ -196,42 +213,17 @@ export const StockCard = memo(function StockCard({ row, onAudit }: TableRowsProp
         </div>
       </dl>
 
-      {!row.packagedOnly && row.multiUnits.length > 0 && (
-        <p className="mt-2 text-[11px] font-medium text-info-fg">≈ {multiUnitText(row)}</p>
-      )}
-
-      {row.packaged.length > 0 && (
-        <div className="mt-2.5">
-          <button
-            type="button"
-            onClick={() => setShowPacks(open => !open)}
-            aria-expanded={showPacks}
-            className="flex h-10 w-full cursor-pointer items-center justify-between rounded-control bg-warning-soft px-3 text-xs font-semibold text-warning-fg"
-          >
-            <span className="flex items-center gap-1.5"><Archive className="size-3.5" aria-hidden="true" /> {row.packaged.length} packed sizes · {formatQty(row.packCount)} packs</span>
-            {showPacks ? <ChevronUp className="size-4" aria-hidden="true" /> : <ChevronDown className="size-4" aria-hidden="true" />}
-          </button>
-          {showPacks && (
-            <ul className="mt-2 space-y-1.5 animate-fade-up">
-              {row.packaged.map(v => {
-                const count = Number(row.variantStocks[v.id]) || 0;
-                return (
-                  <li key={v.id} className="flex items-center justify-between gap-2 rounded-lg border border-line px-3 py-2 text-xs">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-fg">{v.name}</p>
-                      <p className="text-fg-subtle">{formatQty(v.quantity_in_base_unit, 3)} {item.unit} · {formatCurrency(v.selling_price || row.rate * v.quantity_in_base_unit)}</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <span className={cn('font-bold tabular-nums', count < 0 ? 'text-danger-fg' : count > 0 ? 'text-fg' : 'text-fg-faint')}>{formatQty(count)} packs</span>
-                      <IconButton size="sm" aria-label={`${v.name}: packed stock audit`} icon={<ClipboardCheck />} onClick={() => onAudit(item.id, v.id)} />
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+      {(row.pileDetail || row.stray.length > 0 || row.multiUnitHint) && (
+        <div className="mt-2 space-y-1">
+          <PileList row={row} />
+          {row.multiUnitHint && <p className="flex items-center gap-1 text-[11px] font-medium text-info-fg"><Boxes className="size-3" aria-hidden="true" />≈ {row.multiUnitHint}</p>}
         </div>
       )}
+
+      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-line pt-2.5">
+        <span className="text-xs text-fg-subtle">{row.isProduct ? 'Sale rate' : 'Cost rate'}: <span className="font-semibold text-fg-muted"><RateCell row={row} /></span></span>
+        <RowActions {...props} compact />
+      </div>
     </li>
   );
 });
