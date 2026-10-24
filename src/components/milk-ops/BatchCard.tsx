@@ -77,11 +77,11 @@ export const BatchCard = memo(function BatchCard({
         <dl className="grid grid-cols-2 gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs">
           <div>
             <dt className="text-fg-subtle">Doodh in</dt>
-            <dd className="mt-0.5 font-bold tabular-nums text-fg">{formatQty(batch.quantity_input || 0)} L</dd>
+            <dd className="mt-0.5 font-bold tabular-nums text-fg">{formatQty(batch.quantity_input || 0, 3)} L</dd>
           </div>
           <div className="text-right">
             <dt className="text-fg-subtle">Target</dt>
-            <dd className="mt-0.5 font-bold tabular-nums text-fg">{formatQty(batch.quantity_output_estimated || 0)} {outputUnit}</dd>
+            <dd className="mt-0.5 font-bold tabular-nums text-fg">{formatQty(batch.quantity_output_estimated || 0, 3)} {outputUnit}</dd>
           </div>
         </dl>
 

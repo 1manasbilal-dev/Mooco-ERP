@@ -6,7 +6,7 @@ import { formatQty, getTodayLocalDate } from '../../lib/formatters';
 import { useProgressiveList } from '../../hooks/useProgressiveList';
 import { ProductionStage, type ProductionBatch } from '../../types';
 import { formatPkDay, formatPkTime, pkDay } from './milkOps';
-import { batchYield } from './productionStages';
+import { YIELD_COPY, batchYield, formatOfTarget, formatYieldPerLitre } from './productionStages';
 
 type StatusFilter = 'all' | 'completed' | 'cancelled';
 
@@ -23,6 +23,8 @@ const TONE_TEXT: Record<string, string> = {
 };
 
 const finishedAt = (batch: ProductionBatch) => batch.completed_date || batch.start_date || '';
+
+interface UsedMaterial { item_id?: string; name?: string; quantity: number; unit?: string; unit_cost?: number }
 
 /** Completed and cancelled batches, grouped by Pakistan day, paginated. Lazy-loaded by the Production screen. */
 export default function ProductionHistory({ batches, unitByProduct }: ProductionHistoryProps) {
@@ -151,16 +153,27 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
   const output = Number(batch.quantity_output_actual) || 0;
   const target = Number(batch.quantity_output_estimated) || 0;
   const yieldInfo = batchYield(output, input, target);
-  const profit = batch.financials?.gross_profit;
   const time = formatPkTime(at);
   const cancelLog = !isCompleted ? [...(batch.logs || [])].reverse().find(log => log.stage === ProductionStage.CANCELLED) : undefined;
+  // Completion saves the output and the cost snapshot inside `details`; the top-level columns stay empty.
+  const outputBreakdown = batch.output_breakdown || batch.details?.output_breakdown as ProductionBatch['output_breakdown'];
+  const financials = batch.financials || batch.details?.financials as ProductionBatch['financials'];
+  const profit = financials?.gross_profit;
+  // Recipe and packaging used, in each material's stock unit.
+  const snapshot = (batch.details?.cost_snapshot || null) as { milk_cost?: number; recipe_inputs?: UsedMaterial[]; packaging_inputs?: UsedMaterial[] } | null;
+  const materialsUsed = [...(snapshot?.recipe_inputs || []), ...(snapshot?.packaging_inputs || [])].filter(m => Number(m?.quantity) > 0);
+  const snapshotCost = snapshot && !financials ? {
+    milk: Number(snapshot.milk_cost) || 0,
+    materials: materialsUsed.reduce((sum, m) => sum + (Number(m.quantity) || 0) * (Number(m.unit_cost) || 0), 0),
+  } : null;
 
   const metrics = isCompleted ? (
     <>
-      <Stat label="Yield" value={yieldInfo.perLitre === null ? '—' : `${formatQty(yieldInfo.perLitre, 2)} ${unit}/L`} />
+      <Stat label={YIELD_COPY.perLitre.label} title={YIELD_COPY.perLitre.hint} value={formatYieldPerLitre(yieldInfo.perLitre, unit)} />
       <Stat
-        label="Target ka"
-        value={yieldInfo.ofTarget === null ? '—' : `${formatQty(yieldInfo.ofTarget, 1)}%`}
+        label={YIELD_COPY.ofTarget.label}
+        title={YIELD_COPY.ofTarget.hint}
+        value={formatOfTarget(yieldInfo.ofTarget)}
         className={TONE_TEXT[yieldInfo.tone]}
       />
       {profit !== undefined && <Stat label="Profit" value={<Money amount={profit} tone="signed" />} />}
@@ -191,8 +204,8 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
             {!isCompleted && <Badge tone="danger">Cancelled</Badge>}
           </div>
           <p className="mt-0.5 text-xs tabular-nums text-fg-subtle">
-            In {formatQty(input)} L
-            {isCompleted && <> · Out {formatQty(output)} {unit}</>}
+            In {formatQty(input, 3)} L
+            {isCompleted && <> · Out {formatQty(output, 3)} {unit}</>}
             {time && <> · {time}</>}
           </p>
         </div>
@@ -205,20 +218,36 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
         <div className="space-y-3 border-t border-line bg-surface-2/50 p-3 animate-fade-up sm:p-4">
           {cancelLog && <p className="text-sm text-danger-fg">{cancelLog.message}</p>}
 
-          {batch.financials && (
+          {financials ? (
             <dl className="grid grid-cols-2 gap-2 rounded-control border border-line bg-surface p-3 sm:grid-cols-4">
-              <Stat label="Milk cost" value={<Money amount={batch.financials.milk_cost} />} align="left" />
-              <Stat label="Additives" value={<Money amount={batch.financials.additives_cost} />} align="left" />
-              <Stat label="Total cost" value={<Money amount={batch.financials.total_cost} />} align="left" />
-              <Stat label="Sales value" value={<Money amount={batch.financials.sales_value} />} align="left" />
+              <Stat label="Milk cost" value={<Money amount={financials.milk_cost} />} align="left" />
+              <Stat label="Additives" value={<Money amount={financials.additives_cost} />} align="left" />
+              <Stat label="Total cost" value={<Money amount={financials.total_cost} />} align="left" />
+              <Stat label="Sales value" value={<Money amount={financials.sales_value} />} align="left" />
+            </dl>
+          ) : snapshotCost && (
+            <dl className="grid grid-cols-3 gap-2 rounded-control border border-line bg-surface p-3">
+              <Stat label="Milk cost" value={<Money amount={snapshotCost.milk} />} align="left" />
+              <Stat label="Materials" value={<Money amount={snapshotCost.materials} />} align="left" />
+              <Stat label="Total cost" value={<Money amount={snapshotCost.milk + snapshotCost.materials} />} align="left" />
             </dl>
           )}
 
-          {isCompleted && batch.output_breakdown && (
-            <div className="flex flex-wrap gap-1.5 text-xs">
-              {(batch.output_breakdown.loose_qty || 0) > 0 && <Badge>Loose {formatQty(batch.output_breakdown.loose_qty)} {unit}</Badge>}
-              {(batch.output_breakdown.variants || []).map((v, index) => (
+          {isCompleted && outputBreakdown && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="font-semibold text-fg-subtle">Stock mein gaya:</span>
+              {(outputBreakdown.loose_qty || 0) > 0 && <Badge>Loose {formatQty(outputBreakdown.loose_qty, 3)} {unit}</Badge>}
+              {(outputBreakdown.variants || []).map((v, index) => (
                 <Badge key={`${v.variant_name}-${index}`} tone="brand">{v.count} × {v.variant_name}</Badge>
+              ))}
+            </div>
+          )}
+
+          {isCompleted && materialsUsed.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="font-semibold text-fg-subtle">Materials kate:</span>
+              {materialsUsed.map((m, index) => (
+                <Badge key={`${m.item_id || m.name}-${index}`}>{m.name} {formatQty(m.quantity, 3)} {m.unit || ''}</Badge>
               ))}
             </div>
           )}
@@ -250,9 +279,9 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
   );
 });
 
-function Stat({ label, value, className, align = 'right' }: { label: string; value: React.ReactNode; className?: string; align?: 'left' | 'right' }) {
+function Stat({ label, value, className, title, align = 'right' }: { label: string; value: React.ReactNode; className?: string; title?: string; align?: 'left' | 'right' }) {
   return (
-    <div className={align === 'left' ? 'text-left' : 'sm:text-right'}>
+    <div className={align === 'left' ? 'text-left' : 'sm:text-right'} title={title}>
       <dt className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">{label}</dt>
       <dd className={cn('mt-0.5 text-sm font-bold tabular-nums text-fg', className)}>{value}</dd>
     </div>
