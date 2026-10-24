@@ -1,11 +1,13 @@
 import { businessDate, offsetDate, reportingHour } from '../dashboardAnalytics';
 import { saleNetCollection, salePaidAmount } from '../moneyFlow';
+import { cleanQty, formatQty } from '../formatters';
 import { saleLineStock, saleLineCostPerBase } from '../sellUnits';
-import { itemStockValue, returnedQtyForLine } from '../stockProfit';
+import { itemStockValue, returnedQtyForLine, type ItemStockValue } from '../stockProfit';
+import { logBaseDelta, logStockDelta, readStock, type LogStockDelta, type StockReading } from '../stockRules';
 import { isOpenStart } from './presets';
 import type { GroupBy, ReportData, ReportFilters } from './types';
 import type {
-  Customer, CustomerTransaction, ExpenseEntry, FinancialAccount, InventoryItem, ItemDefinition, POSBill, ShiftSession,
+  Customer, CustomerTransaction, ExpenseEntry, FinancialAccount, InventoryItem, InventoryLog, ItemDefinition, POSBill, ShiftSession,
   Supplier, SupplierTransaction
 } from '../../types';
 
@@ -266,18 +268,120 @@ export function inventoryRowOf(data: ReportData, item: ItemDefinition): Inventor
   return index.byItem.get(item.id) || index.byId.get(item.id) || index.byName.get(lower(item.name));
 }
 
+export interface ItemStockFigures extends ItemStockValue {
+  /** Piles, status and labels by the shared stock rules (docs/stock-model.md). */
+  reading: StockReading;
+}
+
+const stockCache = new WeakMap<ItemDefinition, { inventory: InventoryItem[]; figures: ItemStockFigures }>();
+
 /**
  * Stock on hand of one item, valued at cost and retail. Loose stock and pack counts come from the
  * live inventory row when there is one (returns, audits and purchases update it first), so Stock
- * Valuation, Low Stock and the Balance Sheet all show the same quantity.
+ * Valuation, Low Stock, Slow Stock and the Balance Sheet all show the same quantity.
+ * Quantities and status follow `readStock`; money follows `itemStockValue`. Hidden packs are physical
+ * stock, so they are counted and valued like any pack; negative piles show but are valued at 0.
  */
-export function itemStock(data: ReportData, item: ItemDefinition) {
+export function itemStock(data: ReportData, item: ItemDefinition): ItemStockFigures {
+  const cached = stockCache.get(item);
+  if (cached && cached.inventory === data.inventory) return cached.figures;
   const inv = inventoryRowOf(data, item);
   const loose = inv && inv.quantity !== undefined && inv.quantity !== null ? n(inv.quantity) : n((item as any).stock);
-  const variants = inv?.variant_stocks && Object.keys(inv.variant_stocks).length
+  const variantStocks = inv?.variant_stocks && Object.keys(inv.variant_stocks).length
     ? inv.variant_stocks
     : item.variant_stocks || inv?.variant_stocks || {};
-  return itemStockValue(item as any, loose, variants);
+  const reading = readStock(item, loose, variantStocks);
+  // itemStockValue values active packs only; a hidden pack still holds stock (docs/stock-model.md).
+  const valuedItem = { ...item, variants: (item.variants || []).map(v => (v.isActive === false ? { ...v, isActive: true } : v)) };
+  const figures: ItemStockFigures = { ...itemStockValue(valuedItem as any, loose, variantStocks), reading };
+  stockCache.set(item, { inventory: data.inventory, figures });
+  return figures;
+}
+
+/* ---------- Stock logs ---------- */
+
+export interface LogMoves extends LogStockDelta {
+  /** Packs moved on a pack the row does not name (old pack audits of products with several packs). Not in `baseDelta`. */
+  unknownPackDelta: number;
+  /** Packs moved but the row does not say which (old pack audits, server day-close counts): show a warning, never guess. */
+  packsUnrecorded: boolean;
+  /** Loose plus each ready-made pack × its size, in base units. */
+  baseDelta: number;
+  /** The old/new quantity columns describe the loose pile (true only when no pack moved). */
+  looseColumns: boolean;
+}
+
+/** Day-close rows: log_cnt_ / log_spoil_ / log_waste_ / log_tea_ + closing id + item id + counted pile. */
+const DAY_CLOSE_LOG = /^log_(cnt|spoil|waste|tea)_/;
+
+/** Same test as `logStockDelta`: the row carries pile details of its own. */
+function hasPileDetails(details: InventoryLog['details']): boolean {
+  if (!details) return false;
+  const loose: unknown = details.loose_delta;
+  const looseSaved = (typeof loose === 'number' && Number.isFinite(loose)) || (typeof loose === 'string' && loose.trim() !== '' && Number.isFinite(Number(loose)));
+  return looseSaved || typeof details.variant_id === 'string' || Boolean(details.variant_deltas && typeof details.variant_deltas === 'object');
+}
+
+/**
+ * Two older row shapes that saved a pack's count change in the loose columns with no pile details:
+ * - client day-close counts: the counted pile is the last part of the row id, so the pack is known;
+ * - pack audits saved before pile details (notes "Variant Audit"): the pack is not named, so the
+ *   count is kept as "packs, which one not saved" and never guessed (docs/stock-model.md).
+ */
+function legacyPackMove(log: InventoryLog): { delta: LogStockDelta; unknown: number } | null {
+  if (hasPileDetails(log.details)) return null;
+  const change = Number.isFinite(Number(log.difference)) ? n(log.difference) : n(log.new_quantity) - n(log.old_quantity);
+  const diff = cleanQty(change);
+  const id = String(log.id || '');
+  if (DAY_CLOSE_LOG.test(id) && log.item_id) {
+    const marker = `_${log.item_id}_`;
+    const at = id.lastIndexOf(marker);
+    const pile = at >= 0 ? id.slice(at + marker.length) : '';
+    if (!pile || pile === 'loose') return null;
+    return { delta: { looseDelta: 0, packDeltas: diff ? { [pile]: diff } : {} }, unknown: 0 };
+  }
+  if (/variant audit/i.test(String(log.notes || ''))) return { delta: { looseDelta: 0, packDeltas: {} }, unknown: diff };
+  return null;
+}
+
+/**
+ * The pile moves of one inventory_logs row, read through `logStockDelta` / `logBaseDelta` (every
+ * details shape, packs × size) plus the older shapes above. Reports read logs only through this.
+ */
+export function logMoves(log: InventoryLog, item?: ItemDefinition): LogMoves {
+  const legacy = legacyPackMove(log);
+  const delta: LogStockDelta & { unrecordedPacks?: boolean } = legacy ? legacy.delta : logStockDelta(log);
+  const unknown = legacy?.unknown || 0;
+  return {
+    looseDelta: delta.looseDelta,
+    packDeltas: delta.packDeltas,
+    unknownPackDelta: unknown,
+    packsUnrecorded: unknown !== 0 || delta.unrecordedPacks === true,
+    baseDelta: logBaseDelta(delta, item?.variants),
+    looseColumns: !legacy && !delta.unrecordedPacks && Object.keys(delta.packDeltas).length === 0,
+  };
+}
+
+const signedQty = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatQty(Math.abs(cleanQty(value)), 3)}`;
+
+/** Name of a pack id on an item, marked when it is hidden, a multi-unit (not a pile) or deleted. */
+export function packLabel(item: ItemDefinition | undefined, id: string): string {
+  const pack = (item?.variants || []).find(v => v.id === id);
+  if (!pack) return 'deleted pack';
+  if (pack.deduct_from_base === true) return `${pack.name} (old count, not stock)`;
+  return pack.isActive === false ? `${pack.name} (hidden)` : pack.name;
+}
+
+/** "−2 kg loose · +3 × 500 g tub": every pile a log row moved, packs per pack size (never added up as "N packs"). */
+export function describeLogMoves(moves: LogMoves, item?: ItemDefinition): string {
+  const unit = item?.unit || '';
+  const parts: string[] = [];
+  const packs = Object.entries(moves.packDeltas);
+  if (moves.looseDelta !== 0 || (!packs.length && !moves.packsUnrecorded)) parts.push(`${signedQty(moves.looseDelta)} ${unit} loose`.replace(/\s+/g, ' '));
+  packs.forEach(([id, d]) => parts.push(`${signedQty(d)} × ${packLabel(item, id)}`));
+  if (moves.unknownPackDelta) parts.push(`${signedQty(moves.unknownPackDelta)} packs (which pack not saved)`);
+  else if (moves.packsUnrecorded) parts.push('packs moved (not saved which)');
+  return parts.join(' · ');
 }
 
 /* ---------- Status rules shared by every report ---------- */

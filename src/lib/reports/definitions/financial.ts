@@ -41,15 +41,20 @@ function balanceWindow(data: ReportData, accounts: FinancialAccount[], f: Pick<R
   return { txs, current, opening, closing };
 }
 
-/** Stock at cost today, valued exactly like the Stock Valuation report (inactive items still holding stock included). */
+/**
+ * Stock at cost today, valued exactly like the Stock Valuation report: loose plus every pack pile
+ * (hidden packs too) at cost, negative piles at zero, inactive items still holding stock included.
+ */
 function stockAtCost(data: ReportData) {
   let missing = 0;
+  let negative = 0;
   const value = sum(data.items, item => {
     const v = itemStock(data, item);
     if (v.costMissing) missing++;
+    if (v.reading.status === 'minus') negative++;
     return v.costValue;
   });
-  return { value, missing };
+  return { value, missing, negative };
 }
 
 const unallocatedMilkValue = (data: ReportData) => sum(
@@ -704,6 +709,7 @@ export const financialReports: ReportDefinition[] = [
         notes: [
           { tone: 'info', text: 'Equity here is assets minus liabilities. Fixed assets and loans are not included.' },
           ...(stock.missing ? [{ tone: 'warn' as Tone, text: `${stock.missing} product(s) have stock but no cost price, so they are valued at zero.` }] : []),
+          ...(stock.negative ? [{ tone: 'warn' as Tone, text: `${stock.negative} product(s) show minus stock, valued at zero (same as Stock Valuation). Fix them with a stock count.` }] : []),
         ],
       };
     },

@@ -4,8 +4,10 @@ import type { CustomerOrder, ExpenseEntry, ItemDefinition, POSBill, PurchaseEntr
 import { businessDate, getDashboardPeriod, percentageChange, type DashboardRange } from '../../lib/dashboardAnalytics';
 import { cleanNumber, formatCurrency, formatQty } from '../../lib/formatters';
 import { isSpotSupplierPayment, saleCashCollected, saleNetCollection, saleOnlineCollected } from '../../lib/moneyFlow';
-import { availableSellUnits, saleLineStock } from '../../lib/sellUnits';
+import { saleLineStock } from '../../lib/sellUnits';
 import { returnedQtyForLine } from '../../lib/stockProfit';
+import { readStock, type StockStatus } from '../../lib/stockRules';
+import { convertQuantity } from '../../lib/unitConversion';
 
 export type DashboardPeriod = ReturnType<typeof getDashboardPeriod>;
 
@@ -324,16 +326,21 @@ export function summariseBalances(accounts: any[], cashInTransit: any, suppliers
 
 export interface MilkFlow { retailAllocated: number; productionInput: number; unallocated: number; }
 
-export function summariseMilkFlow(inventoryLogs: any[], productionBatches: any[], allocations: any[], period: DashboardPeriod): MilkFlow {
+export function summariseMilkFlow(inventoryLogs: any[], productionBatches: any[], allocations: any[], period: DashboardPeriod, index?: ItemIndex): MilkFlow {
   const inRange = (value: string | undefined) => { const day = dayKey(value); return day !== '' && day >= period.start && day <= period.end; };
 
-  // Counter: milk allocated to the retail counter in the selected range.
+  // Counter: milk allocated to the retail counter in the selected range. The log is in the milk
+  // item's own unit (a milk item may be stocked in ml), so it is converted to litres; a unit that
+  // doesn't convert (kg, unknown) is left out rather than counted as litres (docs/stock-model.md).
   let counterLogLiters = 0;
   for (const log of inventoryLogs) {
     if (!log.date || log.reason !== 'Allocation' || !inRange(log.date)) continue;
     const name = (log.item_name || '').toLowerCase();
     const isMilk = name.includes('milk') || name.includes('doodh') || name.includes('buffalo') || name.includes('cow');
-    if (isMilk && Number(log.difference) > 0) counterLogLiters += Number(log.difference);
+    const added = Number(log.difference);
+    if (!isMilk || !(added > 0)) continue;
+    const unit = index?.byId.get(log.item_id)?.unit || 'L';
+    counterLogLiters += convertQuantity(added, unit, 'L') ?? 0;
   }
 
   // Production: milk used in processing batches in the selected range.
@@ -369,14 +376,53 @@ export function summariseMilkFlow(inventoryLogs: any[], productionBatches: any[]
   };
 }
 
-export function lowStockCount(inventory: any[], index: ItemIndex): number {
-  let count = 0;
+/* ------------------------------------------------------------------ stock */
+
+/** Live piles of one product: loose and pack counts from its inventory row, else the catalog row (same source as the stock reports). */
+function livePiles(row: any, master: ItemDefinition): { loose: number; packs: Record<string, number> } {
+  const loose = row && row.quantity !== undefined && row.quantity !== null ? Number(row.quantity) || 0 : Number((master as any).stock) || 0;
+  const packs = row?.variant_stocks && Object.keys(row.variant_stocks).length ? row.variant_stocks : master.variant_stocks || row?.variant_stocks || {};
+  return { loose, packs };
+}
+
+function inventoryByItem(inventory: any[]): Map<string, any> {
+  const byItem = new Map<string, any>();
   for (const row of inventory) {
-    const master = (row.item_id && index.byId.get(row.item_id)) || index.byId.get(row.id);
-    const threshold = master?.reorder_level ?? 10;
-    if ((Number(row.quantity) || 0) <= threshold && threshold > 0) count += 1;
+    const id = row?.item_id || row?.id;
+    if (id && !byItem.has(id)) byItem.set(id, row);
   }
-  return count;
+  return byItem;
+}
+
+export interface StockAlertSummary {
+  /** Active products whose stock needs attention. */
+  count: number;
+  minus: number;
+  out: number;
+  low: number;
+  /** The first such product, for a one-product alert. */
+  first: { name: string; status: Exclude<StockStatus, 'ok'> } | null;
+}
+
+/**
+ * Products to restock or fix, by the one stock rule (`readStock(...).status`, docs/stock-model.md):
+ * minus (a pile below zero), out (nothing on hand / nothing sellable) or low (total, packs included,
+ * at or below the reorder level; 0 = no alert). Inactive products get no alerts. Same rule and same
+ * numbers as the Low Stock & Reorder report and Inventory.
+ */
+export function stockAlertSummary(inventory: any[], index: ItemIndex): StockAlertSummary {
+  const summary: StockAlertSummary = { count: 0, minus: 0, out: 0, low: 0, first: null };
+  const byItem = inventoryByItem(inventory);
+  for (const master of index.byId.values()) {
+    if (master.isActive === false) continue;
+    const { loose, packs } = livePiles(byItem.get(master.id), master);
+    const status = readStock(master, loose, packs).status;
+    if (status === 'ok') continue;
+    summary.count += 1;
+    summary[status] += 1;
+    if (!summary.first) summary.first = { name: master.name, status };
+  }
+  return summary;
 }
 
 /* ------------------------------------------------------ party cash flows */
@@ -469,6 +515,56 @@ export function recentActivity(sales: POSBill[], purchases: PurchaseEntry[], exp
   ].sort((a, b) => time(b.date) - time(a.date)).slice(0, 5);
 }
 
+/**
+ * Orders the current stock can't fill. Orders take stock in due order, so two orders for the last
+ * 5 kg are not both "ready", and the lines of one order are added per pile before comparing (2 kg
+ * loose + 1 dozen eggs both come from loose). Loose lines and multi-units (dozen, tray) draw from
+ * loose stock in the base unit; a ready-made pack draws from its own count, and a hidden pack can't be sold.
+ */
+export function ordersShortOfStock(orders: CustomerOrder[], inventory: any[], index: ItemIndex): { short: CustomerOrder[]; missing: string } {
+  const byItem = inventoryByItem(inventory);
+  const left = new Map<string, number>();
+  const pileLeft = (itemId: string, pileId: string) => {
+    const key = `${itemId}|${pileId}`;
+    if (!left.has(key)) {
+      const master = index.byId.get(itemId);
+      let start = 0;
+      if (master) {
+        const { loose, packs } = livePiles(byItem.get(itemId), master);
+        const pile = readStock(master, loose, packs).piles.find(p => p.id === pileId && (p.kind === 'loose' || p.kind === 'packed'));
+        start = pile && (pile.kind === 'loose' || pile.isActive) ? Math.max(0, pile.count) : 0;
+      }
+      left.set(key, start);
+    }
+    return left.get(key)!;
+  };
+  const short: CustomerOrder[] = [];
+  let missing = '';
+  const queue = [...orders].sort((a, b) => a.due_date.localeCompare(b.due_date) || String(a.due_time || '').localeCompare(String(b.due_time || '')));
+  for (const order of queue) {
+    const need = new Map<string, { itemId: string; pileId: string; qty: number; name: string }>();
+    for (const line of order.items || []) {
+      const move = saleLineStock({ qty: line.qty, variantId: line.variantId }, index.byId.get(line.itemId));
+      const pileId = move.variantId || 'loose';
+      const key = `${line.itemId}|${pileId}`;
+      const entry = need.get(key) || { itemId: line.itemId, pileId, qty: 0, name: line.name };
+      entry.qty += move.stockQty;
+      need.set(key, entry);
+    }
+    let lacking = '';
+    for (const entry of need.values()) {
+      const have = pileLeft(entry.itemId, entry.pileId);
+      if (entry.qty > have + 0.0005 && !lacking) lacking = entry.name;
+      left.set(`${entry.itemId}|${entry.pileId}`, have - entry.qty);
+    }
+    if (lacking) {
+      short.push(order);
+      if (!missing) missing = lacking;
+    }
+  }
+  return { short, missing };
+}
+
 export type AlertIcon = 'late' | 'today' | 'order' | 'stock' | 'delivery' | 'ready' | 'milk' | 'cash' | 'bills' | 'error';
 export interface DashboardAlert { id: string; title: string; detail: string; module: string; icon: AlertIcon; path?: string; tone: 'danger' | 'warning' | 'info' | 'neutral'; }
 
@@ -485,19 +581,11 @@ export function orderAlerts(input: {
   const horizon = new Date(`${todayKey}T12:00:00`);
   horizon.setDate(horizon.getDate() + 2);
   const horizonKey = `${horizon.getFullYear()}-${String(horizon.getMonth() + 1).padStart(2, '0')}-${String(horizon.getDate()).padStart(2, '0')}`;
-  const stockById = new Map<string, any>();
-  for (const row of inventory) if (row.item_id && !stockById.has(row.item_id)) stockById.set(row.item_id, row);
-  const available = (line: CustomerOrder['items'][number]) => {
-    const stock = stockById.get(line.itemId);
-    const product = index.byId.get(line.itemId);
-    const variant = line.variantId ? product?.variants?.find(row => row.id === line.variantId) : undefined;
-    return availableSellUnits(Number(stock?.quantity) || 0, Number(stock?.variant_stocks?.[line.variantId || ''] || 0), variant);
-  };
   const late = orders.filter(order => order.due_date < todayKey);
   const today = orders.filter(order => order.due_date === todayKey);
   const near = orders.filter(order => order.due_date > todayKey && order.due_date <= horizonKey);
   const soon = orders.filter(order => order.due_date <= horizonKey);
-  const short = soon.filter(order => order.items.some(line => line.qty > available(line)));
+  const { short, missing } = ordersShortOfStock(soon, inventory, index);
   const deliveries = orders.filter(order => order.fulfillment === 'Delivery' && order.due_date <= todayKey);
   const pending = soon.filter(order => order.status === 'Pending');
   const ready = orders.filter(order => order.status === 'Ready' || (order.status === 'Confirmed' && order.due_date <= todayKey));
@@ -507,8 +595,7 @@ export function orderAlerts(input: {
   if (today.length) alerts.push({ id: 'orders-today', title: nameOf(today, o => `${o.customer_name}'s order is due today`, n => `${n} orders are due today`), detail: 'Pickup and delivery for today', module: 'customer-orders', icon: 'today', path: '/customer-orders', tone: 'warning' });
   if (near.length) alerts.push({ id: 'orders-near', title: nameOf(near, o => `${o.customer_name}'s order is near`, n => `${n} orders are near`), detail: near.length === 1 ? `Due ${shortDay(near[0].due_date)}` : 'Due in the next 2 days', module: 'customer-orders', icon: 'order', path: '/customer-orders', tone: 'info' });
   if (short.length) {
-    const missing = short.length === 1 ? short[0].items.find(line => line.qty > available(line))?.name : '';
-    alerts.push({ id: 'orders-stock', title: nameOf(short, o => `Complete stock for ${o.customer_name}`, n => `Complete stock for ${n} orders`), detail: missing || 'Prepare the booked items first', module: 'inventory', icon: 'stock', path: '/inventory', tone: 'warning' });
+    alerts.push({ id: 'orders-stock', title: nameOf(short, o => `Complete stock for ${o.customer_name}`, n => `Complete stock for ${n} orders`), detail: (short.length === 1 && missing) || 'Prepare the booked items first', module: 'inventory', icon: 'stock', path: '/inventory', tone: 'warning' });
   }
   if (deliveries.length) alerts.push({ id: 'orders-delivery', title: nameOf(deliveries, o => `Send ${o.customer_name}'s delivery`, n => `${n} deliveries to send`), detail: 'Due today or already late', module: 'customer-orders', icon: 'delivery', path: '/customer-orders', tone: 'warning' });
   if (pending.length) alerts.push({ id: 'orders-pending', title: nameOf(pending, o => `Confirm ${o.customer_name}'s booking`, n => `${n} bookings need confirm`), detail: 'Still pending', module: 'customer-orders', icon: 'order', path: '/customer-orders', tone: 'info' });
@@ -519,10 +606,25 @@ export function orderAlerts(input: {
   return alerts;
 }
 
-export function operationalAlerts(input: { unallocatedLiters: number; lowStock: number; inTransit: number; unpaidExpenses: number }): DashboardAlert[] {
+const STOCK_ALERT_WORDS: Record<Exclude<StockStatus, 'ok'>, string> = { minus: 'is in minus stock', out: 'is out of stock', low: 'is low on stock' };
+
+/** "Paneer is out of stock" for one product; "1 minus · 2 out of stock · 3 low" for several. */
+export function stockAlertDetail(stock: StockAlertSummary): string {
+  if (stock.count === 1 && stock.first) return `${stock.first.name} ${STOCK_ALERT_WORDS[stock.first.status]}`;
+  return [
+    stock.minus ? `${stock.minus} minus` : '',
+    stock.out ? `${stock.out} out of stock` : '',
+    stock.low ? `${stock.low} low` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+export function operationalAlerts(input: { unallocatedLiters: number; stock: StockAlertSummary; inTransit: number; unpaidExpenses: number }): DashboardAlert[] {
   const alerts: DashboardAlert[] = [];
   if (input.unallocatedLiters > 0) alerts.push({ id: 'milk', title: 'Milk ready to allocate', detail: `${formatQty(input.unallocatedLiters)} L in your tank`, module: 'allocation', icon: 'milk', tone: 'info' });
-  if (input.lowStock > 0) alerts.push({ id: 'stock', title: 'Stock needs attention', detail: `${input.lowStock} items at reorder level`, module: 'inventory', icon: 'stock', tone: 'warning' });
+  if (input.stock.count > 0) {
+    const urgent = input.stock.minus + input.stock.out > 0;
+    alerts.push({ id: 'stock', title: 'Stock needs attention', detail: stockAlertDetail(input.stock), module: 'inventory', icon: 'stock', tone: urgent ? 'danger' : 'warning' });
+  }
   if (input.inTransit > 0) alerts.push({ id: 'transit', title: 'Cash awaiting receipt', detail: `${formatCurrency(input.inTransit)} in transit`, module: 'cash-control', icon: 'cash', tone: 'warning' });
   if (input.unpaidExpenses > 0) alerts.push({ id: 'bills', title: 'Expenses to settle', detail: `${formatCurrency(input.unpaidExpenses)} outstanding`, module: 'expenses', icon: 'bills', tone: 'neutral' });
   return alerts;
