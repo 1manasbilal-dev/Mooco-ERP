@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRetailMilkStock } from '../retailMilkStock';
+import { getRetailMilkStock, litresToStockUnit, litreUnitOf, stockUnitToLitres } from '../retailMilkStock';
 import { StockType, type InventoryItem, type ItemDefinition } from '../../types';
 
 const master = (patch: Partial<ItemDefinition>): ItemDefinition => ({
@@ -30,7 +30,30 @@ describe('getRetailMilkStock', () => {
     expect(summary.totalCostValue).toBe(8100 + 1615);
     expect(summary.rows[0]).toMatchObject({ name: 'Buffalo Milk', milkType: 'Buffalo', percentOfTotal: 81, unit: 'L', stockUnit: 'L', stockQuantity: 40.5 });
     expect(summary.rows[1]).toMatchObject({ milkType: 'Cow', percentOfTotal: 19 });
-    expect(summary.avgRate).toBe(232);
+    expect(summary.avgRate).toBe(232.4);
+    expect(summary.avgCostRate).toBe(194.3);
+  });
+
+  it('shows minus counter milk in litres but values it at zero', () => {
+    const summary = getRetailMilkStock([
+      stock({ id: 's1', item_id: 'buf', name: 'Buffalo Milk', quantity: 10 }),
+      stock({ id: 's2', item_id: 'cow', name: 'Cow Milk', quantity: -4 })
+    ], items);
+    expect(summary.liters).toBe(6);
+    expect(summary.rows.find(r => r.id === 's2')).toMatchObject({ liters: -4, value: 0, costValue: 0, percentOfTotal: 0 });
+    expect(summary.totalValue).toBe(2400);
+    expect(summary.avgRate).toBe(240);
+  });
+
+  it('reads everyday litre spellings and converts litres to and from the stock unit', () => {
+    const summary = getRetailMilkStock([stock({ id: 's1', item_id: 'buf', name: 'Buffalo Milk', unit: 'Ltr', quantity: 3 })], items);
+    expect(summary.rows[0]).toMatchObject({ liters: 3, stockUnit: 'L' });
+    expect(litreUnitOf('millilitres')).toBe('ml');
+    expect(litreUnitOf('kg')).toBeNull();
+    expect(litresToStockUnit(2.5, 'ml')).toBe(2500);
+    expect(litresToStockUnit(2.5, 'L')).toBe(2.5);
+    expect(litresToStockUnit(2.5, 'kg')).toBeNull();
+    expect(stockUnitToLitres(1250, 'ml')).toBe(1.25);
   });
 
   it('converts millilitre stock and per-ml rates to litres', () => {
