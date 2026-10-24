@@ -87,7 +87,7 @@ describe('stock count piles', () => {
     const tub = piles.find(p => p.id === 'tub500')!;
     expect(readPileCount(tub, '')).toMatchObject({ counted: null, diff: 0 });
     expect(readPileCount(tub, '4')).toMatchObject({ counted: 4, diff: -2, baseDiff: -1 });
-    expect(readPileCount(tub, '4.5').error).toMatch(/poore/);
+    expect(readPileCount(tub, '4.5').error).toMatch(/whole/);
     const loose = piles[0];
     expect(readPileCount(loose, '3.25')).toMatchObject({ diff: -0.75, baseDiff: -0.75 });
     expect(readPileCount(loose, '-1').error).toBeTruthy();

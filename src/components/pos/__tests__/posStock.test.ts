@@ -78,19 +78,19 @@ describe('sellQtyProblem', () => {
 
   it('checks the pile after the cart in the option’s own unit', () => {
     expect(sellQtyProblem('Anday', loose, 24, false, 'pcs')).toBeNull();
-    expect(sellQtyProblem('Anday', loose, 25, false, 'pcs')).toBe('Anday: sirf 24 pcs baqi hai (cart ke baad).');
-    expect(sellQtyProblem('Anday', dozen, 3, false, 'pcs')).toBe('Anday (Dozen): sirf 2 Dozen baqi hai (cart ke baad).');
-    expect(sellQtyProblem('Anday', tray, 4, false, 'pcs')).toBe('Anday (Tray): sirf 3 Tray baqi hai.');
+    expect(sellQtyProblem('Anday', loose, 25, false, 'pcs')).toBe('Anday: only 24 pcs left (after the cart).');
+    expect(sellQtyProblem('Anday', dozen, 3, false, 'pcs')).toBe('Anday (Dozen): only 2 Dozen left (after the cart).');
+    expect(sellQtyProblem('Anday', tray, 4, false, 'pcs')).toBe('Anday (Tray): only 3 Tray left.');
   });
 
   it('keeps packs whole and lets the negative-stock setting through', () => {
-    expect(sellQtyProblem('Anday', tray, 1.5, true, 'pcs')).toBe('Anday (Tray): poore packs mein bikta hai (1, 2, 3...).');
+    expect(sellQtyProblem('Anday', tray, 1.5, true, 'pcs')).toBe('Anday (Tray): sells in whole packs only (1, 2, 3...).');
     expect(sellQtyProblem('Anday', loose, 500, true, 'pcs')).toBeNull();
   });
 
   it('says when everything left is already in the cart', () => {
     const [allInCart] = posSellOptions(product, [{ id: 'eggs', cartItemId: 'x', qty: 30, isLoose: true, deductFromBase: true }]);
-    expect(sellQtyProblem('Anday', allInCart, 1, false, 'pcs')).toBe('Anday: stock khatam — jo tha woh cart mein hai.');
+    expect(sellQtyProblem('Anday', allInCart, 1, false, 'pcs')).toBe('Anday: out of stock — what was left is in the cart.');
   });
 });
 
@@ -108,7 +108,7 @@ describe('pile totals', () => {
     ]);
     const short = pileShortages(lines, () => ({ loose: 30, packs: { v_tray: 2 } }));
     expect(short).toEqual([{ itemId: 'eggs', pileId: 'loose', need: 42, lines: 3, have: 30 }]);
-    expect(shortageText(short[0], eggs)).toBe('Anday loose: 42 pcs chahiye, 30 pcs hai');
+    expect(shortageText(short[0], eggs)).toBe('Anday loose: need 42 pcs, have 30 pcs');
   });
 
   it('reads POS cart lines from their own snapshot', () => {
@@ -118,6 +118,6 @@ describe('pile totals', () => {
     ]);
     const short = pileShortages(lines, () => ({ loose: 12, packs: { v_tray: 1 } }));
     expect(short.map(s => [s.pileId, s.need, s.have])).toEqual([['v_tray', 2, 1]]);
-    expect(shortageText(short[0], eggs)).toBe('Anday (Tray): 2 chahiye, 1 hain');
+    expect(shortageText(short[0], eggs)).toBe('Anday (Tray): need 2, have 1');
   });
 });

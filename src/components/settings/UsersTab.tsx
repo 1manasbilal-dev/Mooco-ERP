@@ -59,7 +59,7 @@ const PermissionMatrix: React.FC<{
                     disabled={readOnly}
                     onClick={() => toggleModule(mod.id, keys)}
                     className="flex w-full shrink-0 items-center justify-between gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default sm:w-44"
-                    title={readOnly ? undefined : 'Sab on / off'}
+                    title={readOnly ? undefined : 'All on / off'}
                   >
                     <span className="text-sm font-semibold text-fg">{mod.label}</span>
                     <span className={cn('text-[11px] font-bold tabular-nums', count === keys.length ? 'text-brand-fg' : count ? 'text-warning-fg' : 'text-fg-faint')}>{count}/{keys.length}</span>
@@ -76,7 +76,7 @@ const PermissionMatrix: React.FC<{
                           aria-pressed={on}
                           disabled={readOnly || isLocked}
                           onClick={() => toggle(mod.id, key)}
-                          title={isLocked ? 'Role se mila hai' : undefined}
+                          title={isLocked ? 'Given by the role' : undefined}
                           className={cn(
                             'rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 ring-inset transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed',
                             on ? 'bg-brand-soft text-brand-fg ring-brand/30' : 'bg-surface text-fg-subtle ring-line hover:ring-line-strong',
@@ -115,13 +115,13 @@ const RoleModal: React.FC<{ role: AppRole | null; viewOnly: boolean; onClose: ()
 
   const trimmed = name.trim();
   const duplicate = Boolean(trimmed) && roles.some(r => r.id !== role?.id && r.name.trim().toLowerCase() === trimmed.toLowerCase());
-  const nameError = !trimmed ? (tried ? 'Role ka naam likhein.' : undefined) : duplicate ? 'Is naam ka role pehle se hai.' : undefined;
+  const nameError = !trimmed ? (tried ? 'Enter a role name.' : undefined) : duplicate ? 'A role with this name already exists.' : undefined;
 
   const save = async () => {
     if (savingRef.current) return;
     setTried(true);
-    if (!isSystem && (!trimmed || duplicate)) return showToast(!trimmed ? 'Role ka naam likhein' : 'Is naam ka role pehle se hai', 'warning');
-    if (perms.size === 0) return showToast('Kam az kam ek permission chunein', 'warning');
+    if (!isSystem && (!trimmed || duplicate)) return showToast(!trimmed ? 'Enter a role name' : 'A role with this name already exists', 'warning');
+    if (perms.size === 0) return showToast('Pick at least one permission', 'warning');
     savingRef.current = true;
     setSaving(true);
     try {
@@ -142,10 +142,10 @@ const RoleModal: React.FC<{ role: AppRole | null; viewOnly: boolean; onClose: ()
       onClose={onClose}
       size="lg"
       dismissible={!saving}
-      title={viewOnly ? role?.name || 'Role' : role ? `Edit role: ${role.name}` : 'Naya role'}
-      description={viewOnly ? 'Is role ki permissions.' : 'Chunein ke is role wala staff kya dekh aur kar sakta hai.'}
+      title={viewOnly ? role?.name || 'Role' : role ? `Edit role: ${role.name}` : 'New role'}
+      description={viewOnly ? 'Permissions of this role.' : 'Choose what staff with this role can see and do.'}
       footer={viewOnly ? (
-        <Button variant="secondary" onClick={onClose}>Band karein</Button>
+        <Button variant="secondary" onClick={onClose}>Close</Button>
       ) : <>
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button onClick={save} loading={saving}>{saving ? 'Saving…' : role ? 'Save role' : 'Create role'}</Button>
@@ -154,20 +154,20 @@ const RoleModal: React.FC<{ role: AppRole | null; viewOnly: boolean; onClose: ()
       <div className="space-y-4 pb-1">
         {!viewOnly && (
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Role name" required error={isSystem ? undefined : nameError} hint={isSystem ? 'Built-in role ka naam nahi badalta.' : undefined}>
+            <Field label="Role name" required error={isSystem ? undefined : nameError} hint={isSystem ? "A built-in role's name can't be changed." : undefined}>
               {c => <Input {...c} disabled={isSystem} value={name} maxLength={40} onChange={e => setName(e.target.value)} placeholder="Sales Assistant" />}
             </Field>
             <Field label="Description">
-              {c => <Input {...c} disabled={isSystem} value={description} maxLength={120} onChange={e => setDescription(e.target.value)} placeholder="Khata dekh sakta hai, delete nahi" />}
+              {c => <Input {...c} disabled={isSystem} value={description} maxLength={120} onChange={e => setDescription(e.target.value)} placeholder="Can view ledgers, can't delete" />}
             </Field>
           </div>
         )}
         {!viewOnly && (
           <div className="flex flex-wrap items-center gap-1 text-xs">
-            <span className="mr-1 font-semibold text-fg-subtle">Jaldi chunein:</span>
-            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set(ALL_ACTION_KEYS))}>Sab kuch</Button>
-            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set(ALL_PERMISSION_MODULES.flatMap(m => m.actions.some(a => a.key === 'view') ? [actionKey(m.id, 'view')] : [])))}>Sirf dekhna</Button>
-            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set())}>Sab hatayein</Button>
+            <span className="mr-1 font-semibold text-fg-subtle">Quick pick:</span>
+            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set(ALL_ACTION_KEYS))}>Everything</Button>
+            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set(ALL_PERMISSION_MODULES.flatMap(m => m.actions.some(a => a.key === 'view') ? [actionKey(m.id, 'view')] : [])))}>View only</Button>
+            <Button variant="ghost" size="sm" onClick={() => setPerms(new Set())}>Clear all</Button>
           </div>
         )}
         <PermissionMatrix value={perms} readOnly={viewOnly} onChange={setPerms} />
@@ -205,19 +205,19 @@ const UserModal: React.FC<{ user: AppUser | null; onClose: () => void }> = ({ us
   const username = form.username.trim();
   const usernameTaken = Boolean(username) && users.some(u => u.id !== user?.id && u.username.trim().toLowerCase() === username.toLowerCase());
   const errors = {
-    name: tried && !form.name.trim() ? 'Naam zaroori hai.' : undefined,
-    username: usernameTaken ? 'Ye username kisi aur user ka hai.' : tried && !username ? 'Username zaroori hai.' : undefined,
-    pin: (tried || form.pin.length === 4) && (!user || form.pin) && !PIN_PATTERN.test(form.pin) ? '4 digit PIN likhein (misal 1234).' : undefined,
+    name: tried && !form.name.trim() ? 'Name is required.' : undefined,
+    username: usernameTaken ? 'Another user already has this username.' : tried && !username ? 'Username is required.' : undefined,
+    pin: (tried || form.pin.length === 4) && (!user || form.pin) && !PIN_PATTERN.test(form.pin) ? 'Enter a 4-digit PIN (e.g. 1234).' : undefined,
   };
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (savingRef.current) return;
     setTried(true);
-    if (!form.name.trim()) return showToast('Naam zaroori hai', 'warning');
-    if (!username) return showToast('Username zaroori hai', 'warning');
-    if (usernameTaken) return showToast('Ye username kisi aur user ka hai', 'warning');
-    if ((!user || form.pin) && !PIN_PATTERN.test(form.pin)) return showToast('4 digit PIN likhein (misal 1234)', 'warning');
+    if (!form.name.trim()) return showToast('Name is required', 'warning');
+    if (!username) return showToast('Username is required', 'warning');
+    if (usernameTaken) return showToast('Another user already has this username', 'warning');
+    if ((!user || form.pin) && !PIN_PATTERN.test(form.pin)) return showToast('Enter a 4-digit PIN (e.g. 1234)', 'warning');
     savingRef.current = true;
     setSaving(true);
     try {
@@ -242,27 +242,27 @@ const UserModal: React.FC<{ user: AppUser | null; onClose: () => void }> = ({ us
       onClose={onClose}
       size={showExtra ? 'lg' : 'md'}
       dismissible={!saving}
-      title={user ? `Edit: ${user.name}` : 'Naya user'}
-      description="Har user apne 4 digit PIN se login karta hai."
+      title={user ? `Edit: ${user.name}` : 'New user'}
+      description="Each user logs in with their own 4-digit PIN."
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button type="submit" form="user-form" loading={saving}>{saving ? 'Saving…' : user ? 'Save user' : 'Create user'}</Button>
       </>}
     >
       <form id="user-form" onSubmit={save} className="space-y-4 pb-1" noValidate>
-        <Field label="Poora naam" required error={errors.name}>
+        <Field label="Full name" required error={errors.name}>
           {c => <Input {...c} value={form.name} maxLength={60} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Ali Raza" autoComplete="off" />}
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Username" required error={errors.username}>
             {c => <Input {...c} value={form.username} maxLength={30} onChange={e => setForm({ ...form, username: e.target.value.toLowerCase().replace(/\s+/g, '') })} placeholder="ali" autoComplete="off" autoCapitalize="none" spellCheck={false} />}
           </Field>
-          <Field label={user ? 'Naya PIN (khali = wahi)' : 'PIN (4 digit)'} required={!user} error={errors.pin}>
+          <Field label={user ? 'New PIN (blank = keep)' : 'PIN (4 digits)'} required={!user} error={errors.pin}>
             {c => <Input {...c} type="password" inputMode="numeric" maxLength={4} autoComplete="new-password" className="text-center font-mono tracking-[0.4em]" value={form.pin} onChange={e => setForm({ ...form, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })} placeholder="••••" />}
           </Field>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Role" required hint={lockedSelf ? 'Apna role khud nahi badal sakte.' : undefined}>
+          <Field label="Role" required hint={lockedSelf ? "You can't change your own role." : undefined}>
             {c => isOwner ? (
               <div className="flex h-10 items-center gap-2 rounded-control bg-brand-soft px-3.5 text-sm font-bold text-brand-fg ring-1 ring-inset ring-brand/25"><Crown size={14} aria-hidden="true" /> Owner (fixed)</div>
             ) : (
@@ -276,15 +276,15 @@ const UserModal: React.FC<{ user: AppUser | null; onClose: () => void }> = ({ us
           </Field>
         </div>
         {!isOwner && !isSelf && (
-          <Toggle label="Login active" description="Band karne se user login nahi kar sakega; purana record waise hi rahega." checked={form.is_active} onChange={v => setForm({ ...form, is_active: v })} />
+          <Toggle label="Login active" description="When off, the user can't log in; their old records stay as they are." checked={form.is_active} onChange={v => setForm({ ...form, is_active: v })} />
         )}
-        {lockedSelf && <Notice icon={<Lock />}>Apna role, extra access aur login khud nahi badal sakte. Owner ya koi aur manager badal sakta hai.</Notice>}
+        {lockedSelf && <Notice icon={<Lock />}>You can't change your own role, extra access or login. The Owner or another manager can.</Notice>}
         {!isOwner && !lockedSelf && (
           <div className="rounded-control ring-1 ring-inset ring-line">
             <button type="button" onClick={() => setShowExtra(v => !v)} aria-expanded={showExtra} className="flex w-full items-center justify-between gap-2 rounded-control p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <span>
                 <span className="flex items-center gap-2 text-sm font-semibold text-fg">Extra access {extraOnly.length > 0 && <Badge tone="brand">+{extraOnly.length}</Badge>}</span>
-                <span className="block text-xs text-fg-subtle">Sirf is user ko role se zyada ijazat dein — naya role banane ki zaroorat nahi.</span>
+                <span className="block text-xs text-fg-subtle">Give just this user more access than their role — no need for a new role.</span>
               </span>
               <ChevronDown size={16} className={cn('shrink-0 text-fg-faint transition-transform duration-150', showExtra && 'rotate-180')} aria-hidden="true" />
             </button>
@@ -326,32 +326,32 @@ export const UsersTab: React.FC = () => {
     const disabling = u.is_active !== false;
     if (disabling && !(await confirmAction({
       tone: 'warning',
-      title: `"${u.name}" ka login band karein?`,
-      consequences: ['Ye user login nahi kar sakega.', 'Is ke purane bills aur payments waise hi rahenge.', 'Baad mein Enable se wapas khul sakta hai.'],
-      confirmLabel: 'Haan, band karein',
+      title: `Disable login for "${u.name}"?`,
+      consequences: ["This user won't be able to log in.", 'Their old bills and payments stay as they are.', 'You can turn it back on later with Enable.'],
+      confirmLabel: 'Yes, disable',
     }))) return;
     await updateUser(u.id, { is_active: !disabling });
   });
   const removeUser = (u: AppUser) => withBusy(u.id, async () => {
-    if (await confirmAction({ title: `"${u.name}" ko delete karein?`, consequences: ['Ye user login nahi kar sakega.', 'Is ke purane bills aur payments waise hi rahenge.'] })) await deleteUser(u.id);
+    if (await confirmAction({ title: `Delete "${u.name}"?`, consequences: ["This user won't be able to log in.", 'Their old bills and payments stay as they are.'] })) await deleteUser(u.id);
   });
   const removeRole = (r: AppRole) => withBusy(r.id, async () => {
-    if (await confirmAction({ title: `Role "${r.name}" delete karein?`, consequences: ['Is role ki permissions hat jayengi.'] })) await deleteRole(r.id);
+    if (await confirmAction({ title: `Delete role "${r.name}"?`, consequences: ["This role's permissions will be removed."] })) await deleteRole(r.id);
   });
 
   return (
     <div className="space-y-4">
       <TabHeader
         title="Users & Access"
-        description="Kaun login kar sakta hai aur har role kya kar sakta hai."
+        description="Who can log in and what each role can do."
         action={<Button leftIcon={<UserPlus />} onClick={() => setUserModal({ user: null })}>Add user</Button>}
       />
 
       <Card>
         <CardHeader title={<>Users <span className="font-semibold tabular-nums text-fg-subtle">({users.length})</span></>} icon={<Users />}
-          description="Owner hamesha full access rakhta hai." />
+          description="The Owner always has full access." />
         <div className="px-5 pb-3">
-          <SearchInput value={query} onChange={setQuery} placeholder="Naam, username ya phone dhoondein" aria-label="Users dhoondein" className="sm:max-w-xs" />
+          <SearchInput value={query} onChange={setQuery} placeholder="Search name, username or phone" aria-label="Search users" className="sm:max-w-xs" />
         </div>
         <div className="overflow-x-auto border-t border-line">
           <table className="w-full border-collapse text-sm">
@@ -410,10 +410,10 @@ export const UsersTab: React.FC = () => {
                           </Button>
                         )}
                         {canEditRow
-                          ? <IconButton size="sm" icon={<Edit2 />} aria-label={`${u.name} edit karein`} onClick={() => setUserModal({ user: u })} />
-                          : <IconButton size="sm" icon={<Lock />} aria-label="Owner account sirf Owner badal sakta hai" disabled />}
+                          ? <IconButton size="sm" icon={<Edit2 />} aria-label={`Edit ${u.name}`} onClick={() => setUserModal({ user: u })} />
+                          : <IconButton size="sm" icon={<Lock />} aria-label="Only the Owner can change the Owner account" disabled />}
                         {!owner && !isSelf && (
-                          <IconButton size="sm" icon={<Trash2 />} aria-label={`${u.name} delete karein`} onClick={() => void removeUser(u)} disabled={Boolean(busyId)} className="hover:bg-danger-soft hover:text-danger-fg" />
+                          <IconButton size="sm" icon={<Trash2 />} aria-label={`Delete ${u.name}`} onClick={() => void removeUser(u)} disabled={Boolean(busyId)} className="hover:bg-danger-soft hover:text-danger-fg" />
                         )}
                       </div>
                     </TD>
@@ -422,12 +422,12 @@ export const UsersTab: React.FC = () => {
               })}
             </TBody>
           </table>
-          {filtered.length === 0 && <EmptyState size="compact" icon={<Users />} title="Koi user nahi mila." description={query ? 'Doosra naam ya username try karein.' : undefined} />}
+          {filtered.length === 0 && <EmptyState size="compact" icon={<Users />} title="No users found." description={query ? 'Try another name or username.' : undefined} />}
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="Roles" icon={<Shield />} description="Role ki permissions us ke sab users par lagti hain."
+        <CardHeader title="Roles" icon={<Shield />} description="A role's permissions apply to all of its users."
           actions={<Button variant="secondary" size="sm" leftIcon={<Plus />} onClick={() => setRoleModal({ role: null, viewOnly: false })}>New role</Button>} />
         <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2">
           {roles.map(r => {
@@ -460,10 +460,10 @@ export const UsersTab: React.FC = () => {
                       <Badge icon={<Lock aria-hidden="true" />}>Locked</Badge>
                     ) : (
                       <>
-                        <IconButton size="sm" icon={<Eye />} aria-label={`${r.name} dekhein`} onClick={() => setRoleModal({ role: r, viewOnly: true })} />
-                        {!ownRole && <IconButton size="sm" icon={<Edit2 />} aria-label={`${r.name} edit karein`} onClick={() => setRoleModal({ role: r, viewOnly: false })} />}
+                        <IconButton size="sm" icon={<Eye />} aria-label={`View ${r.name}`} onClick={() => setRoleModal({ role: r, viewOnly: true })} />
+                        {!ownRole && <IconButton size="sm" icon={<Edit2 />} aria-label={`Edit ${r.name}`} onClick={() => setRoleModal({ role: r, viewOnly: false })} />}
                         {!r.is_system && members === 0 && (
-                          <IconButton size="sm" icon={<Trash2 />} aria-label={`${r.name} delete karein`} onClick={() => void removeRole(r)} disabled={Boolean(busyId)} className="hover:bg-danger-soft hover:text-danger-fg" />
+                          <IconButton size="sm" icon={<Trash2 />} aria-label={`Delete ${r.name}`} onClick={() => void removeRole(r)} disabled={Boolean(busyId)} className="hover:bg-danger-soft hover:text-danger-fg" />
                         )}
                       </>
                     )}

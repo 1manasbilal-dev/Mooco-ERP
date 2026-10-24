@@ -43,7 +43,7 @@ export interface ReturnRequest {
 
 /**
  * Return a purchase (or part of it) to the supplier. A wrong milk slip is corrected by returning it
- * in full as a data-entry error and typing it again, so the khata and drawer stay balanced.
+ * in full as a data-entry error and typing it again, so the ledger and drawer stay balanced.
  */
 const ReturnPurchaseModal: React.FC<{
   request: ReturnRequest | null;
@@ -90,7 +90,7 @@ const ReturnPurchaseModal: React.FC<{
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     // Enter pressed twice submits before the disabled button re-renders; a second return would
-    // refund and lower the khata again.
+    // refund and lower the ledger balance again.
     if (busy || busyRef.current) return;
     if (material) {
       const problem = returnQtyProblem(numQty, maxQty, material.pile, unit);
@@ -135,7 +135,7 @@ const ReturnPurchaseModal: React.FC<{
           {request.correct ? <PencilLine size={18} /> : <RotateCcw size={18} />}
         </span>
       }
-      title={request.correct ? 'Galat entry theek karein' : 'Return to supplier'}
+      title={request.correct ? 'Fix a wrong entry' : 'Return to supplier'}
       description={supplierName}
     >
       <form onSubmit={submit} className="space-y-4 pb-1">
@@ -146,7 +146,7 @@ const ReturnPurchaseModal: React.FC<{
               ? `${formatQty(entry.quantity)} L · ${entry.milk_type} · ${entry.shift}`
               : `${purchaseQtyText(Number(entry.quantity) || 0, entry.unit, pile || { kind: 'loose' })} · ${entry.item_name}`}
             {' · '}<Money amount={entryTotal} />
-            {material && material.returned > 0 && <span className="block text-[11px] font-semibold text-fg-subtle">{purchaseQtyText(material.returned, unit, material.pile)} pehle wapas ho chuka</span>}
+            {material && material.returned > 0 && <span className="block text-[11px] font-semibold text-fg-subtle">{purchaseQtyText(material.returned, unit, material.pile)} already returned</span>}
           </span>
         </div>
 
@@ -155,8 +155,8 @@ const ReturnPurchaseModal: React.FC<{
           required
           error={qtyProblem || undefined}
           hint={material
-            ? <>Max <b className="tabular-nums text-fg">{pileAmount(maxQty)}</b> — is purchase ka jo abhi wapas nahi hua</>
-            : <>Max <b className="tabular-nums text-fg">{formatQty(maxQty)} {unit}</b> (jo abhi production mein nahi gaya)</>}
+            ? <>Max <b className="tabular-nums text-fg">{pileAmount(maxQty)}</b> — the part of this purchase not returned yet</>
+            : <>Max <b className="tabular-nums text-fg">{formatQty(maxQty)} {unit}</b> (not yet sent to production)</>}
         >
           {control => (
             <div className="flex items-center gap-1.5">
@@ -175,25 +175,25 @@ const ReturnPurchaseModal: React.FC<{
         </Field>
 
         {material && pile && (
-          <div className="space-y-1.5 rounded-control bg-surface-2 px-3 py-2.5 text-xs ring-1 ring-inset ring-line" aria-label="Stock jahan se return hoga">
+          <div className="space-y-1.5 rounded-control bg-surface-2 px-3 py-2.5 text-xs ring-1 ring-inset ring-line" aria-label="Stock the return comes from">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-fg-subtle">Kis stock se niklega</span>
+              <span className="text-fg-subtle">Taken from stock</span>
               <span className="text-right font-bold text-fg">{pile.name}</span>
             </div>
             {material.onHand !== null && pileAfter !== null && (
               <>
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-fg-subtle">Abhi stock</span>
+                  <span className="text-fg-subtle">Stock now</span>
                   <span className="text-right font-semibold tabular-nums text-fg-muted">{pileAmount(material.onHand)}</span>
                 </div>
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-fg-subtle">Return ke baad</span>
+                  <span className="text-fg-subtle">After return</span>
                   <span className={cn('text-right font-bold tabular-nums', pileAfter < -0.0005 ? 'text-danger-fg' : 'text-fg')}>{pileAmount(pileAfter)}</span>
                 </div>
                 {pileAfter < -0.0005 && (
                   <p className="flex items-start gap-1.5 font-semibold text-warning-fg">
                     <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />
-                    Itna stock maujood nahi (kuch istemal ya bik chuka). Return ke baad yeh stock minus mein dikhega — pehle stock check kar lein.
+                    There isn't this much stock (some was used or sold). After the return this stock will show as minus — check the stock first.
                   </p>
                 )}
               </>
@@ -214,15 +214,15 @@ const ReturnPurchaseModal: React.FC<{
           )}
         </Field>
         {reason === 'Other' && (
-          <Input required aria-label="Wajah" placeholder="Wajah likhein…" value={customReason} onChange={event => setCustomReason(event.target.value)} />
+          <Input required aria-label="Reason" placeholder="Enter a reason…" value={customReason} onChange={event => setCustomReason(event.target.value)} />
         )}
 
         <div className="space-y-2.5 rounded-control bg-surface-2 p-3 text-xs ring-1 ring-inset ring-line">
           {entryPaid > 0 && hasAccount && (
             <PillGroup
-              label="Refund kaise hoga"
+              label="How is it refunded"
               size="sm"
-              options={[{ value: 'cash', label: 'Cash wapas mila' }, { value: 'khata', label: 'Sirf khata kam' }]}
+              options={[{ value: 'cash', label: 'Cash received back' }, { value: 'khata', label: 'Lower ledger only' }]}
               value={refundAs}
               onChange={value => setRefundAs(value as 'cash' | 'khata')}
             />
@@ -231,21 +231,21 @@ const ReturnPurchaseModal: React.FC<{
             <span className="text-fg-subtle">Return value</span>
             <Money amount={returnValue} className="text-base font-bold text-fg" />
           </div>
-          {cashPart > 0 && <p className="flex items-center gap-1.5 text-success-fg"><span className="size-1.5 rounded-full bg-success" aria-hidden="true" /><Money amount={cashPart} /> account mein wapas aayenge</p>}
-          {khataPart > 0 && <p className="flex items-center gap-1.5 text-warning-fg"><span className="size-1.5 rounded-full bg-warning" aria-hidden="true" /><Money amount={khataPart} /> supplier ke khaate se kam honge</p>}
+          {cashPart > 0 && <p className="flex items-center gap-1.5 text-success-fg"><span className="size-1.5 rounded-full bg-success" aria-hidden="true" /><Money amount={cashPart} /> goes back into the account</p>}
+          {khataPart > 0 && <p className="flex items-center gap-1.5 text-warning-fg"><span className="size-1.5 rounded-full bg-warning" aria-hidden="true" /><Money amount={khataPart} /> comes off the supplier ledger</p>}
         </div>
 
         {canRefill && (
           <label className="flex cursor-pointer items-start gap-2.5 rounded-control p-1 text-xs text-fg-muted">
             <input type="checkbox" checked={refill} onChange={event => setRefill(event.target.checked)} className="mt-0.5 size-4 accent-[rgb(var(--brand))]" />
-            <span><b className="text-fg">Return ke baad form mein dobara bharein</b> — sahi liter ya rate likh kar nayi entry save karein.</span>
+            <span><b className="text-fg">Fill the form again after the return</b> — enter the right liters or rate and save a new entry.</span>
           </label>
         )}
 
         <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
           <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="danger" loading={busy} disabled={Boolean(qtyProblem) || maxQty <= 0} leftIcon={<RotateCcw />}>
-            {busy ? 'Processing…' : request.correct ? 'Return & theek karein' : 'Confirm return'}
+            {busy ? 'Processing…' : request.correct ? 'Return & fix' : 'Confirm return'}
           </Button>
         </div>
       </form>

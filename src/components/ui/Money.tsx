@@ -5,7 +5,7 @@ import { formatCompactValue, formatCurrency } from '../../lib/formatters';
 export type MoneyProps = Omit<React.ComponentProps<'span'>, 'children'> & {
   amount: number | string | null | undefined;
   /**
-   * `plain` (default) never colours. `balance` colours a khata balance: positive = due (danger),
+   * `plain` (default) never colours. `balance` colours a ledger balance: positive = due (danger),
    * negative = advance (success). `signed` colours a cash flow: positive = in (success), negative = out (danger).
    */
   tone?: 'plain' | 'balance' | 'signed';

@@ -6,13 +6,13 @@ import type { LedgerKind, StatementSupplier } from '../../lib/supplierStatement'
 import type { Supplier } from '../../types';
 
 /*
- * Supplier khata sign rule (same as DairyContext and lib/supplierStatement):
- *   pending_balance > 0  → Payable: the dairy owes the supplier (dena hai)  → danger
+ * Supplier ledger sign rule (same as DairyContext and lib/supplierStatement):
+ *   pending_balance > 0  → Payable: the dairy owes the supplier (we owe)    → danger
  *   pending_balance < 0  → Advance: the dairy paid ahead (supplier owes us) → success
  * Amounts are shown without a minus sign next to a label, so the colour and the word agree.
  */
 
-/** Below half a rupee a khata counts as settled (matches lib/supplierStatement). */
+/** Below half a rupee a ledger balance counts as settled (matches lib/supplierStatement). */
 export const SETTLED_EPSILON = 0.5;
 
 export type BalanceState = 'payable' | 'advance' | 'settled';
@@ -31,8 +31,8 @@ const STATE_TEXT: Record<BalanceState, string> = {
 };
 const STATE_SHORT: Record<BalanceState, string> = { payable: 'Payable', advance: 'Advance', settled: 'Settled' };
 const STATE_LONG: Record<BalanceState, string> = {
-  payable: 'Payable · dena hai',
-  advance: 'Advance · diya hua',
+  payable: 'Payable · we owe',
+  advance: 'Advance · paid ahead',
   settled: 'Settled',
 };
 
@@ -40,7 +40,7 @@ export const balanceTone = (value: number) => STATE_TONE[balanceState(value)];
 export const balanceTextClass = (value: number) => STATE_TEXT[balanceState(value)];
 export const balanceLabel = (value: number, long = false) => (long ? STATE_LONG : STATE_SHORT)[balanceState(value)];
 
-/** Khata amount: absolute value coloured by direction, with an optional Payable / Advance word. */
+/** Ledger amount: absolute value coloured by direction, with an optional Payable / Advance word. */
 export function SupplierBalance({
   value,
   label = 'short',

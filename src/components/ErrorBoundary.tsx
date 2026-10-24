@@ -55,9 +55,9 @@ class ErrorBoundary extends Component<Props, State> {
       const chunkError = isChunkLoadError(this.state.error);
       const title = chunkError ? 'App update available' : 'Something went wrong';
       const description = chunkError
-        ? 'Mooco ka naya version aa gaya hai. Page reload karein, aapka data mehfooz hai.'
+        ? 'A new version of Mooco is out. Reload the page; your data is safe.'
         : this.props.variant === 'page'
-          ? 'Is page mein masla aa gaya. Dobara try karein; baqi app theek chal rahi hai.'
+          ? 'This page hit a problem. Try again; the rest of the app is working fine.'
           : 'An unexpected error occurred while loading this page';
 
       const card = (

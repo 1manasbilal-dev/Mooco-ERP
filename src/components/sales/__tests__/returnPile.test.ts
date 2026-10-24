@@ -27,6 +27,7 @@ describe('returnIsScrap', () => {
     expect(returnIsScrap('restock', 'Customer Changed Mind')).toBe(false);
     expect(returnIsScrap('scrap_spoilage', 'Customer Changed Mind')).toBe(true);
     expect(returnIsScrap('restock', 'Defective / Spoiled Product')).toBe(true);
+    // Older reasons typed in Roman Urdu ("kharab" = spoiled) still count as spoilage.
     expect(returnIsScrap('restock', 'doodh kharab tha')).toBe(true);
   });
 });

@@ -53,12 +53,12 @@ export const FIELD_TAB: Record<FieldKey, 'business' | 'sales' | 'security'> = {
 /** Every problem that blocks saving, per field, in plain words (in the order a person reads the tabs). */
 export function validateFields(d: SettingsDraft, today: string): FieldErrors {
   const e: FieldErrors = {};
-  if (!d.general.companyName.trim()) e.companyName = 'Business ka naam zaroori hai.';
-  if (d.general.email.trim() && !/^\S+@\S+\.\S+$/.test(d.general.email.trim())) e.email = 'Email sahi nahi lag raha (misal: info@mooco.pk).';
-  if (d.sales.invoicePrefix.trim().length > 8) e.invoicePrefix = 'Bill prefix 8 huroof se zyada nahi ho sakta.';
-  if (d.security.lockDate && d.security.lockDate > today) e.lockDate = 'Lock date aaj se aage ki nahi ho sakti.';
-  if (d.security.maxDiscountPercent !== null && (!Number.isFinite(d.security.maxDiscountPercent) || d.security.maxDiscountPercent < 0 || d.security.maxDiscountPercent > 100)) e.maxDiscountPercent = 'Discount limit 0 se 100% ke darmiyan honi chahiye.';
-  if (d.security.autoLockMinutes < 0 || d.security.autoLockMinutes > 240) e.autoLockMinutes = 'Auto-lock 0 se 240 minute tak ho sakta hai.';
+  if (!d.general.companyName.trim()) e.companyName = 'Business name is required.';
+  if (d.general.email.trim() && !/^\S+@\S+\.\S+$/.test(d.general.email.trim())) e.email = "This email doesn't look right (e.g. info@mooco.pk).";
+  if (d.sales.invoicePrefix.trim().length > 8) e.invoicePrefix = "Bill prefix can't be longer than 8 characters.";
+  if (d.security.lockDate && d.security.lockDate > today) e.lockDate = "Lock date can't be after today.";
+  if (d.security.maxDiscountPercent !== null && (!Number.isFinite(d.security.maxDiscountPercent) || d.security.maxDiscountPercent < 0 || d.security.maxDiscountPercent > 100)) e.maxDiscountPercent = 'Discount limit must be between 0 and 100%.';
+  if (d.security.autoLockMinutes < 0 || d.security.autoLockMinutes > 240) e.autoLockMinutes = 'Auto-lock must be between 0 and 240 minutes.';
   return e;
 }
 
@@ -97,8 +97,8 @@ export const BusinessTab: React.FC<TabProps> = ({ draft, patch, readOnly, errors
   const g = draft.general;
   return (
     <div className="space-y-4">
-      <TabHeader title="Business Profile" description="Ye maloomat bills, receipts aur khata statements par chhapti hai." />
-      <Section title="Business details" description="Naam aur rabta jo customer apni receipt par dekhta hai." icon={<Building2 />}>
+      <TabHeader title="Business Profile" description="This information prints on bills, receipts and ledger statements." />
+      <Section title="Business details" description="The name and contact details customers see on their receipt." icon={<Building2 />}>
         <Field label="Business name" required error={errors.companyName}>
           {c => <Input {...c} disabled={readOnly} value={g.companyName} onChange={e => patch('general', { companyName: e.target.value })} placeholder="Mooco Dairy" autoComplete="organization" />}
         </Field>
@@ -114,8 +114,8 @@ export const BusinessTab: React.FC<TabProps> = ({ draft, patch, readOnly, errors
           </Field>
         </div>
       </Section>
-      <Section title="Tax registration" description="Khali chhorein to receipt par nahi chhapega." icon={<ReceiptText />}>
-        <Field label="NTN / STRN" hint="Receipt ke upar business ke naam ke neeche chhapta hai.">
+      <Section title="Tax registration" description="Leave blank to keep it off the receipt." icon={<ReceiptText />}>
+        <Field label="NTN / STRN" hint="Prints at the top of the receipt, under the business name.">
           {c => <Input {...c} disabled={readOnly} value={g.taxId} onChange={e => patch('general', { taxId: e.target.value })} placeholder="1234567-8" className="max-w-xs" />}
         </Field>
       </Section>
@@ -127,13 +127,13 @@ export const SalesTab: React.FC<TabProps> = ({ draft, patch, readOnly, errors = 
   const { general: g, sales } = draft;
   return (
     <div className="space-y-4">
-      <TabHeader title="Sales & Receipts" description="Bill numbering, receipt ka footer aur POS counter ki screen." />
-      <Section title="Bill numbering" description="Har naye POS bill ke number se pehle lagta hai." icon={<Hash />}>
-        <Field label="Bill prefix" error={errors.invoicePrefix} hint={<>Misal: <span className="font-mono">{(sales.invoicePrefix || 'INV-')}00042</span></>}>
+      <TabHeader title="Sales & Receipts" description="Bill numbering, the receipt footer and the POS counter screen." />
+      <Section title="Bill numbering" description="Goes in front of every new POS bill number." icon={<Hash />}>
+        <Field label="Bill prefix" error={errors.invoicePrefix} hint={<>Example: <span className="font-mono">{(sales.invoicePrefix || 'INV-')}00042</span></>}>
           {c => <Input {...c} className="max-w-[12rem] font-mono" maxLength={8} disabled={readOnly} value={sales.invoicePrefix} onChange={e => patch('sales', { invoicePrefix: e.target.value.toUpperCase() })} placeholder="INV-" />}
         </Field>
       </Section>
-      <Section title="Receipt" description="Receipt ke aakhir mein chhapne wala paigham." icon={<Printer />}>
+      <Section title="Receipt" description="A message printed at the bottom of the receipt." icon={<Printer />}>
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
           <Field label="Receipt footer" hint={`${sales.invoiceFooter.length}/${FOOTER_MAX}`}>
             {c => <Textarea {...c} rows={3} className="resize-none" maxLength={FOOTER_MAX} disabled={readOnly} value={sales.invoiceFooter} onChange={e => patch('sales', { invoiceFooter: e.target.value })} placeholder="Thank you for your visit!" />}
@@ -141,11 +141,11 @@ export const SalesTab: React.FC<TabProps> = ({ draft, patch, readOnly, errors = 
           <ReceiptPreview draft={draft} />
         </div>
       </Section>
-      <Section title="POS screen" description="Counter par kya nazar aaye." icon={<MonitorSmartphone />}>
-        <Toggle label="Product search bar" description="Band karne se products ke liye zyada jagah milti hai." checked={sales.showPosSearch} disabled={readOnly} onChange={v => patch('sales', { showPosSearch: v })} />
-        <Toggle label="Category filters" description="Products ke upar category buttons." checked={sales.showPosCategories} disabled={readOnly} onChange={v => patch('sales', { showPosCategories: v })} />
+      <Section title="POS screen" description="What shows on the counter." icon={<MonitorSmartphone />}>
+        <Toggle label="Product search bar" description="Turn off to give products more room." checked={sales.showPosSearch} disabled={readOnly} onChange={v => patch('sales', { showPosSearch: v })} />
+        <Toggle label="Category filters" description="Category buttons above the products." checked={sales.showPosCategories} disabled={readOnly} onChange={v => patch('sales', { showPosCategories: v })} />
       </Section>
-      {!g.companyName.trim() && <Notice tone="warning">Business Profile mein naam likhein, warna receipt par default naam chhapega.</Notice>}
+      {!g.companyName.trim() && <Notice tone="warning">Enter a name in Business Profile, or the receipt will print a default name.</Notice>}
     </div>
   );
 };
@@ -178,33 +178,33 @@ export const PaymentsTab: React.FC<TabProps & { accounts: FinancialAccount[] }> 
   const cash = active.filter(a => a.type === 'Cash');
   const digital = active.filter(a => a.type === 'Bank' || a.type === 'Wallet');
   const label = (a: FinancialAccount) => `${a.name}${a.bank_name ? ` · ${a.bank_name}` : ''} (${formatCurrency(Number(a.balance || 0))})`;
-  // A default that was closed or deleted would otherwise show as "Chunein" while still being saved.
+  // A default that was closed or deleted would otherwise show as "Select" while still being saved.
   const missing = (id: string, list: FinancialAccount[]) => Boolean(id) && accounts.length > 0 && !list.some(a => a.id === id);
   return (
     <div className="space-y-4">
-      <TabHeader title="Payments & Accounts" description="Paisa kis account mein jaye jab entry par account alag se na chuna jaye." />
-      <Section title="Cash" description="POS cash bills, khata ki cash wasooli aur suppliers ko cash payment." icon={<Banknote />}>
-        <Field label="Default cash account" error={missing(draft.financial.defaultCashAccountId, cash) ? 'Ye account ab list mein nahi (band ya delete). Koi aur chunein.' : undefined}>
+      <TabHeader title="Payments & Accounts" description="Where money goes when an entry doesn't pick its own account." />
+      <Section title="Cash" description="POS cash bills, cash collected from customers and cash paid to suppliers." icon={<Banknote />}>
+        <Field label="Default cash account" error={missing(draft.financial.defaultCashAccountId, cash) ? 'This account is no longer in the list (closed or deleted). Pick another one.' : undefined}>
           {c => (
             <Select {...c} className="max-w-md" disabled={readOnly} value={draft.financial.defaultCashAccountId} onChange={e => patch('financial', { defaultCashAccountId: e.target.value })}>
-              <option value="">— Chunein —</option>
-              {missing(draft.financial.defaultCashAccountId, cash) && <option value={draft.financial.defaultCashAccountId}>Purana account (band)</option>}
+              <option value="">— Select —</option>
+              {missing(draft.financial.defaultCashAccountId, cash) && <option value={draft.financial.defaultCashAccountId}>Old account (closed)</option>}
               {cash.map(a => <option key={a.id} value={a.id}>{label(a)}</option>)}
             </Select>
           )}
         </Field>
       </Section>
-      <Section title="Bank & wallet" description="Online / bank transfer, QR aur delivery app ki online payments." icon={<Landmark />}>
-        <Field label="Default bank / wallet" error={missing(draft.financial.defaultDigitalAccountId, digital) ? 'Ye account ab list mein nahi (band ya delete). Koi aur chunein.' : undefined}>
+      <Section title="Bank & wallet" description="Online / bank transfers, QR and delivery app online payments." icon={<Landmark />}>
+        <Field label="Default bank / wallet" error={missing(draft.financial.defaultDigitalAccountId, digital) ? 'This account is no longer in the list (closed or deleted). Pick another one.' : undefined}>
           {c => (
             <Select {...c} className="max-w-md" disabled={readOnly} value={draft.financial.defaultDigitalAccountId} onChange={e => patch('financial', { defaultDigitalAccountId: e.target.value })}>
-              <option value="">— Chunein —</option>
-              {missing(draft.financial.defaultDigitalAccountId, digital) && <option value={draft.financial.defaultDigitalAccountId}>Purana account (band)</option>}
+              <option value="">— Select —</option>
+              {missing(draft.financial.defaultDigitalAccountId, digital) && <option value={draft.financial.defaultDigitalAccountId}>Old account (closed)</option>}
               {digital.map(a => <option key={a.id} value={a.id}>{label(a)}</option>)}
             </Select>
           )}
         </Field>
-        {digital.length === 0 && <Notice icon={<Info />}>Koi bank ya wallet account nahi bana. Bank & Cash page se account banayein.</Notice>}
+        {digital.length === 0 && <Notice icon={<Info />}>No bank or wallet account yet. Create one on the Bank & Cash page.</Notice>}
       </Section>
     </div>
   );
@@ -224,27 +224,27 @@ export const OperationsTab: React.FC<TabProps & { onOpenItems: () => void }> = (
   };
   return (
     <div className="space-y-4">
-      <TabHeader title="Inventory & Milk" description="Stock ke qawaid aur doodh ki collection ki shifts." />
-      <Section title="Stock" description="Jab system mein stock khatam ho magar counter par maal mojood ho." icon={<Package />}>
+      <TabHeader title="Inventory & Milk" description="Stock rules and milk collection shifts." />
+      <Section title="Stock" description="When the system shows no stock but the goods are on the counter." icon={<Package />}>
         <Toggle
-          label="Stock 0 hone par bhi bechne dein"
-          description="On: counter kabhi nahi rukta, stock minus mein chala jata hai. Off: stock khatam hone par bill nahi banega."
+          label="Allow selling at 0 stock"
+          description="On: the counter never stops and stock can go below zero. Off: no bill once stock runs out."
           checked={draft.inventory.allowNegativeStock}
           disabled={readOnly}
           onChange={v => patch('inventory', { allowNegativeStock: v })}
         />
         <Notice icon={<Info />}>
-          Har product ki low-stock hadd aur units (kg, L, pao, pack) <button type="button" onClick={onOpenItems} className="font-bold underline underline-offset-2">Products</button> page par set hoti hain.
+          Each product's low-stock limit and units (kg, L, pao, pack) are set on the <button type="button" onClick={onOpenItems} className="font-bold underline underline-offset-2">Products</button> page.
         </Notice>
       </Section>
-      <Section title="Milk collection shifts" description="Suppliers se doodh lene ke waqt — Milk Intake mein ye options aate hain." icon={<Clock />}>
+      <Section title="Milk collection shifts" description="Times for collecting milk from suppliers — these are the options in Milk Intake." icon={<Clock />}>
         <ul className="flex flex-wrap gap-2" aria-label="Shifts">
           {shifts.map(shift => (
             <li key={shift} className="inline-flex h-9 items-center gap-1.5 rounded-control bg-surface-2 pl-3 pr-1.5 text-sm font-semibold text-fg ring-1 ring-inset ring-line">
               <Clock size={13} className="text-brand-accent" aria-hidden="true" />
               {shift}
               {!readOnly && shifts.length > 1 ? (
-                <button type="button" aria-label={`${shift} shift hatayein`} onClick={() => patch('general', { shifts: shifts.filter(s => s !== shift) })}
+                <button type="button" aria-label={`Remove ${shift} shift`} onClick={() => patch('general', { shifts: shifts.filter(s => s !== shift) })}
                   className="flex size-6 items-center justify-center rounded-md text-fg-faint hover:bg-danger-soft hover:text-danger-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <X size={14} />
                 </button>
@@ -253,10 +253,10 @@ export const OperationsTab: React.FC<TabProps & { onOpenItems: () => void }> = (
           ))}
         </ul>
         {!readOnly && (
-          <Field label="Nayi shift" error={duplicate ? 'Ye shift pehle se list mein hai.' : undefined} className="max-w-sm">
+          <Field label="New shift" error={duplicate ? 'This shift is already in the list.' : undefined} className="max-w-sm">
             {c => (
               <div className="flex gap-2">
-                <Input {...c} value={newShift} maxLength={SHIFT_MAX} onChange={e => setNewShift(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addShift(); } }} placeholder="e.g. Dopehar" />
+                <Input {...c} value={newShift} maxLength={SHIFT_MAX} onChange={e => setNewShift(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addShift(); } }} placeholder="e.g. Afternoon" />
                 <Button variant="secondary" leftIcon={<Plus />} onClick={addShift} disabled={!name || duplicate}>Add</Button>
               </div>
             )}
@@ -271,25 +271,25 @@ export const SecurityTab: React.FC<TabProps & { today: string; savedLockDate: st
   const sec = draft.security;
   return (
     <div className="space-y-4">
-      <TabHeader title="Security & Controls" description="Hisaab ko mehfooz rakhne aur staff ke ikhtiyar ki hadd." />
-      {readOnly && <Notice tone="info" icon={<Lock />}>Ye settings sirf Owner badal sakta hai.</Notice>}
+      <TabHeader title="Security & Controls" description="Keep the books safe and set limits on what staff can do." />
+      {readOnly && <Notice tone="info" icon={<Lock />}>Only the Owner can change these settings.</Notice>}
 
-      <Section title="Lock date (books close)" description="Is tareekh tak ki koi entry add, edit ya delete nahi ho sakegi — bills, purchases, kharche, payments, journal sab." icon={<Lock />}>
-        <Field label="Books band hain is tareekh tak (shamil)" error={errors.lockDate} hint={savedLockDate ? `Abhi ${savedLockDate} tak band hain.` : 'Abhi koi lock nahi.'}>
+      <Section title="Lock date (books close)" description="No entry up to this date can be added, edited or deleted — bills, purchases, expenses, payments, journal, everything." icon={<Lock />}>
+        <Field label="Books closed up to and including" error={errors.lockDate} hint={savedLockDate ? `Closed up to ${savedLockDate} right now.` : 'No lock right now.'}>
           {c => (
             <div className="flex max-w-sm gap-2">
               <Input {...c} type="date" max={today} disabled={readOnly} value={sec.lockDate} onChange={e => patch('security', { lockDate: e.target.value })} />
-              {sec.lockDate && !readOnly && <Button variant="secondary" onClick={() => patch('security', { lockDate: '' })}>Hatayein</Button>}
+              {sec.lockDate && !readOnly && <Button variant="secondary" onClick={() => patch('security', { lockDate: '' })}>Clear</Button>}
             </div>
           )}
         </Field>
         <Notice tone="warning" icon={<ShieldCheck />}>
-          Mahina ya saal band karte waqt lagayein, jab hisaab check ho chuka ho. Ghalti theek karni ho to pehle lock date peeche karein.
+          Set this when closing a month or year, once the books have been checked. To fix a mistake, move the lock date back first.
         </Notice>
       </Section>
 
-      <Section title="Discount limit" description="Cashier is had tak khud discount de sakta hai. Zyada ho to manager PIN maanga jayega." icon={<BadgePercent />}>
-        <Field label="Zyada se zyada discount (% of bill)" error={errors.maxDiscountPercent} hint="Khali chhorein = koi limit nahi. Jis role ke paas 'Give discount' nahi, us se har discount par PIN maanga jata hai.">
+      <Section title="Discount limit" description="A cashier can give discounts up to this limit. Above it, a manager PIN is asked for." icon={<BadgePercent />}>
+        <Field label="Maximum discount (% of bill)" error={errors.maxDiscountPercent} hint="Leave blank for no limit. Roles without 'Give discount' are asked for a PIN on every discount.">
           {c => (
             // The width sits on the wrapper so the "%" suffix stays inside the field.
             <div className="max-w-[10rem]">
@@ -304,23 +304,23 @@ export const SecurityTab: React.FC<TabProps & { today: string; savedLockDate: st
         </Field>
       </Section>
 
-      <Section title="Returns" description="Bill wapas karne (return / refund) par control." icon={<Undo2 />}>
+      <Section title="Returns" description="Controls for returning a bill (return / refund)." icon={<Undo2 />}>
         <Toggle
-          label="Har return par manager PIN"
-          description="On: return ki ijazat wale staff ko bhi manager PIN chahiye. Off: sirf unhein jin ke role mein 'Process returns' nahi."
+          label="Manager PIN on every return"
+          description="On: even staff allowed to do returns need a manager PIN. Off: only roles without 'Process returns' need it."
           checked={sec.returnNeedsApproval}
           disabled={readOnly}
           onChange={v => patch('security', { returnNeedsApproval: v })}
         />
       </Section>
 
-      <Section title="Auto-lock" description="Counter khali chhor diya jaye to screen khud lock ho jaye; PIN se khulti hai." icon={<Timer />}>
-        <Field label="Itne minute kuch na ho to lock karein" error={errors.autoLockMinutes} hint="Internet band ho to lock nahi hota, taake counter PIN check na hone ki wajah se ruk na jaye.">
+      <Section title="Auto-lock" description="Locks the screen when the counter is left idle; a PIN unlocks it." icon={<Timer />}>
+        <Field label="Lock after this many idle minutes" error={errors.autoLockMinutes} hint="It doesn't lock while offline, so the counter never gets stuck on a PIN it can't check.">
           {c => (
             <Select {...c} className="max-w-[14rem]" disabled={readOnly} value={sec.autoLockMinutes} onChange={e => patch('security', { autoLockMinutes: Number(e.target.value) })}>
-              <option value={0}>Kabhi nahi</option>
-              {[2, 5, 10, 15, 30, 60].map(m => <option key={m} value={m}>{m} minute</option>)}
-              {![0, 2, 5, 10, 15, 30, 60].includes(sec.autoLockMinutes) && <option value={sec.autoLockMinutes}>{sec.autoLockMinutes} minute</option>}
+              <option value={0}>Never</option>
+              {[2, 5, 10, 15, 30, 60].map(m => <option key={m} value={m}>{m} minutes</option>)}
+              {![0, 2, 5, 10, 15, 30, 60].includes(sec.autoLockMinutes) && <option value={sec.autoLockMinutes}>{sec.autoLockMinutes} minutes</option>}
             </Select>
           )}
         </Field>

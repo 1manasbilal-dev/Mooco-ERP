@@ -53,7 +53,7 @@ export const BatchCard = memo(function BatchCard({
               onTouchMove={onTouchMove}
               onTouchEnd={onTouchEnd}
               onClick={event => event.stopPropagation()}
-              title="Drag karke column badlein"
+              title="Drag to change column"
               aria-hidden="true"
               className="-ml-1 flex size-7 cursor-grab touch-none items-center justify-center rounded-md text-fg-faint hover:bg-surface-2 hover:text-fg-muted active:cursor-grabbing"
             >
@@ -64,7 +64,7 @@ export const BatchCard = memo(function BatchCard({
           <span className="ml-auto font-mono text-[11px] font-semibold text-fg-subtle">{batch.batch_number}</span>
           <IconButton
             size="sm"
-            aria-label={expanded ? 'Card band karein' : 'Card kholein'}
+            aria-label={expanded ? 'Collapse card' : 'Expand card'}
             aria-expanded={expanded}
             icon={expanded ? <ChevronUp /> : <ChevronDown />}
             onClick={event => { event.stopPropagation(); onToggle(batch.id); }}
@@ -76,7 +76,7 @@ export const BatchCard = memo(function BatchCard({
 
         <dl className="grid grid-cols-2 gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs">
           <div>
-            <dt className="text-fg-subtle">Doodh in</dt>
+            <dt className="text-fg-subtle">Milk in</dt>
             <dd className="mt-0.5 font-bold tabular-nums text-fg">{formatQty(batch.quantity_input || 0, 3)} L</dd>
           </div>
           <div className="text-right">
@@ -86,13 +86,13 @@ export const BatchCard = memo(function BatchCard({
         </dl>
 
         <p className="text-[11px] text-fg-subtle">
-          Shuru: {formatPkDay(batch.start_date)}{started ? `, ${started}` : ''}
+          Started: {formatPkDay(batch.start_date)}{started ? `, ${started}` : ''}
         </p>
       </div>
 
       {expanded ? (
         <div className="space-y-2.5 border-t border-line bg-surface-2/60 p-3 animate-fade-up">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Stage badlein</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Change stage</p>
           <div className="grid grid-cols-3 gap-1" role="group" aria-label="Move to stage">
             {BOARD_STAGES.map(stage => {
               const isCurrent = batch.status === stage.id;
@@ -102,7 +102,7 @@ export const BatchCard = memo(function BatchCard({
                   type="button"
                   aria-pressed={isCurrent}
                   disabled={(!canEdit && !isCurrent) || pending}
-                  title={!canEdit ? 'Aap ko batch stage badalne ki ijazat nahi hai' : undefined}
+                  title={!canEdit ? "You don't have permission to change the batch stage" : undefined}
                   onClick={() => { if (!isCurrent) onMove(batch, stage.id); }}
                   className={cn(
                     'h-8 cursor-pointer rounded-lg text-[11px] font-semibold ring-1 ring-inset transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50',

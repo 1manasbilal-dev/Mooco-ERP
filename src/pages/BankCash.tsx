@@ -51,7 +51,7 @@ const BankCash: React.FC = () => {
   const canManage = canPerform('bank_cash', 'create');
   const denyIfNoAccess = useCallback(() => {
     if (canManage) return false;
-    showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+    showToast("You don't have permission to do this.", 'warning');
     return true;
   }, [canManage, showToast]);
 
@@ -170,19 +170,19 @@ const BankCash: React.FC = () => {
 
   const isFiltered = Boolean(deferredSearch.trim()) || flow !== 'All';
   const periodLabel = range.from || range.to
-    ? `${range.from ? formatDay(range.from) : 'Shuru'} – ${range.to ? formatDay(range.to) : 'Aaj'}`
+    ? `${range.from ? formatDay(range.from) : 'Start'} – ${range.to ? formatDay(range.to) : 'Today'}`
     : 'All time';
 
   const summaryItems: SummaryItem[] = statement
     ? [
-        { label: 'Opening (b/f)', amount: summary.opening, tone: 'balance', hint: range.from ? formatDay(range.from) : 'Pehli entry se pehle' },
+        { label: 'Opening (b/f)', amount: summary.opening, tone: 'balance', hint: range.from ? formatDay(range.from) : 'Before the first entry' },
         { label: 'Money in', amount: summary.inflow, tone: 'in', prefix: '+ ' },
         { label: 'Money out', amount: summary.outflow, tone: 'out', prefix: '− ' },
         { label: 'Closing (c/f)', amount: summary.closing, tone: 'balance', hint: range.to && range.to < today ? formatDay(range.to) : 'Current balance' },
       ]
     : [
-        { label: 'Money in', amount: summary.inflow, tone: 'in', prefix: '+ ', hint: 'Transfers ke baghair' },
-        { label: 'Money out', amount: summary.outflow, tone: 'out', prefix: '− ', hint: 'Transfers ke baghair' },
+        { label: 'Money in', amount: summary.inflow, tone: 'in', prefix: '+ ', hint: 'Excluding transfers' },
+        { label: 'Money out', amount: summary.outflow, tone: 'out', prefix: '− ', hint: 'Excluding transfers' },
         { label: 'Net flow', amount: summary.inflow - summary.outflow, tone: 'balance' },
         { label: 'Entries', amount: 0, text: summary.count.toLocaleString('en-PK'), hint: periodLabel },
       ];
@@ -209,29 +209,29 @@ const BankCash: React.FC = () => {
     const assessment = getDeleteAssessment('account', acc.id);
 
     if (assessment.details?.isSystem) {
-      showToast(`"${acc.name}" default account hai, is liye delete ya Inactive nahi ho sakta. Pehle Settings mein doosra default chunein.`, 'warning');
+      showToast(`"${acc.name}" is a default account, so it can't be deleted or made Inactive. Choose another default in Settings first.`, 'warning');
       return;
     }
     if (assessment.balance !== 0) {
-      showToast(`"${acc.name}" delete nahi ho sakta: is mein abhi ${formatCurrency(acc.balance)} balance hai. Pehle sari raqam doosre account mein transfer karein.`, 'error');
+      showToast(`"${acc.name}" can't be deleted: it still holds a balance of ${formatCurrency(acc.balance)}. Transfer the full amount to another account first.`, 'error');
       return;
     }
 
     if (assessment.hasHistory) {
       if (acc.isActive === false) {
-        showToast(`"${acc.name}" pehle se Inactive hai. Is ki entries ki wajah se yeh delete nahi ho sakta.`, 'info');
+        showToast(`"${acc.name}" is already Inactive. It can't be deleted because it has entries.`, 'info');
         return;
       }
       const deactivate = await confirmAction({
         tone: 'warning',
-        title: `"${acc.name}" Inactive karein?`,
-        message: `Is account mein ${assessment.details?.txCount || 0} transaction(s) record hain, is liye yeh delete nahi hoga balkay Inactive ho jayega.`,
+        title: `Make "${acc.name}" Inactive?`,
+        message: `This account has ${assessment.details?.txCount || 0} transaction(s) recorded, so it won't be deleted but made Inactive.`,
         consequences: [
-          'Purani transactions aur bank statement waise hi rahenge.',
-          'Naye payment aur transfer mein yeh account nazar nahi aayega.',
-          'Baad mein isay dobara Active kiya ja sakta hai.',
+          'Old transactions and the bank statement stay as they are.',
+          'This account will no longer show up for new payments and transfers.',
+          'It can be made Active again later.',
         ],
-        confirmLabel: 'Haan, Inactive karein',
+        confirmLabel: 'Yes, make Inactive',
       });
       if (!deactivate) return;
       setBusyAccountId(acc.id);
@@ -245,9 +245,9 @@ const BankCash: React.FC = () => {
     }
 
     const hardDelete = await confirmAction({
-      title: `"${acc.name}" delete karein?`,
-      message: 'Is account mein koi transaction nahi, is liye yeh hamesha ke liye hat jayega.',
-      consequences: ['Yeh kaam wapas nahi ho sakta.'],
+      title: `Delete "${acc.name}"?`,
+      message: 'This account has no transactions, so it will be removed for good.',
+      consequences: ["This can't be undone."],
     });
     if (!hardDelete) return;
     setBusyAccountId(acc.id);
@@ -269,16 +269,16 @@ const BankCash: React.FC = () => {
   const emptyStatement = accounts.length === 0 ? (
     <EmptyState
       icon={<Wallet />}
-      title="Abhi koi account nahi"
-      description="Cash counter, bank ya mobile wallet ka account banayein, phir yahan us ki entries nazar aayengi."
+      title="No accounts yet"
+      description="Add a cash counter, bank or mobile wallet account, and its entries will show up here."
       action={canManage ? <Button leftIcon={<Plus />} onClick={() => openDialog({ kind: 'account', account: null })}>Add account</Button> : undefined}
     />
   ) : (
     <EmptyState
       size="compact"
       icon={<History />}
-      title={isFiltered || range.from || range.to ? 'Is filter mein koi entry nahi' : 'Abhi koi entry nahi'}
-      description={isFiltered || range.from || range.to ? 'Search, type ya tareekh badal kar dekhein.' : 'Deposit, withdrawal ya transfer record karein.'}
+      title={isFiltered || range.from || range.to ? 'No entries match this filter' : 'No entries yet'}
+      description={isFiltered || range.from || range.to ? 'Try a different search, type or date.' : 'Record a deposit, withdrawal or transfer.'}
     />
   );
 
@@ -286,7 +286,7 @@ const BankCash: React.FC = () => {
     <div className="flex flex-col gap-6 pb-4">
       <PageHeader
         eyebrow="Finance"
-        description="Cash, bank aur wallet accounts: balances, transfers, deposits aur har account ka statement."
+        description="Cash, bank and wallet accounts: balances, transfers, deposits and a statement for each account."
         actions={canManage ? (
           <>
             <Button variant="secondary" leftIcon={<ArrowDownLeft />} disabled={!hasActiveAccounts} onClick={() => openDialog({ kind: 'entry', mode: 'Deposit' })}>
@@ -331,7 +331,7 @@ const BankCash: React.FC = () => {
           tone={inTransit > 0 ? 'warning' : 'neutral'}
           loading={loading}
           value={<StatMoney amount={inTransit} />}
-          hint={loading ? undefined : transitCount > 0 ? `${transitCount} remittance${transitCount > 1 ? 's' : ''} pending` : 'Kuch pending nahi'}
+          hint={loading ? undefined : transitCount > 0 ? `${transitCount} remittance${transitCount > 1 ? 's' : ''} pending` : 'Nothing pending'}
         />
       </section>
 
@@ -339,8 +339,8 @@ const BankCash: React.FC = () => {
         <p className="-mt-3 flex items-start gap-2 rounded-card border border-warning/25 bg-warning-soft px-4 py-3 text-[13px] leading-relaxed text-warning-fg">
           <Clock3 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <span>
-            <strong className="font-semibold"><Money amount={inTransit} /> cash in transit</strong>: shift close par drawer se nikal chuki, kisi account mein nahi.
-            Head receive karte hi yahan ke accounts mein aayegi. Total cash = accounts + in-transit.
+            <strong className="font-semibold"><Money amount={inTransit} /> cash in transit</strong>: taken out of the drawer at shift close, not yet in any account.
+            It will reach the accounts here as soon as the head receives it. Total cash = accounts + in-transit.
           </span>
         </p>
       )}
@@ -389,7 +389,7 @@ const BankCash: React.FC = () => {
           )}
         </div>
         {!loading && accounts.length > 0 && visibleAccounts.length === 0 && (
-          <p className="rounded-card border border-dashed border-line px-4 py-6 text-center text-sm text-fg-subtle">Is filter mein koi account nahi.</p>
+          <p className="rounded-card border border-dashed border-line px-4 py-6 text-center text-sm text-fg-subtle">No accounts match this filter.</p>
         )}
       </section>
 
@@ -401,7 +401,7 @@ const BankCash: React.FC = () => {
             title={selectedAccount ? selectedAccount.name : 'All accounts'}
             description={selectedAccount
               ? [selectedAccount.type, selectedAccount.bank_name, selectedAccount.account_number].filter(Boolean).join(' · ')
-              : 'Har account ki entries ek jagah. Running balance ke liye account chunein.'}
+              : 'Entries from every account in one place. Choose an account to see its running balance.'}
             actions={canManage && selectedAccount ? (
               <>
                 {selectedAccount.isActive === false && (
@@ -416,14 +416,14 @@ const BankCash: React.FC = () => {
                   </Button>
                 )}
                 <IconButton
-                  aria-label="Account edit karein"
+                  aria-label="Edit account"
                   icon={<Pencil />}
                   size="sm"
                   variant="secondary"
                   onClick={() => openDialog({ kind: 'account', account: selectedAccount })}
                 />
                 <IconButton
-                  aria-label="Account delete / Inactive karein"
+                  aria-label="Delete / make account Inactive"
                   icon={<Trash2 />}
                   size="sm"
                   variant="danger-soft"
@@ -448,7 +448,7 @@ const BankCash: React.FC = () => {
           <SearchInput
             value={ledgerSearch}
             onChange={setLedgerSearch}
-            placeholder="Entry, party, bill # ya amount..."
+            placeholder="Entry, party, bill # or amount..."
             className="w-full sm:w-64"
           />
           <SegmentedControl

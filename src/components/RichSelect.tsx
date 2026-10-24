@@ -244,7 +244,7 @@ export const RichSelect: React.FC<RichSelectProps> = ({
                   autoFocus
                 />
                 {searchTerm && (
-                  <button aria-label="Hatayen"
+                  <button aria-label="Clear search"
                     type="button"
                     onClick={() => setSearchTerm('')}
                     className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer text-fg-faint hover:text-fg"

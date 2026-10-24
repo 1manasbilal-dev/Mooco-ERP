@@ -45,8 +45,8 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
   const openingValue = opening.trim() ? parseAmount(opening) : 0;
 
   const errors = {
-    name: !trimmedName ? 'Account ka naam likhein' : duplicate ? 'Is naam ka account pehle se mojood hai' : undefined,
-    opening: !Number.isFinite(openingValue) ? 'Sahi raqam likhein' : undefined,
+    name: !trimmedName ? 'Enter an account name' : duplicate ? 'An account with this name already exists' : undefined,
+    opening: !Number.isFinite(openingValue) ? 'Enter a valid amount' : undefined,
   };
   const hasErrors = Object.values(errors).some(Boolean);
   const show = (message?: string) => (submitted ? message : undefined);
@@ -67,20 +67,20 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
       if (cashBankKind) {
         const ok = await addAccount({ name: trimmedName, type: cashBankKind, balance: openingValue, isActive: true });
         if (!ok) return;
-        showToast(`Bank / Cash account "${trimmedName}" ban gaya`, 'success');
+        showToast(`Bank / Cash account "${trimmedName}" created`, 'success');
       } else {
         const ok = await addManualAccount({
           name: trimmedName, type, balance: openingValue, description: description.trim(), parentId, isActive: true,
         });
         if (!ok) {
-          showToast('Account nahi ban saka. Dobara koshish karein.', 'error');
+          showToast("Account couldn't be created. Please try again.", 'error');
           return;
         }
-        showToast('Naya ledger account ban gaya', 'success');
+        showToast('New ledger account created', 'success');
       }
       onClose();
     } catch (err: any) {
-      showToast('Account nahi ban saka: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Account couldn't be created: " + (err?.message || 'please try again'), 'error');
     } finally {
       busyRef.current = false;
       setSaving(false);
@@ -93,7 +93,7 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
       onClose={onClose}
       dismissible={!saving}
       title={parentId ? 'Add sub-account' : 'Add ledger account'}
-      description="Chart of Accounts mein naya account, jaise Owner Capital, Bank Loan ya Electricity."
+      description="A new account in the Chart of Accounts, such as Owner Capital, Bank Loan or Electricity."
       icon={<DialogIcon tone="brand"><Plus /></DialogIcon>}
       initialFocusRef={nameRef}
       footer={
@@ -104,7 +104,7 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
       }
     >
       <form id="ledger-account-form" onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
-        <Field label="Parent account" hint="Khali chorein to top level par banega.">
+        <Field label="Parent account" hint="Leave empty to create it at the top level.">
           {control => (
             <Select {...control} value={parentId} onChange={event => changeParent(event.target.value)}>
               <option value="">(None) Top level account</option>
@@ -122,7 +122,7 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Account type" hint={parentId ? 'Parent ke type par set hai.' : undefined}>
+          <Field label="Account type" hint={parentId ? "Set to the parent's type." : undefined}>
             {control => (
               <Select {...control} value={type} onChange={event => setType(event.target.value as AccountType)} disabled={Boolean(parentId)}>
                 {ACCOUNT_TYPE_ORDER.map(t => <option key={t} value={t}>{t}</option>)}
@@ -149,7 +149,7 @@ export default function LedgerAccountDialog({ initialParentId = '', initialType 
         {cashBankKind ? (
           <p className="flex items-start gap-2 rounded-card border border-info/20 bg-info-soft p-3 text-xs text-info-fg">
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span>Yeh <strong>Bank & Cash</strong> mein naya <strong>{cashBankKind}</strong> account banega, aur wahan se transfers / deposits ho sakenge.</span>
+            <span>This creates a new <strong>{cashBankKind}</strong> account in <strong>Bank & Cash</strong>, which can then be used for transfers / deposits.</span>
           </p>
         ) : (
           <Field label="Description">

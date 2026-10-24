@@ -96,10 +96,10 @@ const PurchaseLogDrawer: React.FC<{
               <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface-2 text-fg-muted"><History size={16} aria-hidden="true" /></span>
               <div className="min-w-0">
                 <h2 className="truncate text-[15px] font-bold text-fg">{title}</h2>
-                <p className="truncate text-xs text-fg-subtle">Galat entry ho to yahan se supplier ko return karein</p>
+                <p className="truncate text-xs text-fg-subtle">If an entry is wrong, return it to the supplier from here</p>
               </div>
             </div>
-            <IconButton aria-label="Band karein" icon={<X />} onClick={onClose} />
+            <IconButton aria-label="Close" icon={<X />} onClick={onClose} />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <SegmentedControl
@@ -110,7 +110,7 @@ const PurchaseLogDrawer: React.FC<{
               options={[{ value: 'today', label: 'Today' }, { value: 'all', label: 'All dates' }]}
               className="shrink-0"
             />
-            <SearchInput value={query} onChange={setQuery} placeholder={isMilk ? 'Farmer dhoondein…' : 'Vendor ya item…'} className="flex-1" />
+            <SearchInput value={query} onChange={setQuery} placeholder={isMilk ? 'Search farmer…' : 'Vendor or item…'} className="flex-1" />
           </div>
           <p className="text-xs text-fg-subtle tabular-nums">{rows.length} {rows.length === 1 ? 'entry' : 'entries'}</p>
         </div>
@@ -120,8 +120,8 @@ const PurchaseLogDrawer: React.FC<{
             <EmptyState
               size="compact"
               icon={<Search />}
-              title="Koi entry nahi mili"
-              description={scope === 'today' ? 'All dates par switch kar ke dekhein.' : 'Search badal kar dekhein.'}
+              title="No entries found"
+              description={scope === 'today' ? 'Try switching to All dates.' : 'Try a different search.'}
               action={scope === 'today' ? <Button variant="secondary" size="sm" onClick={() => setScope('all')}>All dates</Button> : undefined}
             />
           ) : (
@@ -187,13 +187,13 @@ const LogRow = memo(function LogRow({ entry, supplierName, item, isMilk, onRetur
           {pile && (
             <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-fg-subtle">
               <Badge tone={pile.kind === 'pack' ? 'info' : 'success'} className="h-5 px-1.5 text-[10px]">{purchasePileText(qty, pile)}</Badge>
-              {returned > 0 && <span className="font-semibold">{purchaseQtyText(returned, entry.unit, pile)} wapas</span>}
+              {returned > 0 && <span className="font-semibold">{purchaseQtyText(returned, entry.unit, pile)} returned</span>}
             </p>
           )}
           <div className="mt-2 flex items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
               {paid > 0 && <Badge tone="success">Paid <Money amount={paid} />{mode ? ` · ${mode}` : ''}</Badge>}
-              {due > 0.5 && amount > 0 && <Badge tone="danger">Khata <Money amount={due} /></Badge>}
+              {due > 0.5 && amount > 0 && <Badge tone="danger">Unpaid <Money amount={due} /></Badge>}
             </div>
             {canReturn && (
               <Button variant="secondary" size="sm" leftIcon={<RotateCcw />} onClick={() => onReturn(entry)} title="Return to supplier">

@@ -52,7 +52,7 @@ Workspace accents (cyan for milk, violet for products, rose for expenses) stay a
 | `Card`, `CardHeader`, `CardBody`, `CardFooter` | Content blocks. `variant="inset"` for panels inside a card, `interactive` for clickable cards. |
 | `StatCard` | KPI tiles: label, value, icon, `tone`, `trend` (%), `trendGoodWhen="down"` for expenses/dues, `hint`, `loading`, `onClick`. |
 | `Badge` | Status pills. `tone` + `soft`/`solid`, optional `dot`. |
-| `Money` | Every rupee amount. `tone="balance"` (khata: positive due = red, negative advance = green), `tone="signed"` (cash flow), `compact`. |
+| `Money` | Every rupee amount. `tone="balance"` (ledger balance: positive due = red, negative advance = green), `tone="signed"` (cash flow), `compact`. |
 | `PageHeader` | Top of a screen: `eyebrow`, optional `title` (the app header already shows the screen name), `description`, `actions`, and children for a tab/filter row. |
 | `Toolbar` | Search + filters + actions row above a list. |
 | `SearchInput` | Search with clear button, Esc to clear, `shortcut` hint. |
@@ -76,7 +76,7 @@ Content               TableContainer / Cards; EmptyState when empty; Skeleton wh
 - Page padding comes from the workspace container; inside a page use `gap-4`/`gap-6` between blocks, `p-4 sm:p-5` inside cards.
 - Phones (390px wide) must work: no horizontal page scroll, tables scroll inside their container, toolbars wrap, primary action stays reachable.
 - Headings: page `text-2xl font-bold tracking-tight`, card `text-[15px] font-bold`, labels `text-xs font-semibold text-fg-muted` in sentence case. Uppercase only for table heads and eyebrows.
-- Copy keeps the app's existing English / Roman Urdu mix and business words (khata, due, advance, shift, drawer). Do not rename business terms.
+- All copy is plain English: no Roman Urdu or Urdu, in toasts and dialogs too. Business words: ledger (a customer, supplier or vendor account; not "khata"), on credit, due, advance, shift, drawer.
 
 ## Motion
 

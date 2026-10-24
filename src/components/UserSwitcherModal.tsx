@@ -106,7 +106,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
   const backToList = () => { setMode('select'); setSelectedUser(null); setPin(''); setErrorMsg(''); };
 
   const failLogin = (message?: string) => {
-    setErrorMsg(message || 'Ghalat PIN code!');
+    setErrorMsg(message || 'Wrong PIN code!');
     setPin('');
     setFailCount(count => count + 1);
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
@@ -133,12 +133,12 @@ export const LockScreen: React.FC<LockScreenProps> = ({
     if (e) e.preventDefault();
     if (authRef.current) return;
     if (!username.trim()) {
-      setErrorMsg('Username enter karein');
+      setErrorMsg('Enter your username');
       usernameInputRef.current?.focus();
       return;
     }
     if (!pin.trim()) {
-      setErrorMsg('Password / PIN code enter karein');
+      setErrorMsg('Enter your password / PIN code');
       pinInputRef.current?.focus();
       return;
     }

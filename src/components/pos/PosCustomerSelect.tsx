@@ -65,7 +65,7 @@ export const PosCustomerSelect = memo(function PosCustomerSelect({
           aria-controls="pos-customer-options"
           aria-autocomplete="list"
           aria-label="Search or select customer"
-          placeholder="Customer search karein..."
+          placeholder="Search customer..."
           autoComplete="off"
           className={cn(
             'ds-control h-11 w-full rounded-control border border-line bg-surface pl-9 text-sm font-semibold text-fg shadow-e1 outline-none transition-[border-color,box-shadow] duration-150',
@@ -91,9 +91,9 @@ export const PosCustomerSelect = memo(function PosCustomerSelect({
         {selectedCustomerId ? (
           <div className="absolute right-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1">
             {paymentMode === 'Credit' ? (
-              <span className="hidden h-6 items-center rounded-full bg-warning-soft px-2 text-[11px] font-bold text-warning-fg ring-1 ring-inset ring-warning/25 sm:inline-flex">Khata</span>
+              <span className="hidden h-6 items-center rounded-full bg-warning-soft px-2 text-[11px] font-bold text-warning-fg ring-1 ring-inset ring-warning/25 sm:inline-flex">Credit</span>
             ) : selectedBalance !== 0 && !customerDropdownOpen ? (
-              <span className="hidden h-6 items-center gap-1 rounded-full bg-surface-2 px-2 text-[11px] font-semibold ring-1 ring-inset ring-line sm:inline-flex" title={selectedBalance > 0 ? 'Customer ka purana due' : 'Customer ka advance'}>
+              <span className="hidden h-6 items-center gap-1 rounded-full bg-surface-2 px-2 text-[11px] font-semibold ring-1 ring-inset ring-line sm:inline-flex" title={selectedBalance > 0 ? "Customer's previous due" : "Customer's advance"}>
                 <span className="text-fg-subtle">{selectedBalance > 0 ? 'Due' : 'Adv'}</span>
                 <Money amount={Math.abs(selectedBalance)} tone="plain" className={selectedBalance > 0 ? 'text-danger-fg' : 'text-success-fg'} />
               </span>
@@ -150,7 +150,7 @@ export const PosCustomerSelect = memo(function PosCustomerSelect({
               <p className="p-3 text-center text-xs text-fg-subtle">No customer found matching "{customerSearch}"</p>
             )}
             {hiddenCount > 0 && (
-              <p className="px-3 py-2 text-center text-[11px] text-fg-subtle">+{hiddenCount} aur customers — naam ya phone likh kar search karein</p>
+              <p className="px-3 py-2 text-center text-[11px] text-fg-subtle">+{hiddenCount} more customers — type a name or phone to search</p>
             )}
           </div>
         )}

@@ -15,7 +15,7 @@ const PERMANENT_CODES = new Set([
 
 // A missing or expired operator session: the work is fine, it just needs a login first.
 const AUTH_CODES = new Set(['MOOCO401', 'PGRST301', 'PGRST302', 'PGRST303']);
-const AUTH_MESSAGE = /login zaroori|jwt expired|invalid jwt|not authenticated/i;
+const AUTH_MESSAGE = /login zaroori|login required|jwt expired|invalid jwt|not authenticated/i;
 
 export function isPermanentSyncError(err: any): boolean {
   const msg = `${err?.message || ''} ${err?.details || ''} ${err?.hint || ''}`;

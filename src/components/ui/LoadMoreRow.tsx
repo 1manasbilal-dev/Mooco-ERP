@@ -17,9 +17,9 @@ export const LoadMoreRow: React.FC<LoadMoreRowProps> = ({ sentinelRef, hiddenCou
 
   const content = (
     <div className="flex flex-wrap items-center justify-center gap-2 py-3 text-xs font-medium text-fg-subtle print:hidden">
-      <span className="tabular-nums">{hiddenCount} aur entries baqi hain</span>
-      <Button variant="secondary" size="sm" onClick={onShowMore}>Aur dikhayein</Button>
-      {onShowAll && <Button variant="ghost" size="sm" onClick={onShowAll} className="text-brand-fg hover:bg-brand-soft hover:text-brand-fg">Sab dikhayein</Button>}
+      <span className="tabular-nums">{hiddenCount} more {hiddenCount === 1 ? 'entry' : 'entries'}</span>
+      <Button variant="secondary" size="sm" onClick={onShowMore}>Show more</Button>
+      {onShowAll && <Button variant="ghost" size="sm" onClick={onShowAll} className="text-brand-fg hover:bg-brand-soft hover:text-brand-fg">Show all</Button>}
     </div>
   );
 

@@ -38,10 +38,10 @@ export const PoolSummary = memo(function PoolSummary({ remaining, allocated, inC
           >
             <Droplets aria-hidden="true" />
           </span>
-          <span className="truncate text-[13px] font-semibold text-fg-subtle">Unallocated doodh</span>
+          <span className="truncate text-[13px] font-semibold text-fg-subtle">Unallocated milk</span>
         </div>
         <Badge tone={isEmpty ? 'success' : 'warning'} dot>
-          {isEmpty ? 'Sab allocate ho gaya' : `${lots} ${lots === 1 ? 'lot' : 'lots'} baqi`}
+          {isEmpty ? 'All allocated' : `${lots} ${lots === 1 ? 'lot' : 'lots'} left`}
         </Badge>
       </div>
 
@@ -52,7 +52,7 @@ export const PoolSummary = memo(function PoolSummary({ remaining, allocated, inC
         </p>
         {cart > 0 && (
           <p className="pb-1 text-sm font-medium text-fg-muted">
-            Is allocation ke baad <span className="font-bold tabular-nums text-fg">{formatQty(after, 3)} L</span> baqi
+            <span className="font-bold tabular-nums text-fg">{formatQty(after, 3)} L</span> left after this allocation
           </p>
         )}
       </div>
@@ -62,16 +62,16 @@ export const PoolSummary = memo(function PoolSummary({ remaining, allocated, inC
           <div
             className="flex h-2.5 overflow-hidden rounded-full bg-surface-3"
             role="img"
-            aria-label={`Open lots: ${formatQty(done, 3)} L allocate ho chuka, ${formatQty(cart, 3)} L cart mein, ${formatQty(after, 3)} L baqi`}
+            aria-label={`Open lots: ${formatQty(done, 3)} L allocated, ${formatQty(cart, 3)} L in cart, ${formatQty(after, 3)} L left`}
           >
             <span className="h-full bg-fg-faint/45 transition-[width] duration-200 ease-out-expo" style={{ width: pct(done, total) }} />
             <span className="h-full bg-brand-accent transition-[width] duration-200 ease-out-expo" style={{ width: pct(cart, total) }} />
             <span className="h-full bg-warning transition-[width] duration-200 ease-out-expo" style={{ width: pct(after, total) }} />
           </div>
           <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-subtle">
-            <LegendItem dot="bg-fg-faint/60" label="Allocate ho chuka" value={done} />
-            <LegendItem dot="bg-brand-accent" label="Cart mein" value={cart} />
-            <LegendItem dot="bg-warning" label="Baqi" value={after} />
+            <LegendItem dot="bg-fg-faint/60" label="Allocated" value={done} />
+            <LegendItem dot="bg-brand-accent" label="In cart" value={cart} />
+            <LegendItem dot="bg-warning" label="Left" value={after} />
           </dl>
         </div>
       )}

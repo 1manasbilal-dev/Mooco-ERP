@@ -34,7 +34,7 @@ const LedgerTableRow = memo(function LedgerTableRow({ entry, onDelete }: RowProp
         {entry.canDelete && onDelete && (
           <IconButton
             size="sm"
-            aria-label="Payment delete karein"
+            aria-label="Delete payment"
             icon={<Trash2 />}
             className="hover:bg-danger-soft hover:text-danger-fg"
             onClick={() => onDelete(entry.id)}
@@ -56,7 +56,7 @@ const LedgerCardRow = memo(function LedgerCardRow({ entry, onDelete }: RowProps)
         {entry.canDelete && onDelete && (
           <IconButton
             size="sm"
-            aria-label="Payment delete karein"
+            aria-label="Delete payment"
             icon={<Trash2 />}
             className="-my-1 hover:bg-danger-soft hover:text-danger-fg"
             onClick={() => onDelete(entry.id)}
@@ -87,7 +87,7 @@ const LedgerCardRow = memo(function LedgerCardRow({ entry, onDelete }: RowProps)
   );
 });
 
-/** Khata statement, newest first, with the running balance after each entry. Long ledgers render in pages. */
+/** Ledger statement, newest first, with the running balance after each entry. Long ledgers render in pages. */
 export function SupplierLedgerTable({ entries, onDelete, resetKey, filtered }: {
   entries: LedgerRow[];
   onDelete?: (id: string) => void;
@@ -103,8 +103,8 @@ export function SupplierLedgerTable({ entries, onDelete, resetKey, filtered }: {
       <Card>
         <EmptyState
           icon={<FileText />}
-          title={filtered ? 'Is filter mein koi entry nahi' : 'Is period mein koi entry nahi'}
-          description={filtered ? 'Search ya type filter badal kar dekhein.' : 'Tareekh badlein, ya milk purchase / payment record karein.'}
+          title={filtered ? 'No entries match this filter' : 'No entries in this period'}
+          description={filtered ? 'Try a different search or type filter.' : 'Change the dates, or record a milk purchase / payment.'}
         />
       </Card>
     );
@@ -129,8 +129,8 @@ export function SupplierLedgerTable({ entries, onDelete, resetKey, filtered }: {
             <TH>Date</TH>
             <TH>Type</TH>
             <TH>Description</TH>
-            <TH numeric title="Supply / charge: payable barhta hai">Supply (Cr)</TH>
-            <TH numeric title="Payment: payable kam hota hai">Paid (Dr)</TH>
+            <TH numeric title="Supply / charge: payable goes up">Supply (Cr)</TH>
+            <TH numeric title="Payment: payable goes down">Paid (Dr)</TH>
             <TH numeric>Balance</TH>
             <TH className="w-12"><span className="sr-only">Actions</span></TH>
           </tr>

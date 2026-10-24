@@ -128,7 +128,7 @@ const Production: React.FC = () => {
 
   const moveBatch = useCallback(async (batch: ProductionBatch, nextStage: ProductionStage) => {
     if (!latest.current.canEdit) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return;
     }
     if (nextStage === ProductionStage.COMPLETED) {
@@ -184,7 +184,7 @@ const Production: React.FC = () => {
   const completeBatch = useCallback(async (completion: BatchCompletion) => {
     if (!selectedBatchId) return false;
     if (!latest.current.canEdit) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return false;
     }
     try {
@@ -206,14 +206,14 @@ const Production: React.FC = () => {
   const cancelSelectedBatch = useCallback(async (reason: string) => {
     if (!selectedBatchId) return false;
     if (!latest.current.canEdit) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return false;
     }
     try {
       // A refused cancel (e.g. a completed batch) must not close the sheet and report success.
       const ok = await cancelBatch(selectedBatchId, reason);
       if (!ok) {
-        showToast('Batch cancel nahi hua.', 'error');
+        showToast("Couldn't cancel the batch.", 'error');
         return false;
       }
       setSelectedBatchId(null);
@@ -231,7 +231,7 @@ const Production: React.FC = () => {
     <div className="flex flex-col gap-4 pb-8 lg:gap-6">
       <PageHeader
         eyebrow="Dairy operations"
-        description="Doodh se dahi, ghee aur baqi products ke batches: Start se Finish tak, phir stock mein."
+        description="Batches that turn milk into yogurt, ghee and other products: from Start to Finish, then into stock."
         actions={
           <SegmentedControl
             aria-label="Production view"
@@ -251,24 +251,24 @@ const Production: React.FC = () => {
           value={board.active}
           icon={<Factory />}
           tone="brand"
-          hint={board.byStage[ProductionStage.PACKAGING].length > 0 ? `${board.byStage[ProductionStage.PACKAGING].length} finish par` : undefined}
+          hint={board.byStage[ProductionStage.PACKAGING].length > 0 ? `${board.byStage[ProductionStage.PACKAGING].length} at Finish` : undefined}
           onClick={activeView === 'board' ? undefined : () => selectView('board')}
         />
-        <StatCard label="Doodh process mein" value={`${formatQty(board.milkInProcess, 3)} L`} icon={<Droplets />} tone="info" />
+        <StatCard label="Milk in process" value={`${formatQty(board.milkInProcess, 3)} L`} icon={<Droplets />} tone="info" />
         <StatCard
-          label="Aaj complete"
+          label="Completed today"
           value={board.completedToday}
           icon={<CheckCircle2 />}
           tone="success"
-          hint={board.completedToday > 0 ? `${formatQty(board.milkUsedToday, 3)} L doodh` : undefined}
+          hint={board.completedToday > 0 ? `${formatQty(board.milkUsedToday, 3)} L milk` : undefined}
           onClick={activeView === 'history' ? undefined : () => selectView('history')}
         />
         <StatCard
-          label="Aaj ka profit"
+          label="Today's profit"
           value={board.completedToday > 0 && board.profitMissing === board.completedToday ? '—' : <Money amount={board.profitToday} compact />}
           icon={<TrendingUp />}
           tone={board.profitToday < 0 ? 'danger' : board.profitToday > 0 ? 'success' : 'neutral'}
-          hint={board.profitMissing > 0 ? `${board.profitMissing} batch ka profit save nahi hua` : 'Complete batches'}
+          hint={board.profitMissing > 0 ? `Profit not saved for ${board.profitMissing} ${board.profitMissing === 1 ? 'batch' : 'batches'}` : 'Complete batches'}
         />
       </section>
 
@@ -346,10 +346,10 @@ const Production: React.FC = () => {
                       >
                         <Box className={cn('size-5', isDragOver ? 'text-brand-fg' : 'text-fg-faint')} aria-hidden="true" />
                         {isDragOver
-                          ? `"${stage.label}" mein chhorein`
+                          ? `Drop in "${stage.label}"`
                           : stage.id === ProductionStage.PROCESSING
-                            ? 'Naya batch Milk Allocation se shuru hota hai'
-                            : 'Batch card yahan drag karein'}
+                            ? 'New batches start from Milk Allocation'
+                            : 'Drag a batch card here'}
                       </div>
                     )}
                   </div>
@@ -359,7 +359,7 @@ const Production: React.FC = () => {
           </div>
 
           {board.active === 0 && isDesktopBoard && (
-            <p className="text-center text-xs text-fg-subtle">Abhi koi batch chal nahi raha. Milk Allocation mein "Production" chun kar batch shuru karein.</p>
+            <p className="text-center text-xs text-fg-subtle">No batches running right now. To start one, choose "Production" in Milk Allocation.</p>
           )}
         </>
       ) : (

@@ -64,7 +64,7 @@ export const SaveBar: React.FC<{ visible: boolean; saving: boolean; problems?: n
     <div className="sticky bottom-3 z-20 mt-6 flex flex-col gap-3 rounded-card border border-line bg-surface p-3 shadow-e3 animate-fade-up sm:flex-row sm:items-center sm:justify-between" role="region" aria-label="Unsaved changes">
       <p className="flex items-center gap-2 px-1 text-sm font-semibold text-fg">
         <span className={cn('size-2 shrink-0 rounded-full', problems ? 'bg-danger' : 'bg-warning')} aria-hidden="true" />
-        {problems ? `${problems} ${problems === 1 ? 'cheez' : 'cheezein'} theek karni hain` : 'Tabdeeliyan abhi save nahi huin'}
+        {problems ? `${problems} ${problems === 1 ? 'thing' : 'things'} to fix` : 'Changes not saved yet'}
       </p>
       <div className="flex gap-2">
         <Button variant="secondary" onClick={onDiscard} disabled={saving} className="flex-1 sm:flex-none">Discard</Button>

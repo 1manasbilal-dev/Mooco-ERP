@@ -89,11 +89,11 @@ export default function BatchDetailModal({
   }, [productDef, batch, inputLitres, materials.lines, variants, counts, loose]);
 
   const yieldInfo = batchYield(preview.addedBase, inputLitres, estimate);
-  const looseError = loose < 0 ? 'Minus qty nahi ho sakti.' : '';
+  const looseError = loose < 0 ? "Qty can't be negative." : '';
   const zeroOutputPending = zeroConfirmed && preview.addedBase <= 0;
   const blocked = materials.blocking.length > 0;
-  const completeBlockReason = isTodayLocked ? `Day ${lockedDate} band (locked) hai.`
-    : blocked ? `${materials.blocking.length} ${materials.blocking.length === 1 ? 'material' : 'materials'} ki wajah se complete nahi ho sakta (upar dekhein).`
+  const completeBlockReason = isTodayLocked ? `Day ${lockedDate} is locked.`
+    : blocked ? `Can't complete because of ${materials.blocking.length} ${materials.blocking.length === 1 ? 'material' : 'materials'} (see above).`
     : '';
 
   const setPackCount = (variantId: string, text: string) => {
@@ -155,8 +155,8 @@ export default function BatchDetailModal({
 
   const footer = mode === 'cancel' ? (
     <>
-      <Button variant="secondary" onClick={() => setMode('details')} disabled={busy}>Wapas</Button>
-      <Button variant="danger" leftIcon={<Ban />} loading={busy} disabled={!cancelReason.trim()} onClick={cancel}>Batch cancel karein</Button>
+      <Button variant="secondary" onClick={() => setMode('details')} disabled={busy}>Back</Button>
+      <Button variant="danger" leftIcon={<Ban />} loading={busy} disabled={!cancelReason.trim()} onClick={cancel}>Cancel batch</Button>
     </>
   ) : (
     <>
@@ -174,10 +174,10 @@ export default function BatchDetailModal({
           title={completeBlockReason || undefined}
           onClick={complete}
         >
-          {busy ? 'Processing...' : zeroOutputPending ? 'Haan, zero output ke sath complete' : 'Mark batch completed'}
+          {busy ? 'Processing...' : zeroOutputPending ? 'Yes, complete with zero output' : 'Mark batch completed'}
         </Button>
       ) : (
-        <Button variant="secondary" onClick={onClose}>Band karein</Button>
+        <Button variant="secondary" onClick={onClose}>Close</Button>
       )}
     </>
   );
@@ -194,7 +194,7 @@ export default function BatchDetailModal({
           <Badge className="font-mono">{batch.batch_number}</Badge>
         </span>
       }
-      description={`Shuru: ${formatPkDay(batch.start_date, 'full')}${started ? `, ${started}` : ''} · Stage: ${stageLabel(batch.status)}`}
+      description={`Started: ${formatPkDay(batch.start_date, 'full')}${started ? `, ${started}` : ''} · Stage: ${stageLabel(batch.status)}`}
       icon={
         <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg">
           <Factory className="size-5" aria-hidden="true" />
@@ -205,13 +205,13 @@ export default function BatchDetailModal({
       {mode === 'cancel' ? (
         <div className="space-y-3 pb-1">
           <CancelPreview plan={cancelPlan} inputLitres={inputLitres} />
-          <Field label="Cancel karne ki wajah" required>
+          <Field label="Reason for cancelling" required>
             {control => (
               <Textarea
                 {...control}
                 autoFocus
                 rows={3}
-                placeholder="Masalan: doodh kharab ho gaya, machine kharab..."
+                placeholder="e.g. milk went bad, machine broke down..."
                 value={cancelReason}
                 onChange={event => setCancelReason(event.target.value)}
               />
@@ -223,19 +223,19 @@ export default function BatchDetailModal({
           {isTodayLocked && canFinish && (
             <div className="flex items-start gap-2.5 rounded-control border border-warning/30 bg-warning-soft p-3 text-xs font-medium text-warning-fg" role="alert">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              <span><strong>Day locked ({lockedDate}):</strong> aaj ka business day band hai, is liye batch complete karke stock mein nahi dala ja sakta.</span>
+              <span><strong>Day locked ({lockedDate}):</strong> today's business day is locked, so the batch can't be completed and added to stock.</span>
             </div>
           )}
 
           {!productDef && (
             <p className="flex items-start gap-2 rounded-control border border-warning/30 bg-warning-soft px-3 py-2.5 text-xs font-medium text-warning-fg" role="alert">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              "{batch.product_name}" catalog mein nahi mila: recipe, packs aur stock preview nahi dikh sakte. Catalog mein isi naam ka product banayen.
+              "{batch.product_name}" was not found in the catalog, so the recipe, packs and stock preview can't be shown. Create a product with this exact name in the catalog.
             </p>
           )}
 
           <div className="grid grid-cols-3 gap-2">
-            <Metric label="Doodh in" value={`${formatQty(inputLitres, 3)} L`} />
+            <Metric label="Milk in" value={`${formatQty(inputLitres, 3)} L`} />
             <Metric label="Target" value={`${formatQty(batch.quantity_output_estimated || 0, 3)} ${unit}`} />
             <Metric
               label="Est. profit"
@@ -293,7 +293,7 @@ export default function BatchDetailModal({
                 <Badge tone="brand" size="md">Total {formatQty(preview.addedBase, 3)} {unit}</Badge>
               </div>
 
-              <Field label={`Loose quantity (${unit})`} error={looseError || undefined} hint={variants.length > 0 ? 'Packs ke ilawa jo khula maal bacha.' : undefined}>
+              <Field label={`Loose quantity (${unit})`} error={looseError || undefined} hint={variants.length > 0 ? 'Loose stock left over besides the packs.' : undefined}>
                 {control => (
                   <Input
                     {...control}
@@ -315,7 +315,7 @@ export default function BatchDetailModal({
                     <div key={v.id} className="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3 py-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-fg">{v.name}</p>
-                        <p className="text-[11px] text-fg-subtle">{formatQty(v.quantity_in_base_unit, 3)} {unit} har pack</p>
+                        <p className="text-[11px] text-fg-subtle">{formatQty(v.quantity_in_base_unit, 3)} {unit} per pack</p>
                       </div>
                       <div className="w-28 shrink-0">
                         <Input
@@ -353,7 +353,7 @@ export default function BatchDetailModal({
               {zeroOutputPending && (
                 <p className="flex items-start gap-2 rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-xs font-medium text-danger-fg" role="alert">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                  Output zero hai: is batch ka koi maal stock mein nahi jayega (kharab batch). Dobara click karke confirm karein.
+                  Output is zero: nothing from this batch will go into stock (spoilt batch). Click again to confirm.
                 </p>
               )}
 
@@ -370,7 +370,7 @@ export default function BatchDetailModal({
           )}
 
           {canEdit && isOpen && !canFinish && (
-            <p className="text-xs text-fg-subtle">Batch ko "Finish" column tak le jayen (card ka Advance button ya drag), phir yahan output likh kar complete karein.</p>
+            <p className="text-xs text-fg-subtle">Move the batch to the "Finish" column (the card's Advance button, or drag it), then enter the output here to complete it.</p>
           )}
         </div>
       )}
@@ -386,10 +386,10 @@ const TONE_TEXT: Record<string, string> = {
 };
 
 const PROBLEM_BADGE: Record<NonNullable<MaterialNeed['problem']> | 'ok', { tone: Tone; label: string }> = {
-  ok: { tone: 'success', label: 'Theek' },
-  short: { tone: 'danger', label: 'Kam hai' },
-  unit: { tone: 'danger', label: 'Unit ghalat' },
-  missing: { tone: 'danger', label: 'Nahi mila' },
+  ok: { tone: 'success', label: 'OK' },
+  short: { tone: 'danger', label: 'Short' },
+  unit: { tone: 'danger', label: 'Wrong unit' },
+  missing: { tone: 'danger', label: 'Not found' },
 };
 
 /** Each material the batch uses up on completion: needed vs on hand (loose + packs). */
@@ -400,7 +400,7 @@ function MaterialsCheck({ needs, warnings, blocking, canFinish }: { needs: Mater
         <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
           <Boxes className="size-3.5" aria-hidden="true" /> Materials
         </span>
-        <span className="text-[11px] text-fg-subtle">{canFinish ? 'Complete karne par stock se katenge' : 'Batch complete hone par katenge'}</span>
+        <span className="text-[11px] text-fg-subtle">{canFinish ? 'Taken from stock when you complete' : 'Taken from stock when the batch completes'}</span>
       </h4>
       {needs.length > 0 && (
         <ul className="divide-y divide-line">
@@ -436,7 +436,7 @@ function MaterialsCheck({ needs, warnings, blocking, canFinish }: { needs: Mater
         </p>
       ))}
       {needs.length > 0 && (
-        <p className="border-t border-line px-3 py-1.5 text-[11px] text-fg-subtle">Chahiye / stock mein. Pehle loose stock katega, phir poore packs khulenge.</p>
+        <p className="border-t border-line px-3 py-1.5 text-[11px] text-fg-subtle">Needed / in stock. Loose stock is used first, then whole packs are opened.</p>
       )}
     </section>
   );
@@ -450,9 +450,9 @@ function StockPreview({ rows, unit, totalBefore, totalAfter }: { rows: OutputPil
         <thead className="bg-surface-2 text-[11px] text-fg-subtle">
           <tr>
             <th className="px-3 py-1.5 text-left font-semibold">Stock preview</th>
-            <th className="px-2 py-1.5 text-right font-semibold">Abhi</th>
+            <th className="px-2 py-1.5 text-right font-semibold">Now</th>
             <th className="px-2 py-1.5 text-right font-semibold">Batch</th>
-            <th className="px-3 py-1.5 text-right font-semibold">Baad mein</th>
+            <th className="px-3 py-1.5 text-right font-semibold">After</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-line tabular-nums">
@@ -468,7 +468,7 @@ function StockPreview({ rows, unit, totalBefore, totalAfter }: { rows: OutputPil
             );
           })}
           <tr className="bg-surface-2/70">
-            <td className="px-3 py-1.5 font-bold text-fg">Kul stock ({unit})</td>
+            <td className="px-3 py-1.5 font-bold text-fg">Total stock ({unit})</td>
             <td className="px-2 py-1.5 text-right text-fg-subtle">{formatQty(totalBefore, 3)}</td>
             <td />
             <td className="px-3 py-1.5 text-right font-bold text-fg">{formatQty(totalAfter, 3)}</td>
@@ -484,15 +484,15 @@ function CancelPreview({ plan, inputLitres }: { plan: ReturnType<typeof batchCan
   return (
     <div className="space-y-2">
       <p className="rounded-control border border-danger/25 bg-danger-soft px-3 py-2.5 text-sm text-danger-fg">
-        Batch cancel hone par is ka {formatQty(inputLitres, 3)} L doodh wapas chala jayega:
+        If the batch is cancelled, its {formatQty(inputLitres, 3)} L of milk goes back to:
       </p>
       <ul className="divide-y divide-line overflow-hidden rounded-control border border-line text-xs">
         {plan.poolLitres > 0 && (
           <li className="flex items-start gap-2.5 px-3 py-2.5">
             <Droplets className="mt-0.5 size-4 shrink-0 text-warning-fg" aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <p className="font-semibold text-fg">Unallocated doodh (pool)</p>
-              <p className="mt-0.5 text-fg-subtle">Naya lot "{plan.poolLotName}" · {plan.poolMilkType} · {formatCurrency(plan.poolRate)}/L</p>
+              <p className="font-semibold text-fg">Unallocated milk (pool)</p>
+              <p className="mt-0.5 text-fg-subtle">New lot "{plan.poolLotName}" · {plan.poolMilkType} · {formatCurrency(plan.poolRate)}/L</p>
             </div>
             <span className="flex shrink-0 items-center gap-1 font-bold tabular-nums text-fg"><ArrowRight className="size-3 text-fg-faint" aria-hidden="true" />{formatQty(plan.poolLitres, 3)} L</span>
           </li>
@@ -504,7 +504,7 @@ function CancelPreview({ plan, inputLitres }: { plan: ReturnType<typeof batchCan
               <p className="font-semibold text-fg">{row.name} — counter (loose stock)</p>
               {row.stockUnit.toLowerCase() !== 'l' && (
                 <p className={cn('mt-0.5', row.converted ? 'text-fg-subtle' : 'font-medium text-warning-fg')}>
-                  {row.converted ? `Stock mein +${formatQty(row.stockQty, 3)} ${row.stockUnit}` : `Unit "${row.stockUnit}" litre mein nahi badalti: ${formatQty(row.litres, 3)} as it is jama hoga. Item ki unit check karein.`}
+                  {row.converted ? `+${formatQty(row.stockQty, 3)} ${row.stockUnit} to stock` : `Unit "${row.stockUnit}" can't be converted from litres: ${formatQty(row.litres, 3)} will be added as it is. Check the item's unit.`}
                 </p>
               )}
             </div>
@@ -513,9 +513,9 @@ function CancelPreview({ plan, inputLitres }: { plan: ReturnType<typeof batchCan
         ))}
       </ul>
       {plan.orphanCounterLitres > 0 && (
-        <p className="text-xs text-warning-fg">{formatQty(plan.orphanCounterLitres, 3)} L counter milk ka item ab catalog mein nahi, is liye wo pool mein jayega.</p>
+        <p className="text-xs text-warning-fg">{formatQty(plan.orphanCounterLitres, 3)} L of counter milk has no item in the catalog any more, so it goes to the pool.</p>
       )}
-      <p className="text-xs text-fg-subtle">Materials (cheeni, cups waghaira) batch complete hone par katte hain, is liye cancel par kuch aur wapas nahi hota.</p>
+      <p className="text-xs text-fg-subtle">Materials (sugar, cups, etc.) are only used when a batch completes, so nothing else comes back on cancel.</p>
     </div>
   );
 }

@@ -15,7 +15,7 @@ const MODES = [
 
 type Errors = Partial<Record<'amount' | 'date' | 'account', string>>;
 
-/** Record a payment to a supplier: the khata payable goes down and the chosen account pays it. */
+/** Record a payment to a supplier: the ledger payable goes down and the chosen account pays it. */
 export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier; onClose: () => void }) {
   const { accounts = [], settings, activeShiftSession, recordSupplierPayment, isDayLocked } = useDairy();
   const today = getTodayLocalDate();
@@ -62,12 +62,12 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
   const validate = (): Errors => {
     const next: Errors = {};
     const raw = Number(amount);
-    if (!amount.trim() || !Number.isFinite(raw)) next.amount = 'Amount likhein';
-    else if (raw <= 0 || amountNum <= 0) next.amount = 'Amount 0 se zyada honi chahiye';
-    if (!date) next.date = 'Tareekh chunein';
-    else if (date > today) next.date = 'Aage ki tareekh par payment nahi ho sakti';
-    else if (isDayLocked?.(date)) next.date = 'Ye din band (locked) hai. Aaj ki tareekh chunein.';
-    if (activeAccounts.length > 0 && !accountId) next.account = 'Payment kis account se hui? Account chunein';
+    if (!amount.trim() || !Number.isFinite(raw)) next.amount = 'Enter an amount';
+    else if (raw <= 0 || amountNum <= 0) next.amount = 'Amount must be more than 0';
+    if (!date) next.date = 'Choose a date';
+    else if (date > today) next.date = "A payment can't be on a future date";
+    else if (isDayLocked?.(date)) next.date = "This day is locked. Choose today's date.";
+    if (activeAccounts.length > 0 && !accountId) next.account = 'Which account paid? Choose an account';
     return next;
   };
 
@@ -102,7 +102,7 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
       dismissible={!saving}
       initialFocusRef={amountRef}
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-success-soft text-success-fg"><Banknote className="size-5" /></span>}
-      title="Supplier ko payment"
+      title="Pay supplier"
       description={supplier.name}
       footer={
         <>
@@ -116,7 +116,7 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
       <form id="supplier-payment-form" onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 px-3.5 py-3">
           <div>
-            <p className="text-xs font-semibold text-fg-subtle">Abhi ka khata</p>
+            <p className="text-xs font-semibold text-fg-subtle">Current balance</p>
             <p className="text-[11px] text-fg-faint">{balanceLabel(balance, true)}</p>
           </div>
           <SupplierBalance value={balance} label="none" className="text-lg font-bold" />
@@ -143,7 +143,7 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
         {balance > 0.5 && Math.abs(amountNum - balance) > 0.5 && (
           <div className="-mt-2 flex flex-wrap gap-1.5">
             <Button variant="soft" size="sm" onClick={() => { setAmount(String(cleanNumber(balance))); clearError('amount'); }}>
-              Pura payable <Money amount={balance} />
+              Full payable <Money amount={balance} />
             </Button>
           </div>
         )}
@@ -165,7 +165,7 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
               </Select>
             )}
           </Field>
-          <Field label="Tareekh" required error={errors.date}>
+          <Field label="Date" required error={errors.date}>
             {control => (
               <Input {...control} type="date" max={today} value={date} onChange={e => { setDate(e.target.value); clearError('date'); }} />
             )}
@@ -175,18 +175,18 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
         {activeAccounts.length === 0 ? (
           <p role="alert" className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-xs font-medium text-warning-fg">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            Koi Cash drawer ya Bank account nahi hai. Pehle Bank &amp; Cash mein account banayein.
+            There is no cash drawer or bank account. First create an account in Bank &amp; Cash.
           </p>
         ) : (
           <Field
-            label="Kis account se diya"
+            label="Paid from account"
             required
             error={errors.account}
-            hint={account ? <>Account mein abhi <Money amount={accountBalance} className="font-semibold text-fg-muted" /></> : undefined}
+            hint={account ? <>Account has <Money amount={accountBalance} className="font-semibold text-fg-muted" /> now</> : undefined}
           >
             {control => (
               <Select {...control} value={accountId} onChange={e => { setAccountId(e.target.value); clearError('account'); }}>
-                <option value="">Account chunein</option>
+                <option value="">Choose account</option>
                 {activeAccounts.map(a => {
                   const tags = [
                     activeShiftSession && (a.id === activeShiftSession.drawer_id || a.id === activeShiftSession.account_id) ? 'Active till' : '',
@@ -211,17 +211,17 @@ export function SupplierPaymentModal({ supplier, onClose }: { supplier: Supplier
         {amountNum > 0 && (
           <div className={cn('rounded-control px-3.5 py-2.5 text-xs', overpay ? 'bg-info-soft text-info-fg' : 'bg-surface-2 text-fg-muted')}>
             <p className="flex items-center justify-between gap-2 font-semibold">
-              <span>Payment ke baad khata</span>
+              <span>Balance after payment</span>
               <SupplierBalance value={after} />
             </p>
-            {overpay && <p className="mt-1">Payable se zyada payment: <Money amount={Math.abs(after)} /> advance ban jayega.</p>}
-            {balanceState(balance) !== 'payable' && <p className="mt-1">Is supplier ka koi payable nahi; ye poori payment advance hogi.</p>}
+            {overpay && <p className="mt-1">More than the payable: <Money amount={Math.abs(after)} /> becomes an advance.</p>}
+            {balanceState(balance) !== 'payable' && <p className="mt-1">Nothing is payable to this supplier; this whole payment will be an advance.</p>}
           </div>
         )}
         {shortOfFunds && (
           <p className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-medium text-warning-fg">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            {account?.name} mein sirf {formatCurrency(accountBalance)} hai. Check kar lein ke paisa isi account se gaya.
+            {account?.name} has only {formatCurrency(accountBalance)}. Check that the money really left this account.
           </p>
         )}
       </form>

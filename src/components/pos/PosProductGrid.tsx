@@ -209,7 +209,7 @@ const PosProductCard = memo(function PosProductCard({ product, inCartQty, onSele
   const minVPrice = variantPrices.length ? Math.min(...variantPrices) : product.price;
   const maxVPrice = variantPrices.length ? Math.max(...variantPrices) : product.price;
 
-  // Single-variant label without repeating the product name (e.g. 'Bottle', not 'Badam Doodh Bottle')
+  // Single-variant label without repeating the product name (e.g. 'Bottle', not 'Almond Milk Bottle')
   const singleVariantCleanLabel = hasVariants && activeVariants.length === 1
     ? (activeVariants[0]?.name?.replace(new RegExp(product.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '').trim() || activeVariants[0]?.name || 'Pack')
     : 'Pack';

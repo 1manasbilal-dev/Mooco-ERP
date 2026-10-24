@@ -76,8 +76,8 @@ describe('bill line checks', () => {
 
   it('accepts a good line and refuses half packs, zero qty and minus rates', () => {
     expect(billLineProblem(line, units)).toBe('');
-    expect(billLineProblem({ ...line, quantity: 2.5 }, units)).toMatch(/poore number/);
-    expect(billLineProblem({ ...line, quantity: 0 }, units)).toMatch(/0 se zyada/);
+    expect(billLineProblem({ ...line, quantity: 2.5 }, units)).toMatch(/whole number/);
+    expect(billLineProblem({ ...line, quantity: 0 }, units)).toMatch(/greater than 0/);
     expect(billLineProblem({ ...line, rate: -1 }, units)).toMatch(/minus/);
     // Half a bag is fine: it is loose stock counted in bags.
     expect(billLineProblem({ ...line, unit: 'Bag', unitKey: 'multi:v_bag', conversion_factor: 20, quantity: 0.5 }, units)).toBe('');
@@ -85,12 +85,12 @@ describe('bill line checks', () => {
 
   it('refuses a unit that no longer exists or changed size while the bill was open', () => {
     const hidden = purchaseUnitsFor({ ...rusk, variants: rusk.variants.map(v => (v.id === 'v_pouch' ? { ...v, isActive: false } : v)) });
-    expect(billLineProblem(line, hidden)).toMatch(/ab is product mein nahi/);
+    expect(billLineProblem(line, hidden)).toMatch(/no longer on this product/);
     const resized = purchaseUnitsFor({ ...rusk, variants: rusk.variants.map(v => (v.id === 'v_pouch' ? { ...v, quantity_in_base_unit: 0.4 } : v)) });
-    expect(billLineProblem(line, resized)).toMatch(/size badal gaya/);
+    expect(billLineProblem(line, resized)).toMatch(/size of .* changed/);
     const rebased = purchaseUnitsFor({ ...rusk, unit: 'g' });
-    expect(billLineProblem({ ...line, unit: 'kg', unitKey: 'base', conversion_factor: 1 }, rebased)).toMatch(/ab is product mein nahi/);
-    expect(billLineProblem(line, [])).toMatch(/catalog mein nahi/);
+    expect(billLineProblem({ ...line, unit: 'kg', unitKey: 'base', conversion_factor: 1 }, rebased)).toMatch(/no longer on this product/);
+    expect(billLineProblem(line, [])).toMatch(/no longer in the catalog/);
   });
 
   it('starts a new line in the last bought unit and rate, or the pack for pack-only products', () => {
@@ -140,7 +140,7 @@ describe('landingPreview', () => {
   it('warns when loose intake of a sale product has no way to be sold', () => {
     const packsOnly = { ...rusk, variants: rusk.variants.filter(v => v.id !== 'v_bag') };
     const landing = landingPreview(packsOnly, { loose: 0, packs: {} }, [{ quantity: 2, rate: 400, unit: purchaseUnitsFor(packsOnly)[0] }]);
-    expect(landing.notes[0]).toMatch(/Loose sale band/);
+    expect(landing.notes[0]).toMatch(/Loose sale is off/);
   });
 
   it('ignores minus stock in the average and says so', () => {
@@ -169,7 +169,7 @@ describe('returns', () => {
     // The pack was deleted since: the return comes out of loose, and the owner is told.
     const gone = purchaseLinePile(packRow, { ...rusk, variants: [] });
     expect(gone.kind).toBe('loose');
-    expect(gone.note).toMatch(/loose stock se kam/);
+    expect(gone.note).toMatch(/come off loose stock/);
     // The pack became a multi-unit: the return would write a stray count.
     expect(purchaseLinePile(packRow, { ...rusk, variants: [{ id: 'v_pouch', name: '500 g pouch', quantity_in_base_unit: 0.5, deduct_from_base: true }] }).note).toMatch(/multi-unit/);
   });
@@ -179,9 +179,9 @@ describe('returns', () => {
     expect(returnableQty({ ...packRow, status: 'Returned' })).toBe(0);
     const pile = purchaseLinePile(packRow, rusk);
     expect(returnQtyProblem(8, 8, pile, '500 g pouch')).toBe('');
-    expect(returnQtyProblem(9, 8, pile, '500 g pouch')).toMatch(/sirf 8 × 500 g pouch wapas/);
-    expect(returnQtyProblem(1.5, 8, pile, '500 g pouch')).toMatch(/poore number/);
-    expect(returnQtyProblem(0, 8, pile, 'x')).toMatch(/0 se zyada/);
+    expect(returnQtyProblem(9, 8, pile, '500 g pouch')).toMatch(/Only 8 × 500 g pouch can be returned/);
+    expect(returnQtyProblem(1.5, 8, pile, '500 g pouch')).toMatch(/whole number/);
+    expect(returnQtyProblem(0, 8, pile, 'x')).toMatch(/greater than 0/);
     expect(returnQtyProblem(1.5, 3, purchaseLinePile(looseRow, rusk), 'Bag')).toBe('');
   });
 

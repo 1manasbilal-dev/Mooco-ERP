@@ -53,8 +53,8 @@ const CashControl: React.FC = () => {
       <Card className="mx-auto mt-10 max-w-lg">
         <EmptyState
           icon={<Store />}
-          title="Cashier shifts POS counter par hain"
-          description="Shift POS ke andar hi start aur close hoti hai. Cash Control head ke liye hai: remittance receive karna, din close karna aur audit."
+          title="Cashier shifts run on the POS counter"
+          description="Shifts start and close inside the POS. Cash Control is for the head: receiving remittances, closing the day and audit."
           action={<Button rightIcon={<ArrowRight />} onClick={() => navigate('/pos')}>Go to POS counter</Button>}
         />
       </Card>
@@ -65,7 +65,7 @@ const CashControl: React.FC = () => {
     <div className="flex flex-col gap-4 pb-10 sm:gap-6">
       <PageHeader
         eyebrow="Cash control"
-        description="Cashiers ka cash receive karein, din close karein aur har farq ka hisaab rakhein."
+        description="Receive cash from cashiers, close the day and account for every difference."
         actions={(
           <Button
             variant="secondary"
@@ -96,7 +96,7 @@ const CashControl: React.FC = () => {
         <div role="status" className="flex items-start gap-3 rounded-card bg-warning-soft px-4 py-3 text-[13px] text-warning-fg ring-1 ring-inset ring-warning/25">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <p>
-            <span className="font-bold">Business day locked:</span> {formatBusinessDate(today)} lock hai. Is tareekh ki entries, drawer loads aur closing tabdeel nahi ho sakti.
+            <span className="font-bold">Business day locked:</span> {formatBusinessDate(today)} is locked. Entries, drawer loads and closing for this date can&apos;t be changed.
           </p>
         </div>
       )}

@@ -15,6 +15,8 @@ interface PaletteItem {
   id: string;
   title: string;
   subtitle?: string;
+  /** Extra search words that are not shown, e.g. the Roman Urdu words staff used to type ("khata"). */
+  keywords?: string;
   category: 'Navigation' | 'Actions' | 'Customers' | 'Suppliers' | 'Products';
   icon: React.ElementType;
   action: () => void;
@@ -154,8 +156,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       },
       {
         id: 'nav-customers',
-        title: 'Customers & Khata Ledger',
+        title: 'Customers & Ledgers',
         subtitle: 'Customer directories, live credit and balances',
+        keywords: 'khata udhaar',
         category: 'Navigation',
         icon: Users,
         action: () => { openTab('customers'); onClose(); }
@@ -164,6 +167,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         id: 'nav-suppliers',
         title: 'Suppliers & Milk Farmers',
         subtitle: 'Supplier ledgers, daily fat & milk accounts',
+        keywords: 'khata doodh',
         category: 'Navigation',
         icon: Truck,
         action: () => { openTab('suppliers'); onClose(); }
@@ -171,7 +175,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: 'nav-expenses',
         title: 'Expenses & Vendor Bills',
-        subtitle: 'Operational expenses, utilities, payroll & vendor khata',
+        subtitle: 'Operational expenses, utilities, payroll & vendor ledgers',
+        keywords: 'kharcha kharche khata',
         category: 'Navigation',
         icon: Receipt,
         action: () => { openTab('expenses'); onClose(); }
@@ -195,7 +200,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: 'nav-reports',
         title: 'Reports Centre',
-        subtitle: 'Sales, profit, khata, milk, stock and cash reports',
+        subtitle: 'Sales, profit, ledger, milk, stock and cash reports',
+        keywords: 'khata hisaab',
         category: 'Navigation',
         icon: BarChart3,
         action: () => { openTab('reports'); onClose(); }
@@ -286,7 +292,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       });
     }
 
-    // Names, phones and balances only for operators who may open the khata
+    // Names, phones and balances only for operators who may open the ledgers
     (hasPermission('customers') ? customers || [] : []).forEach(c => {
       if (!c) return;
       const bal = c.balance || 0;
@@ -348,7 +354,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   // Lower-cased once per open, not on every keystroke for every customer.
   const searchIndex = useMemo(
-    () => allItems.map(item => `${item.title}\n${item.subtitle || ''}\n${item.category}`.toLowerCase()),
+    () => allItems.map(item => `${item.title}\n${item.subtitle || ''}\n${item.category}\n${item.keywords || ''}`.toLowerCase()),
     [allItems]
   );
 

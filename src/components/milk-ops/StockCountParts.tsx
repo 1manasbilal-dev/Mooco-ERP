@@ -36,9 +36,9 @@ export function PileCountRow({ pile, baseUnit, value, onChange, showError, idPre
   const title = (
     <>
       {name}
-      {pile.kind === 'pack' && <span className="text-[11px] font-medium text-fg-subtle">{formatBaseQty(pile.contains, baseUnit)} har pack</span>}
+      {pile.kind === 'pack' && <span className="text-[11px] font-medium text-fg-subtle">{formatBaseQty(pile.contains, baseUnit)} per pack</span>}
       {pile.kind === 'pack' && pile.hidden && <Badge icon={<EyeOff aria-hidden="true" />}>Hidden</Badge>}
-      {stray && <Badge tone="warning" icon={<AlertTriangle aria-hidden="true" />}>Purani ginti</Badge>}
+      {stray && <Badge tone="warning" icon={<AlertTriangle aria-hidden="true" />}>Old count</Badge>}
     </>
   );
   return (
@@ -50,7 +50,7 @@ export function PileCountRow({ pile, baseUnit, value, onChange, showError, idPre
             : <label htmlFor={inputId} className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-fg">{title}</label>}
           <p className={cn('text-[11px] tabular-nums', pile.system < 0 ? 'font-semibold text-danger-fg' : 'text-fg-subtle')}>
             System: {formatQty(pile.system, 3)} {pile.unitLabel}
-            {stray && <span className="text-warning-fg"> · kisi pile ki nahi, 0 kar dein</span>}
+            {stray && <span className="text-warning-fg"> · belongs to no pile, set it to 0</span>}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -59,11 +59,11 @@ export function PileCountRow({ pile, baseUnit, value, onChange, showError, idPre
               size="sm"
               variant={value === '0' ? 'primary' : 'secondary'}
               aria-pressed={value === '0'}
-              aria-label={`${name}: purani ginti 0 karein`}
+              aria-label={`${name}: set old count to 0`}
               disabled={disabled}
               onClick={() => onChange(value === '0' ? '' : '0')}
             >
-              {value === '0' ? '0 hoga' : '0 karein'}
+              {value === '0' ? 'Will be 0' : 'Set to 0'}
             </Button>
           ) : (
             <input
@@ -94,7 +94,7 @@ export function PileCountRow({ pile, baseUnit, value, onChange, showError, idPre
             <>
               <p className={cn('text-sm font-bold tabular-nums', diffTone(read.diff))}>{signedQty(read.diff)} <span className="text-[11px] font-semibold">{ownUnit}</span></p>
               {pile.kind === 'pack' && <p className="text-[11px] tabular-nums text-fg-subtle">= {signedQty(read.baseDiff)} {baseUnit}</p>}
-              {stray && <p className="text-[11px] text-fg-subtle">stock par asar nahi</p>}
+              {stray && <p className="text-[11px] text-fg-subtle">no effect on stock</p>}
             </>
           )}
         </div>
@@ -114,13 +114,13 @@ export function CountTotals({ changes, baseDiff, unit, valueDiff }: { changes: n
       )}
     >
       <span className="text-xs font-semibold text-fg-muted">
-        {changes === 0 ? 'Abhi koi farq nahi' : `${changes} pile${changes > 1 ? 's' : ''} badlega${unit ? ' · kul farq' : ''}`}
+        {changes === 0 ? 'No difference yet' : `${changes} pile${changes > 1 ? 's' : ''} will change${unit ? ' · total difference' : ''}`}
       </span>
       {changes > 0 && (
         <span className="text-right">
           {unit && <span className={cn('text-lg font-bold tabular-nums', diffTone(baseDiff))}>{signedQty(baseDiff)} <span className="text-xs font-semibold">{unit}</span></span>}
           {valueDiff !== null && valueDiff !== 0 && (
-            <span className={cn('block font-semibold text-fg-subtle', unit ? 'text-[11px]' : 'text-sm')}>Cost par <Money amount={valueDiff} tone="signed" /></span>
+            <span className={cn('block font-semibold text-fg-subtle', unit ? 'text-[11px]' : 'text-sm')}>At cost <Money amount={valueDiff} tone="signed" /></span>
           )}
         </span>
       )}

@@ -160,7 +160,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
             aria-expanded={todayDropdownOpen}
             onClick={() => { setTodayDropdownOpen(prev => !prev); setRecentDropdownOpen(false); }}
             className={cn(chip, todayDropdownOpen && 'border-brand-accent ring-2 ring-ring/20')}
-            title="Cash / Online / Credit breakdown dekhein"
+            title="See the Cash / Online / Credit breakdown"
           >
             <span className="hidden size-6 items-center justify-center rounded-md bg-brand-soft text-brand-fg sm:flex" aria-hidden="true"><TrendingUp className="size-3.5" /></span>
             <span className="hidden text-[11px] font-semibold text-fg-subtle sm:inline">Today</span>
@@ -179,7 +179,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
               <dl className="space-y-0.5 text-[13px]">
                 <SummaryRow icon={<Wallet />} label="Cash" amount={todaySummary.cashTotal} tone="success" />
                 <SummaryRow icon={<CreditCard />} label="Online / Bank" amount={todaySummary.onlineTotal} tone="info" />
-                {todaySummary.creditTotal > 0 && <SummaryRow icon={<User />} label="Credit (Udhar)" amount={todaySummary.creditTotal} tone="warning" />}
+                {todaySummary.creditTotal > 0 && <SummaryRow icon={<User />} label="Credit" amount={todaySummary.creditTotal} tone="warning" />}
                 {Boolean(todaySummary.returnedTotal && todaySummary.returnedTotal > 0) && (
                   <SummaryRow icon={<RotateCcw />} label={`Returns (${todaySummary.returnedCount})`} amount={-(todaySummary.returnedTotal || 0)} tone="danger" />
                 )}
@@ -199,7 +199,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
             aria-expanded={recentDropdownOpen}
             onClick={() => { setRecentDropdownOpen(prev => !prev); setTodayDropdownOpen(false); }}
             className={cn(chip, 'max-w-full min-w-0', recentDropdownOpen && 'border-brand-accent ring-2 ring-ring/20')}
-            title="Last 5 bills — kholein aur reprint karein"
+            title="Last 5 bills — open and reprint"
             aria-label={latestSale ? 'Recent sales' : 'Recent sales: none yet'}
           >
             <Receipt className="size-4 shrink-0 text-brand-fg" aria-hidden="true" />
@@ -223,7 +223,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
               <div className="mb-1.5 flex items-center justify-between border-b border-line px-1.5 pb-2">
                 <span className="flex items-center gap-1.5 text-[13px] font-bold text-fg">
                   <Receipt className="size-4 text-brand-fg" aria-hidden="true" />
-                  Recent sales <span className="font-normal text-fg-subtle">(آخری 5 بل)</span>
+                  Recent sales <span className="font-normal text-fg-subtle">(last 5 bills)</span>
                 </span>
                 <button
                   type="button"
@@ -252,7 +252,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
                             'group flex w-full cursor-pointer items-center justify-between gap-3 rounded-control p-2.5 text-left transition-colors',
                             idx === 0 ? 'bg-brand-soft/60 hover:bg-brand-soft' : 'hover:bg-surface-2',
                           )}
-                          title="Receipt kholein aur print karein"
+                          title="Open and print the receipt"
                         >
                           <span className="min-w-0">
                             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -292,8 +292,8 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
               !sync.isOnline ? 'bg-warning-soft text-warning-fg ring-warning/25' : sync.failedCount > 0 ? 'bg-danger-soft text-danger-fg ring-danger/20' : 'bg-info-soft text-info-fg ring-info/20',
             )}
             title={!sync.isOnline
-              ? `Internet nahi hai. Bills isi device par save ho rahe hain${unsynced ? ` (${unsynced} sync baqi)` : ''}; internet aate hi sync honge.`
-              : sync.failedCount > 0 ? `${sync.failedCount} entries sync nahi ho sakin — header ke sync badge se dekhein.` : `${unsynced} entries sync ho rahi hain.`}
+              ? `No internet. Bills are being saved on this device${unsynced ? ` (${unsynced} waiting to sync)` : ''}; they will sync when the internet is back.`
+              : sync.failedCount > 0 ? `${sync.failedCount} entries couldn't sync — check the sync badge in the header.` : `${unsynced} entries are syncing.`}
           >
             {!sync.isOnline ? <CloudOff className="size-4" aria-hidden="true" /> : sync.failedCount > 0 ? <AlertTriangle className="size-4" aria-hidden="true" /> : <RefreshCw className={cn('size-4', sync.isSyncing && 'animate-spin')} aria-hidden="true" />}
             <span className="hidden sm:inline">{!sync.isOnline ? 'Offline' : sync.failedCount > 0 ? 'Sync error' : 'Syncing'}</span>
@@ -307,7 +307,7 @@ export const PosHeaderAnalytics = memo(function PosHeaderAnalytics({
             onClick={() => setIsShiftModalOpen(true)}
             className={chip}
             aria-label={otherCashierShift ? `${activeShiftSession.user_name || 'Cashier'}'s shift is open` : 'Shift open'}
-            title={`Shift open${otherCashierShift ? ` (${activeShiftSession.user_name})` : ''} · opening ${formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))} — cash dekhein ya shift band karein`}
+            title={`Shift open${otherCashierShift ? ` (${activeShiftSession.user_name})` : ''} · opening ${formatCurrency(Number(activeShiftSession.opening_counted ?? activeShiftSession.opening_float ?? 0))} — view cash or close the shift`}
           >
             <span className="size-2 shrink-0 rounded-full bg-brand-accent" aria-hidden="true" />
             <Clock className="size-4 text-fg-subtle sm:hidden" aria-hidden="true" />

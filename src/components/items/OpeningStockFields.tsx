@@ -36,7 +36,7 @@ export function OpeningStockFields({ baseUnit, costRate, variants, draft, onChan
         <Field
           label={`Loose stock${baseUnit ? ` (${baseUnit})` : ''}`}
           error={showErrors ? check.errors.loose : undefined}
-          hint={noUnit ? 'Pehle base unit chunein.' : 'Khula maal, base unit mein. Khali = 0.'}
+          hint={noUnit ? 'Choose a base unit first.' : 'Loose stock, in the base unit. Empty = 0.'}
         >
           {control => (
             <Input {...control} type="number" inputMode="decimal" min="0" step="any" placeholder="0" suffix={baseUnit || undefined}
@@ -49,7 +49,7 @@ export function OpeningStockFields({ baseUnit, costRate, variants, draft, onChan
             key={v.id}
             label={`${v.name}${v.isActive === false ? ' (hidden)' : ''}`}
             error={showErrors ? check.errors.packs[v.id] : undefined}
-            hint={`Kitne pack? 1 pack = ${formatBaseQty(sellUnitContains(v), baseUnit || 'unit')}`}
+            hint={`How many packs? 1 pack = ${formatBaseQty(sellUnitContains(v), baseUnit || 'unit')}`}
           >
             {control => (
               <Input {...control} type="number" inputMode="numeric" min="0" step="1" placeholder="0" suffix="packs"
@@ -63,14 +63,14 @@ export function OpeningStockFields({ baseUnit, costRate, variants, draft, onChan
       {packs.length === 0 && (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-subtle">
           <Info className="size-3.5 shrink-0" />
-          Ready-made packs (e.g. 500 g pouch) ka stock likhna hai to pehle pack add karein.
+          To enter stock for ready-made packs (e.g. 500 g pouch), add the pack first.
           <Button size="sm" variant="ghost" onClick={onOpenSellUnits}>Sell units</Button>
         </p>
       )}
       {multis.length > 0 && (
         <p className="flex items-start gap-1.5 text-xs text-fg-subtle">
           <Layers className="mt-0.5 size-3.5 shrink-0" />
-          {multis.map(v => v.name).join(', ')} ka apna stock nahi hota: yeh loose {baseUnit || 'stock'} se bikte hain.
+          {multis.map(v => v.name).join(', ')}: no stock of their own, they sell from loose {baseUnit || 'stock'}.
         </p>
       )}
 
@@ -78,7 +78,7 @@ export function OpeningStockFields({ baseUnit, costRate, variants, draft, onChan
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3.5 py-2.5 text-sm">
           <span className="font-semibold text-fg">Total: {formatBaseQty(check.totalBase, baseUnit || 'unit')}</span>
           <span className="text-xs text-fg-subtle">
-            {costRate > 0 ? <>Value <Money amount={value} className="font-semibold text-fg-muted" /> (cost par)</> : 'Cost likhein taake stock ki value sahi aaye.'}
+            {costRate > 0 ? <>Value <Money amount={value} className="font-semibold text-fg-muted" /> (at cost)</> : 'Enter the cost so the stock value is right.'}
           </span>
         </div>
       )}

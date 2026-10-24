@@ -82,7 +82,7 @@ export const AppHeader = memo(({ title, section, isSidebarOpen, onOpenSidebar, t
           )}
         >
           <Search size={17} className="shrink-0" aria-hidden="true" />
-          <span className="hidden flex-1 truncate text-left text-[13px] font-medium lg:inline">Search pages, khata…</span>
+          <span className="hidden flex-1 truncate text-left text-[13px] font-medium lg:inline">Search pages, ledgers…</span>
           <Kbd className="hidden bg-surface lg:inline-flex">{PALETTE_SHORTCUT}</Kbd>
         </button>
 
@@ -216,7 +216,7 @@ export const HeaderUserMenuView = memo(({ userName, roleName, themeMode, onToggl
           <div className="flex h-10 items-center justify-between gap-2 px-2.5 text-[13px] font-medium text-fg-muted" role="group" aria-label="Screen size">
             <span>Screen size</span>
             <div className="flex items-center gap-1">
-              <IconButton size="sm" variant="secondary" role="menuitem" aria-label="Screen chhoti karein" icon={<Minus />} disabled={zoom <= ZOOM_MIN} onClick={() => setZoom(zoom - ZOOM_STEP)} className="size-7" />
+              <IconButton size="sm" variant="secondary" role="menuitem" aria-label="Make screen smaller" icon={<Minus />} disabled={zoom <= ZOOM_MIN} onClick={() => setZoom(zoom - ZOOM_STEP)} className="size-7" />
               <button
                 type="button"
                 role="menuitem"
@@ -226,7 +226,7 @@ export const HeaderUserMenuView = memo(({ userName, roleName, themeMode, onToggl
               >
                 {zoom}%
               </button>
-              <IconButton size="sm" variant="secondary" role="menuitem" aria-label="Screen bari karein" icon={<Plus />} disabled={zoom >= ZOOM_MAX} onClick={() => setZoom(zoom + ZOOM_STEP)} className="size-7" />
+              <IconButton size="sm" variant="secondary" role="menuitem" aria-label="Make screen bigger" icon={<Plus />} disabled={zoom >= ZOOM_MAX} onClick={() => setZoom(zoom + ZOOM_STEP)} className="size-7" />
             </div>
           </div>
           <button type="button" role="menuitem" className={MENU_ITEM} onClick={onToggleTheme}>

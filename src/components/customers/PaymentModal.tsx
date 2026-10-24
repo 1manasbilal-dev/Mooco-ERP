@@ -26,7 +26,7 @@ interface PaymentModalProps {
   defaultCashAccountId?: string;
   defaultDigitalAccountId?: string;
   tillAccountIds: string[];
-  /** A khata Charge needs customers:edit (the context refuses it otherwise): payment-only users get no toggle. */
+  /** A ledger Charge needs customers:edit (the context refuses it otherwise): payment-only users get no toggle. */
   canCharge: boolean;
   defaultAccountForMode: (mode: string) => string;
   sendWhatsApp: boolean;
@@ -63,8 +63,8 @@ export default function PaymentModal({
   const activeAccounts = useMemo(() => accounts.filter(a => a.isActive !== false), [accounts]);
   const parsed = parseAmount(amount);
   const amountError = touched || amount.trim() !== '' ? parsed.error : undefined;
-  const dateError = !date ? 'Tareekh chunein' : date > today ? 'Aage ki tareekh par entry nahi ho sakti' : undefined;
-  const accountError = type === 'Payment' && !accountId ? 'Account chunein jahan payment jama hogi' : undefined;
+  const dateError = !date ? 'Choose a date' : date > today ? "Can't post an entry on a future date" : undefined;
+  const accountError = type === 'Payment' && !accountId ? 'Choose the account the payment goes into' : undefined;
   const selectedAccount = activeAccounts.find(a => a.id === accountId);
   const balanceAfter = roundCurrency(baseBalance + (parsed.error ? 0 : type === 'Payment' ? -parsed.value : parsed.value));
   const canWhatsApp = Boolean(customer.whatsapp || customer.phone);
@@ -97,12 +97,12 @@ export default function PaymentModal({
       dismissible={!saving}
       initialFocusRef={amountRef}
       icon={<span className={cn('flex size-10 items-center justify-center rounded-xl', isPayment ? 'bg-success-soft text-success-fg' : 'bg-danger-soft text-danger-fg')}><HandCoins size={20} /></span>}
-      title="Khata entry"
+      title="Ledger entry"
       description={<span className="flex flex-wrap items-center gap-x-2">{customer.name} · <KhataBalance balance={baseBalance} /></span>}
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button type="submit" form={FORM_ID} variant={isPayment ? 'primary' : 'danger'} loading={saving}>
-          {isPayment ? 'Save payment (deposit)' : 'Save khata charge'}
+          {isPayment ? 'Save payment (deposit)' : 'Save ledger charge'}
         </Button>
       </>}
     >
@@ -115,7 +115,7 @@ export default function PaymentModal({
             onChange={setType}
             options={[
               { value: 'Payment', label: 'Payment (received)' },
-              { value: 'Charge', label: 'Charge (debit khata)' },
+              { value: 'Charge', label: 'Charge (debit ledger)' },
             ]}
           />
         )}
@@ -139,7 +139,7 @@ export default function PaymentModal({
         {isPayment && due && (
           <div className="-mt-2 flex flex-wrap gap-1.5">
             <Button variant="soft" size="sm" onClick={() => setAmount(String(roundCurrency(Number(customer.balance))))}>
-              Poora baqaya {formatCurrency(customer.balance)}
+              Full due {formatCurrency(customer.balance)}
             </Button>
           </div>
         )}
@@ -171,11 +171,11 @@ export default function PaymentModal({
             label="Deposit to account"
             required
             error={touched ? accountError : undefined}
-            hint={selectedAccount ? `${selectedAccount.name} (${selectedAccount.type}) · current balance ${formatCurrency(Number(selectedAccount.balance || 0))}` : 'Account chunein jahan payment jama hogi.'}
+            hint={selectedAccount ? `${selectedAccount.name} (${selectedAccount.type}) · current balance ${formatCurrency(Number(selectedAccount.balance || 0))}` : 'Choose the account the payment goes into.'}
           >
             {control => (
               <Select {...control} value={accountId} onChange={e => setAccountId(e.target.value)}>
-                <option value="">-- Account chunein --</option>
+                <option value="">-- Choose account --</option>
                 {activeAccounts.map(acc => (
                   <option key={acc.id} value={acc.id}>
                     {acc.name} ({acc.type}) - Bal: {formatCurrency(Number(acc.balance || 0))}
@@ -191,8 +191,8 @@ export default function PaymentModal({
           <div className="flex gap-2.5 rounded-control border border-danger/25 bg-danger-soft p-3 text-xs text-danger-fg">
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <p>
-              <span className="block font-bold">Khata charge (customer udhaar)</span>
-              Ye raqam customer ke khaate mein izafa karegi (customer ke zimme udhaar barh jayega). Cash ya bank account par koi asar nahi parega.
+              <span className="block font-bold">Ledger charge (customer owes)</span>
+              This amount is added to the customer's ledger (what the customer owes goes up). Cash and bank accounts are not affected.
             </p>
           </div>
         )}
@@ -209,12 +209,12 @@ export default function PaymentModal({
         </Field>
 
         <div className="flex items-center justify-between gap-3 rounded-control bg-surface-2 px-3 py-2.5 text-[13px]">
-          <span className="font-semibold text-fg-muted">Entry ke baad balance</span>
+          <span className="font-semibold text-fg-muted">Balance after entry</span>
           <KhataBalance balance={balanceAfter} />
         </div>
 
         {canWhatsApp && (
-          <CheckRow id="khata-entry-whatsapp" checked={sendWhatsApp} onChange={onSendWhatsAppChange} label="Customer ko WhatsApp receipt bhejein" />
+          <CheckRow id="khata-entry-whatsapp" checked={sendWhatsApp} onChange={onSendWhatsAppChange} label="Send WhatsApp receipt to customer" />
         )}
       </form>
     </Modal>

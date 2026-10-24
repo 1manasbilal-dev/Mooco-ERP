@@ -452,7 +452,7 @@ const Expenses: React.FC = () => {
       return entry;
     };
     expenses.forEach(e => {
-      // Same match as the khata: the vendor id, or (older rows) the vendor's name.
+      // Same match as the ledger: the vendor id, or (older rows) the vendor's name.
       const ids = new Set<string>();
       if (e.vendor_id) ids.add(e.vendor_id);
       if (e.vendor_name) (idsByName.get(e.vendor_name.toLowerCase()) || []).forEach(id => ids.add(id));
@@ -602,7 +602,7 @@ const Expenses: React.FC = () => {
       }
     });
 
-    showToast(`Category "${cat.name}" ab ${newStatus ? 'Active' : 'Inactive'} hai`, newStatus ? 'success' : 'info');
+    showToast(`Category "${cat.name}" is now ${newStatus ? 'Active' : 'Inactive'}`, newStatus ? 'success' : 'info');
   };
 
   const handleToggleSubcategoryActive = async (parentCatName: string, sub: SubcategoryStructure) => {
@@ -629,7 +629,7 @@ const Expenses: React.FC = () => {
       }
     });
 
-    showToast(`Sub-category "${sub.name}" ab ${newStatus ? 'Active' : 'Inactive'} hai`, newStatus ? 'success' : 'info');
+    showToast(`Sub-category "${sub.name}" is now ${newStatus ? 'Active' : 'Inactive'}`, newStatus ? 'success' : 'info');
   };
 
   // One category write at a time: a double Enter created the same category or sub-category twice,
@@ -639,12 +639,12 @@ const Expenses: React.FC = () => {
   const handleCreateMainCategory = async (name: string): Promise<string | null> => {
     const trimmed = name.trim();
     if (!trimmed) {
-      showToast("Category ka naam likhein", "warning");
+      showToast("Enter a category name", "warning");
       return null;
     }
 
     if (categoryTree.some(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
-      showToast(`Category "${trimmed}" pehle se mojood hai`, "info");
+      showToast(`Category "${trimmed}" already exists`, "info");
       return trimmed;
     }
 
@@ -660,10 +660,10 @@ const Expenses: React.FC = () => {
       });
 
       if (success) {
-        showToast(`Category "${trimmed}" ban gayi`, 'success');
+        showToast(`Category "${trimmed}" created`, 'success');
         return trimmed;
       }
-      showToast("Category save nahi hui, dobara koshish karein", "error");
+      showToast("Category couldn't be saved, please try again", "error");
       return null;
     } finally {
       categoryWriteRef.current = false;
@@ -673,7 +673,7 @@ const Expenses: React.FC = () => {
   const handleCreateSubcategory = async (parentCatName: string, subcatName: string): Promise<string | null> => {
     const trimmedSub = subcatName.trim();
     if (!trimmedSub) {
-      showToast("Sub-category ka naam likhein", "warning");
+      showToast("Enter a sub-category name", "warning");
       return null;
     }
 
@@ -682,7 +682,7 @@ const Expenses: React.FC = () => {
       .find(c => c.name.toLowerCase() === parentCatName.toLowerCase())
       ?.subcategories.find(s => s.name.toLowerCase() === trimmedSub.toLowerCase());
     if (existing) {
-      showToast(`Sub-category "${existing.name}" pehle se "${parentCatName}" mein mojood hai`, "info");
+      showToast(`Sub-category "${existing.name}" already exists in "${parentCatName}"`, "info");
       return existing.name;
     }
 
@@ -704,7 +704,7 @@ const Expenses: React.FC = () => {
         });
         // Without its parent account the sub-category would be saved but never shown.
         if (!rootSaved) {
-          showToast("Sub-category save nahi hui", "error");
+          showToast("Sub-category couldn't be saved", "error");
           return null;
         }
         parentId = generatedId;
@@ -720,10 +720,10 @@ const Expenses: React.FC = () => {
       });
 
       if (success) {
-        showToast(`Sub-category "${trimmedSub}" "${parentCatName}" ke neeche add ho gayi`, 'success');
+        showToast(`Sub-category "${trimmedSub}" added under "${parentCatName}"`, 'success');
         return trimmedSub;
       }
-      showToast("Sub-category save nahi hui", "error");
+      showToast("Sub-category couldn't be saved", "error");
       return null;
     } finally {
       categoryWriteRef.current = false;
@@ -764,7 +764,7 @@ const Expenses: React.FC = () => {
     }
 
     if (categoryTree.some(c => c.name.toLowerCase() === trimmed.toLowerCase() && c.name !== cat.name)) {
-      showToast(`Category "${trimmed}" pehle se mojood hai`, "warning");
+      showToast(`Category "${trimmed}" already exists`, "warning");
       return;
     }
 
@@ -786,7 +786,7 @@ const Expenses: React.FC = () => {
     });
 
     setEditingCatName(null);
-    showToast(`Category ka naya naam "${trimmed}"`, 'success');
+    showToast(`Category renamed to "${trimmed}"`, 'success');
   };
 
   const handleStartEditSubcategory = (parentCatName: string, sub: SubcategoryStructure) => {
@@ -819,20 +819,20 @@ const Expenses: React.FC = () => {
     });
 
     setEditingSubcatKey(null);
-    showToast(`Sub-category ka naya naam "${trimmed}"`, 'success');
+    showToast(`Sub-category renamed to "${trimmed}"`, 'success');
   };
 
   const handleDeleteCategory = async (cat: CategoryStructure) => {
     const usageCount = getCategoryUsageCount(cat.name);
     if (usageCount > 0) {
-      showToast(`"${cat.name}" delete nahi ho sakti: is mein ${usageCount} transaction(s) record hain`, "warning");
+      showToast(`"${cat.name}" can't be deleted: it has ${usageCount} transaction(s) recorded`, "warning");
       return;
     }
 
     const ok = await confirmAction({
-      title: `Category "${cat.name}" delete karein?`,
-      message: 'Is category mein koi kharcha record nahi hai.',
-      consequences: ['Category aur us ka ledger account list se hat jayenge.', 'Naye kharche mein yeh category nazar nahi aayegi.'],
+      title: `Delete category "${cat.name}"?`,
+      message: 'No expense is recorded in this category.',
+      consequences: ['The category and its ledger account will be removed from the list.', 'This category will no longer show up for new expenses.'],
     });
     if (ok) {
       if (cat.accountId) {
@@ -850,21 +850,21 @@ const Expenses: React.FC = () => {
         }
       });
 
-      showToast(`Category "${cat.name}" delete ho gayi`, 'info');
+      showToast(`Category "${cat.name}" deleted`, 'info');
     }
   };
 
   const handleDeleteSubcategory = async (parentCatName: string, sub: SubcategoryStructure) => {
     const subUsage = getSubcategoryUsageCount(parentCatName, sub.name);
     if (subUsage > 0) {
-      showToast(`"${sub.name}" delete nahi ho sakti: is mein ${subUsage} transaction(s) record hain`, "warning");
+      showToast(`"${sub.name}" can't be deleted: it has ${subUsage} transaction(s) recorded`, "warning");
       return;
     }
 
     const ok = await confirmAction({
-      title: `Sub-category "${sub.name}" delete karein?`,
-      message: `"${parentCatName}" ke neeche is sub-category mein koi kharcha record nahi hai.`,
-      consequences: ['Sub-category aur us ka ledger account list se hat jayenge.'],
+      title: `Delete sub-category "${sub.name}"?`,
+      message: `No expense is recorded in this sub-category under "${parentCatName}".`,
+      consequences: ['The sub-category and its ledger account will be removed from the list.'],
     });
     if (ok) {
       if (sub.accountId) {
@@ -886,7 +886,7 @@ const Expenses: React.FC = () => {
         }
       });
 
-      showToast(`Sub-category "${sub.name}" delete ho gayi`, 'info');
+      showToast(`Sub-category "${sub.name}" deleted`, 'info');
     }
   };
 
@@ -938,7 +938,7 @@ const Expenses: React.FC = () => {
   const upsertSavedExpense = async (draft: Omit<SavedExpense, 'id'> & { id?: string }) => {
     const name = draft.name.trim();
     if (!name || !draft.category || !draft.description || draft.amount <= 0) {
-      showToast('Saved expense ke liye naam, category aur amount zaroori hain', 'warning');
+      showToast('A saved expense needs a name, category and amount', 'warning');
       return false;
     }
     const current = settings.expenses?.savedExpenses || [];
@@ -956,7 +956,7 @@ const Expenses: React.FC = () => {
       ? current.map(item => item.id === existing.id ? nextItem : item)
       : [nextItem, ...current];
     await updateSettings({ expenses: { savedExpenses: next } });
-    showToast(`${name} save ho gaya. Dobara record karne ke liye Saved kholein.`, 'success');
+    showToast(`${name} saved. Open Saved to record it again.`, 'success');
     return true;
   };
 
@@ -965,14 +965,14 @@ const Expenses: React.FC = () => {
     const target = current.find(item => item.id === id);
     if (!target) return;
     if (!(await confirmAction({
-      title: `"${target.name}" saved list se hatayen?`,
-      message: 'Sirf saved shortcut hatega; pehle se record kiye gaye kharche waise hi rahenge.',
-      confirmLabel: 'Haan, hatayen',
+      title: `Remove "${target.name}" from the saved list?`,
+      message: 'Only the saved shortcut is removed; expenses already recorded stay as they are.',
+      confirmLabel: 'Yes, remove',
     }))) return;
     await updateSettings({
       expenses: { savedExpenses: current.filter(item => item.id !== id) }
     });
-    showToast(`${target.name} hata diya gaya`, 'info');
+    showToast(`${target.name} removed`, 'info');
   };
 
   const localToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
@@ -1020,13 +1020,13 @@ const Expenses: React.FC = () => {
     setIsAddMode(true);
 
     if (!vendorStillExists) {
-      showToast('Yeh vendor ab list mein nahi hai. Save se pehle koi aur vendor chunein.', 'warning');
+      showToast('This vendor is no longer in the list. Choose another vendor before saving.', 'warning');
     }
   };
 
   const handleEditExpense = (exp: ExpenseEntry) => {
     if (!canEdit) {
-      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to do this.", "warning");
       return;
     }
     setEditingExpenseId(exp.id);
@@ -1055,31 +1055,31 @@ const Expenses: React.FC = () => {
   const handleSubmitExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingExpenseId ? !canEdit : !canCreate) {
-      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to do this.", "warning");
       return;
     }
     const description = (formData.description || '').trim();
     if (!formData.amount || formData.amount <= 0 || !description || isSubmitting || isSubmittingExpenseRef.current) {
       if (!formData.amount || formData.amount <= 0 || !description) {
-        showToast("Sahi amount aur tafseel likhein", "warning");
+        showToast("Enter a valid amount and description", "warning");
       }
       return;
     }
 
     if (!formData.category) {
-      showToast("Kharche ki category chunein", "warning");
+      showToast("Choose an expense category", "warning");
       return;
     }
 
     // A cleared date input sent '' and the entry was stamped with the current time instead.
     if (!formData.date) {
-      showToast("Kharche ki tareekh chunein", "warning");
+      showToast("Choose the expense date", "warning");
       return;
     }
 
     // The disabled Save button is not enough: Ctrl+Enter calls requestSubmit(), and addExpense only checks the books lock date.
     if (isDayLocked && isDayLocked(formData.date)) {
-      showToast(`${formData.date} ka din lock hai — is tareekh par kharcha save nahi ho sakta.`, "error");
+      showToast(`${formData.date} is a locked day — an expense can't be saved on this date.`, "error");
       return;
     }
 
@@ -1095,13 +1095,13 @@ const Expenses: React.FC = () => {
     // "Partial" with nothing paid used to be saved as Partial with no money moved; with the full
     // amount paid it stayed Partial forever (the loader keeps a stored Partial), showing a bill that was settled.
     if (formData.paymentStatus === 'Partial' && actualPaid <= 0) {
-      showToast("Partial mein abhi ada ki gayi raqam likhein, ya 'On credit' chunein", "warning");
+      showToast("For Partial, enter the amount paid now, or choose 'On credit'", "warning");
       return;
     }
     const paymentStatus: 'Paid' | 'Partial' | 'Unpaid' = actualPaid >= formData.amount ? 'Paid' : formData.paymentStatus;
 
     if ((paymentStatus === 'Unpaid' || paymentStatus === 'Partial') && !formData.vendor_id) {
-      showToast("Baqi raqam khata mein likhne ke liye vendor chunein", "warning");
+      showToast("Choose a vendor to put the remaining amount on credit", "warning");
       return;
     }
 
@@ -1113,7 +1113,7 @@ const Expenses: React.FC = () => {
     const chosenAccount = accounts.find(a => a.id === formData.account_id);
     // A paid amount with no account would be recorded as paid while no balance moves.
     if (actualPaid > 0 && !chosenAccount) {
-      showToast("Paisa kis account se diya gaya? Account chunein", "warning");
+      showToast("Which account was it paid from? Choose an account", "warning");
       return;
     }
     // Same day as before: keep the original timestamp instead of re-stamping the entry.
@@ -1143,7 +1143,7 @@ const Expenses: React.FC = () => {
       if (editingExpenseId) {
         const ok = await updateExpense(editingExpenseId, expensePayload as Partial<ExpenseEntry>);
         if (!ok) return;
-        showToast("Kharcha update ho gaya", "success");
+        showToast("Expense updated", "success");
       } else {
         const ok = await addExpense(expensePayload as Omit<ExpenseEntry, 'id'>);
         if (!ok) return;
@@ -1169,16 +1169,16 @@ const Expenses: React.FC = () => {
 
         const remainingDues = formData.amount - actualPaid;
         if (remainingDues > 0 && vendorName) {
-          showToast(`${formatCurrency(formData.amount)} ka kharcha record ho gaya. Ada: ${formatCurrency(actualPaid)}, ${vendorName} ka baqi: ${formatCurrency(remainingDues)}`, 'success');
+          showToast(`${formatCurrency(formData.amount)} expense recorded. Paid: ${formatCurrency(actualPaid)}, ${vendorName} balance due: ${formatCurrency(remainingDues)}`, 'success');
         } else {
-          showToast(`${formatCurrency(formData.amount)} ka kharcha ${chosenAccount?.name || 'account'} se record ho gaya`, 'success');
+          showToast(`${formatCurrency(formData.amount)} expense recorded from ${chosenAccount?.name || 'account'}`, 'success');
         }
       }
       setIsAddMode(false);
       setEditingExpenseId(null);
       setIsSavedExpensesOpen(false);
     } catch (err: any) {
-      showToast("Kharcha record nahi hua: " + (err?.message || "dobara koshish karein"), "error");
+      showToast("Expense couldn't be recorded: " + (err?.message || "please try again"), "error");
     } finally {
       setIsSubmitting(false);
       setTimeout(() => {
@@ -1207,7 +1207,7 @@ const Expenses: React.FC = () => {
 
   const handleOpenAddVendorModal = () => {
     if (!canCreate) {
-      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      showToast("You don't have permission to add a vendor.", "warning");
       return;
     }
     setEditingVendor(null);
@@ -1229,7 +1229,7 @@ const Expenses: React.FC = () => {
 
   const handleOpenEditVendorModal = (vendor: ExpenseVendor) => {
     if (!canEdit) {
-      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to do this.", "warning");
       return;
     }
     setEditingVendor(vendor);
@@ -1252,7 +1252,7 @@ const Expenses: React.FC = () => {
   // State alone let a fast double submit through (both clicks ran before the re-render disabled Save).
   const isSubmittingVendorRef = useRef(false);
 
-  /** Another vendor (any status) already using this name; the khata also matches entries by name. */
+  /** Another vendor (any status) already using this name; the ledger also matches entries by name. */
   const findVendorByName = (name: string, exceptId?: string) => {
     const key = name.trim().toLowerCase();
     return expenseVendors.find(v => v.id !== exceptId && v.name.trim().toLowerCase() === key);
@@ -1262,16 +1262,16 @@ const Expenses: React.FC = () => {
     e.preventDefault();
     const name = vendorFormData.name?.trim() || '';
     if (!name || isSubmittingVendor || isSubmittingVendorRef.current) {
-      if (!name) showToast("Vendor ka naam zaroori hai", "warning");
+      if (!name) showToast("Vendor name is required", "warning");
       return;
     }
     if (editingVendor ? !canEdit : !canCreate) {
-      showToast("Aap ko is kaam ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to do this.", "warning");
       return;
     }
     const duplicate = findVendorByName(name, editingVendor?.id);
     if (duplicate) {
-      showToast(`"${duplicate.name}" naam ka vendor pehle se mojood hai${duplicate.isActive === false ? ' (Inactive)' : ''}. Doosra naam rakhein.`, "warning");
+      showToast(`A vendor named "${duplicate.name}" already exists${duplicate.isActive === false ? ' (Inactive)' : ''}. Use a different name.`, "warning");
       return;
     }
 
@@ -1291,7 +1291,7 @@ const Expenses: React.FC = () => {
         }
       }
     } catch (err: any) {
-      showToast("Vendor save nahi hua: " + (err?.message || "dobara koshish karein"), "error");
+      showToast("Vendor couldn't be saved: " + (err?.message || "please try again"), "error");
     } finally {
       isSubmittingVendorRef.current = false;
       setIsSubmittingVendor(false);
@@ -1303,33 +1303,33 @@ const Expenses: React.FC = () => {
 
   const handleDeleteVendor = async (vendor: ExpenseVendor) => {
     if (!canDelete) {
-      showToast("Aap ko vendor delete karne ki ijazat nahi.", "warning");
+      showToast("You don't have permission to delete vendors.", "warning");
       return;
     }
     if (pendingDeletesRef.current.has(vendor.id)) return;
     const assessment = getDeleteAssessment('vendor', vendor.id);
     if (assessment.balance !== 0) {
-      showToast(`Vendor delete nahi ho sakta: ${formatCurrency(Math.abs(assessment.balance))} baqi hain. Pehle hisaab barabar karein.`, 'error');
+      showToast(`Vendor can't be deleted: ${formatCurrency(Math.abs(assessment.balance))} is outstanding. Settle the balance first.`, 'error');
       return;
     }
     if (assessment.hasHistory) {
       if (vendor.isActive === false) {
-        showToast(`"${vendor.name}" pehle se Inactive hai. Record wale vendor delete nahi hote.`, 'info');
+        showToast(`"${vendor.name}" is already Inactive. Vendors with records can't be deleted.`, 'info');
         return;
       }
       const deactivate = await confirmAction({
         tone: 'warning',
-        title: `"${vendor.name}" Inactive karein?`,
-        message: `Is vendor ke ${assessment.details?.expCount} kharche record hain, is liye yeh delete nahi hoga balkay Inactive ho jayega.`,
-        consequences: ['Purane kharche aur khata waise hi rahenge.', 'Naye kharche mein yeh vendor nazar nahi aayega.'],
-        confirmLabel: 'Haan, Inactive karein',
+        title: `Make "${vendor.name}" Inactive?`,
+        message: `This vendor has ${assessment.details?.expCount} expenses recorded, so it won't be deleted but made Inactive.`,
+        consequences: ['Past expenses and the ledger stay as they are.', 'This vendor will no longer show up for new expenses.'],
+        confirmLabel: 'Yes, make Inactive',
       });
       if (!deactivate) return;
       pendingDeletesRef.current.add(vendor.id);
       try {
-        // Was fire-and-forget: the "Inactive ho gaya" toast showed even when the save failed.
+        // Was fire-and-forget: the "now Inactive" toast showed even when the save failed.
         if (await updateExpenseVendor(vendor.id, { isActive: false })) {
-          showToast(`Vendor "${vendor.name}" Inactive ho gaya`, 'info');
+          showToast(`Vendor "${vendor.name}" is now Inactive`, 'info');
         }
       } finally {
         pendingDeletesRef.current.delete(vendor.id);
@@ -1337,9 +1337,9 @@ const Expenses: React.FC = () => {
       return;
     }
     const hardDelete = await confirmAction({
-      title: `Vendor "${vendor.name}" delete karein?`,
-      message: 'Is vendor ka koi record nahi, is liye yeh hamesha ke liye hat jayega.',
-      consequences: ['Yeh kaam wapas nahi ho sakta.'],
+      title: `Delete vendor "${vendor.name}"?`,
+      message: 'This vendor has no records, so it will be removed for good.',
+      consequences: ["This can't be undone."],
     });
     if (!hardDelete) return;
     pendingDeletesRef.current.add(vendor.id);
@@ -1357,27 +1357,27 @@ const Expenses: React.FC = () => {
   const handleQuickCreateVendor = async () => {
     const name = quickVendorName.trim();
     if (!name) {
-      showToast("Vendor ka naam likhein", "warning");
+      showToast("Enter a vendor name", "warning");
       return;
     }
     if (isCreatingQuickVendorRef.current) return;
     if (!canCreate) {
-      showToast("Aap ko naya vendor banane ki ijazat nahi.", "warning");
+      showToast("You don't have permission to add a vendor.", "warning");
       return;
     }
 
-    // Enter on an existing name used to create a second vendor with the same khata name.
+    // Enter on an existing name used to create a second vendor with the same ledger name.
     const existing = findVendorByName(name);
     if (existing) {
       if (existing.isActive === false) {
-        showToast(`"${existing.name}" Inactive vendor hai. Vendors tab se use Active karein.`, "warning");
+        showToast(`"${existing.name}" is an Inactive vendor. Make it Active from the Vendors tab.`, "warning");
         return;
       }
       setFormData(prev => ({ ...prev, vendor_id: existing.id }));
       setQuickVendorName('');
       setQuickVendorPhone('');
       setIsModalCreatingVendor(false);
-      showToast(`"${existing.name}" pehle se mojood hai, wohi chun liya`, "info");
+      showToast(`"${existing.name}" already exists, so it was selected`, "info");
       return;
     }
 
@@ -1407,21 +1407,21 @@ const Expenses: React.FC = () => {
 
   const handleDeleteExpense = async (id: string) => {
     if (!canDelete) {
-      showToast("Aap ko kharcha delete karne ki ijazat nahi.", "warning");
+      showToast("You don't have permission to delete expenses.", "warning");
       return;
     }
     if (pendingDeletesRef.current.has(id)) return;
     const assessment = getDeleteAssessment('expense', id);
     if (assessment.isLocked) {
-      showToast("Yeh kharcha band shift ya lock din ka hai, is liye delete nahi ho sakta.", "error");
+      showToast("This expense belongs to a closed shift or a locked day, so it can't be deleted.", "error");
       return;
     }
     const ok = await confirmAction({
-      title: 'Yeh kharcha delete karein?',
+      title: 'Delete this expense?',
       consequences: [
-        'Jo raqam ada ki gayi thi woh wapas usi account mein aa jayegi.',
-        'Vendor ka baqi balance usi hisaab se theek ho jayega.',
-        'Yeh kaam wapas nahi ho sakta.',
+        'Any amount paid goes back to the same account.',
+        "The vendor's balance due is corrected to match.",
+        "This can't be undone.",
       ],
     });
     if (!ok || pendingDeletesRef.current.has(id)) return;
@@ -1429,7 +1429,7 @@ const Expenses: React.FC = () => {
     try {
       const success = await safeDeleteExpense(id);
       if (success) {
-        showToast("Kharcha delete ho gaya, accounts theek kar diye gaye", 'info');
+        showToast("Expense deleted and accounts corrected", 'info');
       }
     } finally {
       pendingDeletesRef.current.delete(id);
@@ -1438,7 +1438,7 @@ const Expenses: React.FC = () => {
 
   const handleOpenPaymentModal = (vendor?: ExpenseVendor, prefilledAmount?: number, defaultType: 'payment' | 'refund' = 'payment') => {
     if (!canCreate) {
-      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to record vendor payments.", "warning");
       return;
     }
     const defaultAcc = settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || accounts[0]?.id || '';
@@ -1481,34 +1481,34 @@ const Expenses: React.FC = () => {
     e.preventDefault();
     if (isSubmittingPayment || isSubmittingPaymentRef.current) return;
     if (!canCreate) {
-      showToast("Aap ko vendor payment ki ijazat nahi hai.", "warning");
+      showToast("You don't have permission to record vendor payments.", "warning");
       return;
     }
 
     const amt = parseFloat(paymentFormData.amount as string);
     if (!amt || amt <= 0) {
-      showToast("Sahi amount likhein", "warning");
+      showToast("Enter a valid amount", "warning");
       return;
     }
 
     if (!paymentFormData.vendor_id) {
-      showToast("Vendor / staff chunein", "warning");
+      showToast("Choose a vendor / staff", "warning");
       return;
     }
 
     if (!paymentFormData.account_id) {
-      showToast("Account chunein", "warning");
+      showToast("Choose an account", "warning");
       return;
     }
 
     if (!paymentFormData.date) {
-      showToast("Payment ki tareekh chunein", "warning");
+      showToast("Choose the payment date", "warning");
       return;
     }
 
     // Ctrl+Enter submits past the disabled button, and the payment engine only checks the books lock date.
     if (isDayLocked && isDayLocked(paymentFormData.date)) {
-      showToast(`${paymentFormData.date} ka din lock hai — is tareekh par payment save nahi ho sakti.`, "error");
+      showToast(`${paymentFormData.date} is a locked day — a payment can't be saved on this date.`, "error");
       return;
     }
 
@@ -1519,10 +1519,10 @@ const Expenses: React.FC = () => {
       if (!isRefund && chosenAccount && chosenAccount.balance < amt) {
         if (!(await confirmAction({
           tone: 'warning',
-          title: 'Account mein itna balance nahi',
-          message: `"${chosenAccount.name}" mein ${formatCurrency(chosenAccount.balance)} hain, aur payment ${formatCurrency(amt)} ki hai.`,
-          consequences: [`Payment ke baad "${chosenAccount.name}" ka balance ${formatCurrency(chosenAccount.balance - amt)} (minus) ho jayega.`],
-          confirmLabel: 'Phir bhi payment karein',
+          title: 'Not enough balance in the account',
+          message: `"${chosenAccount.name}" has ${formatCurrency(chosenAccount.balance)}, and the payment is ${formatCurrency(amt)}.`,
+          consequences: [`After the payment, the balance of "${chosenAccount.name}" will be ${formatCurrency(chosenAccount.balance - amt)} (minus).`],
+          confirmLabel: 'Pay anyway',
         }))) {
           return;
         }
@@ -1545,7 +1545,7 @@ const Expenses: React.FC = () => {
         setSelectedVendorId(paymentFormData.vendor_id);
       }
     } catch (err: any) {
-      showToast("Payment record nahi hui: " + (err?.message || "dobara koshish karein"), "error");
+      showToast("Payment couldn't be recorded: " + (err?.message || "please try again"), "error");
     } finally {
       isSubmittingPaymentRef.current = false;
       setIsSubmittingPayment(false);
@@ -1554,22 +1554,22 @@ const Expenses: React.FC = () => {
 
   const handleDeleteVendorTx = async (txId: string) => {
     if (!canDelete) {
-      showToast("Sirf Admin vendor payment delete kar sakta hai.", "error");
+      showToast("Only an Admin can delete a vendor payment.", "error");
       return;
     }
     if (pendingDeletesRef.current.has(txId)) return;
     // Reversing a payment from a closed day would change that day's reconciled cash.
     const vendorTx = expenseVendorTransactions.find(t => t.id === txId);
     if (vendorTx?.date && isDayLocked && isDayLocked(vendorTx.date)) {
-      showToast("Yeh payment lock din ki hai, is liye delete nahi ho sakti.", "error");
+      showToast("This payment is on a locked day, so it can't be deleted.", "error");
       return;
     }
     if (!(await confirmAction({
-      title: 'Yeh vendor payment delete karein?',
+      title: 'Delete this vendor payment?',
       consequences: [
-        'Payment ki raqam wapas usi account mein aa jayegi.',
-        'Vendor ka baqi balance pehle jaisa ho jayega.',
-        'Yeh kaam wapas nahi ho sakta.',
+        'The payment amount goes back to the same account.',
+        "The vendor's balance due goes back to what it was.",
+        "This can't be undone.",
       ],
     }))) {
       return;
@@ -1584,7 +1584,7 @@ const Expenses: React.FC = () => {
   };
 
   const khataLedgerRows = useMemo<LedgerRow[]>(() => {
-    // Only the vendors tab shows the khata; skip the work while the expenses list is open.
+    // Only the vendors tab shows the ledger; skip the work while the expenses list is open.
     const targetVendor = activeTab === 'vendors' ? selectedVendor : undefined;
     if (!targetVendor) return [];
 
@@ -1711,7 +1711,7 @@ const Expenses: React.FC = () => {
         id: `prior_ob_${vId}`,
         date: startDateLimit,
         type: 'Opening Balance',
-        description: 'Baqaya / Opening Balance (B/F)',
+        description: 'Opening Balance (B/F)',
         modeAccount: 'Balance B/F',
         refNo: 'B/F',
         debit: priorBalance > 0 ? priorBalance : 0,
@@ -1747,7 +1747,7 @@ const Expenses: React.FC = () => {
   const handleShareWhatsAppStatement = (vendor: ExpenseVendor) => {
     const phoneClean = whatsAppNumber(vendor.phone || '');
     if (!phoneClean) {
-      showToast("Vendor ka phone number nahi hai", "warning");
+      showToast("This vendor has no phone number", "warning");
       return;
     }
 

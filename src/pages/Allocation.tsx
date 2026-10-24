@@ -228,11 +228,11 @@ const Allocation: React.FC = () => {
     setCart(prev => prev.filter(line => line.allocationId !== id));
   }, []);
 
-  const blockReason = !canCreate ? 'Aap ko allocation ki ijazat nahi hai.'
+  const blockReason = !canCreate ? "You don't have permission to allocate milk."
     : cart.length === 0 ? ''
-    : destination === DestinationType.PRODUCTION && !canStartBatch ? 'Aap ko production batch shuru karne ki ijazat nahi hai.'
-    : retailInCart && destination === DestinationType.RETAIL ? 'Counter milk wapas counter par nahi ja sakta.'
-    : totals.invalid > 0 ? `${totals.invalid} ${totals.invalid === 1 ? 'line ki' : 'lines ki'} qty theek karein.`
+    : destination === DestinationType.PRODUCTION && !canStartBatch ? "You don't have permission to start a production batch."
+    : retailInCart && destination === DestinationType.RETAIL ? "Counter milk can't go back to the counter."
+    : totals.invalid > 0 ? `Fix the qty on ${totals.invalid} ${totals.invalid === 1 ? 'line' : 'lines'}.`
     : '';
   // Shown on the product field itself, so it is not repeated under the button.
   const productMissing = destination === DestinationType.PRODUCTION && !selectedProduct;
@@ -240,7 +240,7 @@ const Allocation: React.FC = () => {
 
   const handleProcessAllocation = async () => {
     if (!canCreate) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return;
     }
     if (cart.length === 0 || isSubmitting || isSubmittingAllocRef.current) {
@@ -258,7 +258,7 @@ const Allocation: React.FC = () => {
       return;
     }
     if (destination === DestinationType.PRODUCTION && !canStartBatch) {
-      showToast('Aap ko production batch shuru karne ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to start a production batch.", 'warning');
       return;
     }
     if (destination === DestinationType.PRODUCTION && !selectedProduct) {
@@ -271,13 +271,13 @@ const Allocation: React.FC = () => {
     // milk was never taken out of the pool or the counter.
     const emptyLine = lines.find(line => !(line.quantity > 0));
     if (emptyLine) {
-      showToast(`${displaySourceName(emptyLine.supplierName)}: qty 0 hai. Qty likhein ya line hata dein.`, 'warning');
+      showToast(`${displaySourceName(emptyLine.supplierName)}: qty is 0. Enter a qty or remove the line.`, 'warning');
       return;
     }
     for (const line of lines) {
       const left = Math.max(0, availableFor(line));
       if (line.quantity > left + 0.001) {
-        showToast(`${displaySourceName(line.supplierName)}: sirf ${formatQty(left, 3)} L baqi hai, ${formatQty(line.quantity, 3)} L allocate nahi ho sakta.`, 'error');
+        showToast(`${displaySourceName(line.supplierName)}: only ${formatQty(left, 3)} L left, can't allocate ${formatQty(line.quantity, 3)} L.`, 'error');
         return;
       }
     }
@@ -344,7 +344,7 @@ const Allocation: React.FC = () => {
         // Lines that already left stock must leave the cart too, or confirming again allocates them twice.
         const done = freshDeducted ? 'fresh' : 'retail';
         setCart(prev => prev.filter(line => line.source !== done));
-        showToast(`${done === 'fresh' ? 'Fresh doodh' : 'Counter milk'} allocate ho gaya; baqi lines cart mein hain, dobara check karein.`, 'warning');
+        showToast(`${done === 'fresh' ? 'Fresh milk' : 'Counter milk'} allocated; the other lines are still in the cart, please check them again.`, 'warning');
       }
     } catch (err: any) {
       showToast(err?.message || 'Failed to process allocation', 'error');
@@ -360,7 +360,7 @@ const Allocation: React.FC = () => {
     <div className="flex flex-col gap-4 pb-8 lg:gap-6">
       <PageHeader
         eyebrow="Dairy operations"
-        description="Collected doodh ko retail counter ya production mein bhejein. Har lot ka baqi doodh yahan nazar aata hai."
+        description="Send collected milk to the retail counter or to production. The milk left in each lot shows here."
       />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Milk pool summary">
@@ -378,7 +378,7 @@ const Allocation: React.FC = () => {
           value={`${formatQty(totals.volume, 3)} L`}
           icon={<ShoppingCart />}
           tone="brand"
-          hint={cart.length > 0 ? `Avg ${formatCurrency(cleanNumber(totals.averageRate, 1))}/L` : 'Khali'}
+          hint={cart.length > 0 ? `Avg ${formatCurrency(cleanNumber(totals.averageRate, 1))}/L` : 'Empty'}
           onClick={() => setMobileTab('cart')}
         />
       </section>
@@ -390,7 +390,7 @@ const Allocation: React.FC = () => {
         value={mobileTab}
         onChange={setMobileTab}
         options={[
-          { value: 'source', label: 'Doodh lots', icon: <Droplets />, count: sourceCount },
+          { value: 'source', label: 'Milk lots', icon: <Droplets />, count: sourceCount },
           { value: 'cart', label: 'Cart', icon: <ShoppingCart />, count: cart.length },
         ]}
       />
@@ -411,7 +411,7 @@ const Allocation: React.FC = () => {
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder={activeSource === 'fresh' ? 'Gwala / supplier ya milk type search karein...' : 'Counter milk search karein...'}
+              placeholder={activeSource === 'fresh' ? 'Search milkman / supplier or milk type...' : 'Search counter milk...'}
               aria-label="Search milk sources"
             />
           </div>
@@ -420,14 +420,14 @@ const Allocation: React.FC = () => {
             activeSource === 'fresh' ? (
               <EmptyState
                 icon={<Droplets />}
-                title={searchQuery ? 'Koi lot nahi mila' : 'Unallocated doodh nahi hai'}
-                description={searchQuery ? 'Search badal kar dekhein.' : 'Milk collection mein intake record karein, ya Retail stock se counter milk production mein bhejein.'}
+                title={searchQuery ? 'No lots found' : 'No unallocated milk'}
+                description={searchQuery ? 'Try a different search.' : 'Record intake in Milk collection, or send counter milk to production from Retail stock.'}
               />
             ) : (
               <EmptyState
                 icon={<Refrigerator />}
-                title={searchQuery ? 'Koi item nahi mila' : 'Counter par milk stock nahi hai'}
-                description={searchQuery ? 'Search badal kar dekhein.' : 'Counter par loose doodh (L ya ml wale milk items) ka stock yahan litres mein nazar aata hai.'}
+                title={searchQuery ? 'No items found' : 'No milk stock at the counter'}
+                description={searchQuery ? 'Try a different search.' : 'Loose milk stock at the counter (milk items in L or ml) shows here in litres.'}
               />
             )
           ) : (
@@ -460,9 +460,9 @@ const Allocation: React.FC = () => {
             <EmptyState
               size="compact"
               icon={<ShoppingCart />}
-              title="Cart khali hai"
-              description="Baen taraf se doodh ka lot chunein aur qty likhein."
-              action={<Button variant="soft" size="sm" className="lg:hidden" onClick={() => setMobileTab('source')}>Lots dekhein</Button>}
+              title="Cart is empty"
+              description="Pick a milk lot on the left and enter a qty."
+              action={<Button variant="soft" size="sm" className="lg:hidden" onClick={() => setMobileTab('source')}>View lots</Button>}
             />
           ) : (
             <ul className="flex flex-col gap-2 p-3 sm:p-4 lg:max-h-[38vh] lg:overflow-y-auto">
@@ -489,7 +489,7 @@ const Allocation: React.FC = () => {
             </dl>
 
             <div>
-              <p className="mb-1.5 text-xs font-semibold text-fg-muted">Kahan bhejna hai</p>
+              <p className="mb-1.5 text-xs font-semibold text-fg-muted">Send to</p>
               <SegmentedControl
                 aria-label="Allocation destination"
                 fullWidth
@@ -501,20 +501,20 @@ const Allocation: React.FC = () => {
                 ]}
               />
               {retailInCart && (
-                <p className="mt-1.5 text-xs text-fg-subtle">Cart mein counter milk hai, is liye sirf production mein ja sakta hai.</p>
+                <p className="mt-1.5 text-xs text-fg-subtle">The cart has counter milk, so it can only go to production.</p>
               )}
             </div>
 
             {destination === DestinationType.PRODUCTION ? (
               <Field
-                label="Kya banana hai"
+                label="Product to make"
                 required
-                error={cart.length > 0 && !selectedProduct ? 'Confirm se pehle product chunein.' : undefined}
-                hint={producibleItems.length === 0 ? 'Items mein product ka source "Production" set karein.' : undefined}
+                error={cart.length > 0 && !selectedProduct ? 'Choose a product before confirming.' : undefined}
+                hint={producibleItems.length === 0 ? 'In Items, set the product source to "Production".' : undefined}
               >
                 {control => (
                   <Select {...control} value={selectedProduct} onChange={event => setSelectedProduct(event.target.value)}>
-                    <option value="">Product chunein...</option>
+                    <option value="">Choose product...</option>
                     {producibleItems.map(product => (
                       <option key={product.id} value={product.name}>Make: {product.name}</option>
                     ))}
@@ -523,7 +523,7 @@ const Allocation: React.FC = () => {
               </Field>
             ) : (
               <p className="rounded-control border border-line bg-surface px-3 py-2.5 text-xs text-fg-subtle">
-                Doodh seedha POS retail counter ke stock mein chala jayega.
+                The milk goes straight into the POS retail counter stock.
               </p>
             )}
 

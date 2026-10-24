@@ -3,7 +3,7 @@ import { normalizeUnit } from './unitConversion';
 
 export type QuickMode = 'amount' | 'qty';
 
-/** Grams and millilitres are stocked in small units but sold by the glass or pao: step them 250 at a time. */
+/** Grams and millilitres are stocked in small units but sold by the glass or quarter kilo: step them 250 at a time. */
 const SMALL_UNIT_STEP = 250;
 const isSmallUnit = (symbol: string) => symbol === 'g' || symbol === 'ml';
 
@@ -16,8 +16,8 @@ export function stepWholeQuantity(current: number, direction: number, minimum = 
 /**
  * Steps the physical quantity in natural dairy increments:
  * - Packaged items: 1, 2, 3, 4, 5... (minimum 1)
- * - Loose kg items: 0.25 (1 Paao) <-> 0.5 (Aadha kg) <-> 0.75 (3 Paao) <-> 1 <-> 2 <-> 3 <-> 4 <-> 5... (minimum 0.25)
- * - Loose liter items: 0.5 (Aadha L) <-> 1 <-> 2 <-> 3 <-> 4 <-> 5... (minimum 0.5)
+ * - Loose kg items: 0.25 (quarter kg) <-> 0.5 (half kg) <-> 0.75 (¾ kg) <-> 1 <-> 2 <-> 3 <-> 4 <-> 5... (minimum 0.25)
+ * - Loose liter items: 0.5 (half liter) <-> 1 <-> 2 <-> 3 <-> 4 <-> 5... (minimum 0.5)
  * - Loose g / ml items: 250 <-> 500 <-> 750 <-> 1000... (minimum 250)
  */
 export function stepQuickQuantity(current: number, direction: number, unit = 'Unit', packaged = false): number {
@@ -128,21 +128,21 @@ export function getQuickPresets({ mode, packaged, unit, rate, configured }: Quic
   return [...new Set(source.map(Number).filter(amount => Number.isFinite(amount) && amount > 0))].sort((a, b) => a - b);
 }
 
-/** Friendly title (and optional local-language hint) for a quantity shortcut. */
+/** Friendly title (and optional everyday-words hint) for a quantity shortcut. */
 function describeQuickQty(preset: number, unit: string, packaged: boolean): { title: string; hint?: string } {
   if (packaged) return { title: `${formatQty(preset)} pack${preset === 1 ? '' : 's'}` };
   const title = `${formatQty(preset, 3)} ${unit}`;
   const symbol = normalizeUnit(unit);
   if (symbol === 'kg') {
-    const hints: Record<number, string> = { 0.25: '1 Paao', 0.5: 'Aadha kg', 0.75: '3 Paao', 1: '1 Kilo', 1.5: 'Derh kg', 2: '2 Kilo' };
+    const hints: Record<number, string> = { 0.25: 'Quarter kg', 0.5: 'Half kg', 0.75: '¾ kg', 1: '1 Kilo', 1.5: '1½ kg', 2: '2 Kilo' };
     return { title, hint: hints[preset] };
   }
   if (symbol === 'g') {
-    const hints: Record<number, string> = { 250: '1 Paao', 500: 'Aadha kg', 750: '3 Paao', 1000: '1 Kilo', 2000: '2 Kilo' };
+    const hints: Record<number, string> = { 250: 'Quarter kg', 500: 'Half kg', 750: '¾ kg', 1000: '1 Kilo', 2000: '2 Kilo' };
     return { title, hint: hints[preset] };
   }
   if (symbol === 'ml') {
-    const hints: Record<number, string> = { 250: '1 Glass', 500: 'Aadha liter', 1000: '1 Liter', 1500: 'Derh liter', 2000: '2 Liter', 5000: '5 Liter' };
+    const hints: Record<number, string> = { 250: '1 Glass', 500: 'Half liter', 1000: '1 Liter', 1500: '1½ liter', 2000: '2 Liter', 5000: '5 Liter' };
     return { title, hint: hints[preset] };
   }
   return { title };

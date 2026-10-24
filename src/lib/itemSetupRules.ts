@@ -32,7 +32,7 @@ export function checkItemSetupChange(current: SetupItem, next: { unit?: string |
     const packsHeld = oldVariants.filter(v => isPack(v) && held(counts[v.id]));
     if (held(loose) || packsHeld.length > 0) {
       const what = [held(loose) ? `${formatQty(loose, 3)} ${unit} loose` : '', ...packsHeld.map(v => `${formatQty(Number(counts[v.id]) || 0, 3)} × ${v.name || 'pack'}`)].filter(Boolean).join(', ');
-      return { error: `"${name}" ka stock abhi ${unit} mein hai (${what}). Base unit badalne se pehle stock count se 0 karein, warna purana stock naye unit mein ghalat parha jayega.` };
+      return { error: `"${name}" has stock in ${unit} right now (${what}). Set it to 0 with a stock count before changing the base unit, or the old stock will be read wrongly in the new unit.` };
     }
   }
 
@@ -44,13 +44,13 @@ export function checkItemSetupChange(current: SetupItem, next: { unit?: string |
     const label = old.name || 'Pack';
     const now = nextVariants.find(v => v.id === old.id);
     if (!now) {
-      return { error: `"${label}" mein abhi ${count} pack stock hai. Pack hatane se pehle stock count se 0 karein, ya pack ko hide kar dein.` };
+      return { error: `"${label}" still has ${count} packs in stock. Set it to 0 with a stock count before removing the pack, or hide the pack instead.` };
     }
     if (now.deduct_from_base === true) {
-      return { error: `"${label}" ke ${count} pack stock mein hain. Isay dozen/tray jaisa unit (main stock se) banane se pehle stock count se 0 karein, ya naya unit banayein.` };
+      return { error: `"${label}" has ${count} packs in stock. Set it to 0 with a stock count before turning it into a dozen/tray-style unit (taken from main stock), or create a new unit.` };
     }
     if (Math.abs(sellUnitContains(now) - sellUnitContains(old)) > EPS) {
-      return { error: `"${label}" ka size ${formatQty(sellUnitContains(old), 3)} ${unit} se ${formatQty(sellUnitContains(now), 3)} ${unit} nahi ho sakta jab tak is mein ${count} pack stock hai. Pehle stock count se 0 karein, ya naya pack banayein.` };
+      return { error: `"${label}" can't change size from ${formatQty(sellUnitContains(old), 3)} ${unit} to ${formatQty(sellUnitContains(now), 3)} ${unit} while it holds ${count} packs of stock. Set it to 0 with a stock count first, or create a new pack.` };
     }
   }
   // A count left on a dozen/tray (or a deleted pack) would turn into real pack stock if that unit became a pack.
@@ -58,14 +58,14 @@ export function checkItemSetupChange(current: SetupItem, next: { unit?: string |
     if (!isPack(now) || !held(counts[now.id])) continue;
     const old = oldVariants.find(v => v.id === now.id);
     if (!isPack(old)) {
-      return { error: `"${now.name || 'Unit'}" par purana count ${formatQty(Number(counts[now.id]) || 0, 3)} pada hai. Isay pack banane se pehle stock count mein 0 karein.` };
+      return { error: `"${now.name || 'Unit'}" still has an old count of ${formatQty(Number(counts[now.id]) || 0, 3)}. Set it to 0 with a stock count before turning it into a pack.` };
     }
   }
 
   const hiddenHeld = nextVariants.filter(v => isPack(v) && v.isActive === false && held(counts[v.id])
     && oldVariants.find(o => o.id === v.id)?.isActive !== false);
   if (hiddenHeld.length > 0) {
-    return { notice: `${hiddenHeld.map(v => `"${v.name || 'Pack'}"`).join(', ')} hide ho gaya, lekin is ka stock (${hiddenHeld.map(v => formatQty(Number(counts[v.id]) || 0, 3)).join(', ')} pack) Inventory mein "(hidden)" dikhega jab tak bik na jaye ya count na ho.` };
+    return { notice: `${hiddenHeld.map(v => `"${v.name || 'Pack'}"`).join(', ')} is hidden, but its stock (${hiddenHeld.map(v => formatQty(Number(counts[v.id]) || 0, 3)).join(', ')} pack) will show in Inventory as "(hidden)" until it is sold or counted.` };
   }
   return {};
 }

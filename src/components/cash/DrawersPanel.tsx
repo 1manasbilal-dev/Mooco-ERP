@@ -61,7 +61,7 @@ const DrawersPanel: React.FC<DrawersPanelProps> = ({ run, busyKey, todayLocked, 
         <div>
           <h3 className="text-[15px] font-bold text-fg">Cash drawers</h3>
           <p className="mt-0.5 max-w-2xl text-[13px] text-fg-subtle">
-            Drawer sirf wohi Cash accounts hain jo Bank &amp; Cash mein &quot;Cash Drawer&quot; ke tor par enable hain. Bank/Wallet kabhi drawer nahi bante.
+            Drawers are only the Cash accounts enabled as a &quot;Cash Drawer&quot; in Bank &amp; Cash. Bank/Wallet accounts never become drawers.
           </p>
         </div>
         <Button variant="secondary" leftIcon={<ExternalLink />} onClick={onManage}>Manage in Bank & Cash</Button>
@@ -78,9 +78,9 @@ const DrawersPanel: React.FC<DrawersPanelProps> = ({ run, busyKey, todayLocked, 
         <Card>
           <EmptyState
             icon={<Store />}
-            title="Koi drawer nahi"
-            description="Bank & Cash mein kisi Cash account ko 'Cash Drawer ke tor par enable' karein — wahi yahan drawer banega."
-            action={<Button leftIcon={<ExternalLink />} onClick={onManage}>Bank & Cash kholein</Button>}
+            title="No drawers"
+            description="In Bank & Cash, enable a Cash account as a Cash Drawer — it will show here as a drawer."
+            action={<Button leftIcon={<ExternalLink />} onClick={onManage}>Open Bank & Cash</Button>}
           />
         </Card>
       ) : (
@@ -98,7 +98,7 @@ const DrawersPanel: React.FC<DrawersPanelProps> = ({ run, busyKey, todayLocked, 
         </div>
       )}
       {todayLocked && drawers.length > 0 && (
-        <p className="text-xs text-fg-subtle">Aaj ka business day lock hai — drawer mein opening cash add nahi ho sakti.</p>
+        <p className="text-xs text-fg-subtle">Today's business day is locked — opening cash can't be added to a drawer.</p>
       )}
 
       {loadingDrawerId && (

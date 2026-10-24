@@ -190,7 +190,7 @@ export const milkReports: ReportDefinition[] = [
           { key: 'litres', label: 'Milk collected', value: r3(totalLitres), format: 'qty', unit: 'L', tone: 'good' },
           { key: 'amount', label: 'Amount', value: amount, format: 'money' },
           { key: 'paid', label: 'Paid on intake', value: sum(table, r => n(r.paid)), format: 'money' },
-          { key: 'due', label: 'Left on khata', value: sum(table, r => n(r.due)), format: 'money', inverse: true },
+          { key: 'due', label: 'Left on credit', value: sum(table, r => n(r.due)), format: 'money', inverse: true },
           { key: 'rate', label: 'Avg rate / L', value: totalLitres ? r2(amount / totalLitres) : 0, format: 'money', inverse: true },
         ],
         charts: [
@@ -210,7 +210,7 @@ export const milkReports: ReportDefinition[] = [
             { key: 'fat', label: 'Avg fat', format: 'number' },
             { key: 'snf', label: 'Avg SNF', format: 'number' },
             { key: 'paid', label: 'Paid on intake', format: 'money', total: true },
-            { key: 'due', label: 'On khata', format: 'money', total: true },
+            { key: 'due', label: 'On credit', format: 'money', total: true },
             { key: 'balance', label: 'Balance today', format: 'money', signed: true, hidden: true },
             { key: 'share', label: 'Share', format: 'percent' },
           ],

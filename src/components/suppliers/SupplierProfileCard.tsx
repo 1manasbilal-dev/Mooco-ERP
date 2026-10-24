@@ -7,12 +7,12 @@ import { cn } from '../../lib/cn';
 import { InfoRow, SupplierBalance, SupplierBalanceBadge, balanceState } from './supplierUi';
 
 const BALANCE_HELP = {
-  payable: 'Ye raqam aap ne supplier ko deni hai.',
-  advance: 'Aap ne supplier ko pehle se zyada diya hua hai.',
-  settled: 'Hisaab barabar hai.',
+  payable: 'You owe this amount to the supplier.',
+  advance: 'You have paid the supplier ahead.',
+  settled: 'The balance is settled.',
 } as const;
 
-/** Supplier identity, live khata balance and the main actions (left column of the khata screen). */
+/** Supplier identity, live ledger balance and the main actions (left column of the ledger screen). */
 export const SupplierProfileCard = memo(function SupplierProfileCard({
   supplier: s, canPay, canEdit, canDelete, onPay, onEdit, onDelete, onReactivate, onWhatsApp,
 }: {
@@ -59,7 +59,7 @@ export const SupplierProfileCard = memo(function SupplierProfileCard({
         )}
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-fg-muted">Khata balance</span>
+          <span className="text-xs font-semibold text-fg-muted">Ledger balance</span>
           <SupplierBalanceBadge value={balance} long />
         </div>
         <SupplierBalance value={balance} label="none" className="mt-1.5 text-[28px] font-bold leading-none tracking-tight" />
@@ -91,7 +91,7 @@ export const SupplierProfileCard = memo(function SupplierProfileCard({
           onClick={() => setShowDetails(v => !v)}
           className="-mx-1 flex cursor-pointer items-center justify-between rounded-lg px-1 py-1 text-xs font-semibold text-fg-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          Contact aur terms
+          Contact and terms
           <ChevronDown className={cn('size-4 transition-transform duration-150', showDetails && 'rotate-180')} aria-hidden="true" />
         </button>
       )}

@@ -93,7 +93,7 @@ export const financialReports: ReportDefinition[] = [
       const milkCost = sum(milk, p => n(p.total_amount));
       const materials = materialPurchases(data, f);
       const collected = sum(figs, x => x.cash + x.online);
-      // Opening balances and bad-debt write-offs are khata rows, not money received.
+      // Opening balances and bad-debt write-offs are ledger rows, not money received.
       const recoveries = sum(data.customerTransactions.filter(t => isCustomerReceipt(t) && inRange(t.date, f)), t => n(t.amount));
       // Delivery sales the dashboard counts: not pending, not cancelled.
       const supply = sum(data.dailySupplyEntries.filter(e => inRange(e.date, f) && !['pending', 'cancelled'].includes(lower((e as any).status))), e => n(e.total_amount));
@@ -532,22 +532,22 @@ export const financialReports: ReportDefinition[] = [
         const fig = saleFigures(s);
         add(s.id, {
           time: s.date, type: 'Sale', ref: s.bill_number, party: customerName(data, s.customer_id, s.customer_name),
-          description: `${saleMode(s)} bill · net ${rs(fig.net)}${fig.credit > 0 ? ` · khata ${rs(fig.credit)}` : ''}`,
+          description: `${saleMode(s)} bill · net ${rs(fig.net)}${fig.credit > 0 ? ` · credit ${rs(fig.credit)}` : ''}`,
           in: fig.paid, out: 0, moved: 0,
           _drill: { report: 'sale_register', filters: { from: dayOf(s.date), to: dayOf(s.date) }, label: 'Bills of the day' },
         });
       });
-      // Opening-balance and bad-debt write-off rows are khata entries: listed, but no money came in.
+      // Opening-balance and bad-debt write-off rows are ledger entries: listed, but no money came in.
       data.customerTransactions.filter(t => t.type === 'Payment' && inRange(t.date, f)).forEach(t => {
         const money = !isNonCashCustomerTx(t);
         add(t.id, {
-          time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: money ? 'Customer payment' : 'Khata adjustment', ref: t.mode || '',
+          time: t.created_at && dayOf(t.created_at) === dayOf(t.date) ? t.created_at : t.date, type: money ? 'Customer payment' : 'Ledger adjustment', ref: t.mode || '',
           party: customerName(data, t.customer_id, 'Customer'), description: t.note || (money ? 'Payment received' : 'No money received'),
           in: money ? r2(n(t.amount)) : 0, out: 0, moved: 0,
           _drill: { report: 'customer_statement', filters: { customerId: t.customer_id }, label: 'Customer statement' },
         });
       });
-      // A supplier waiver settles the khata without paying anything.
+      // A supplier waiver settles the balance without paying anything.
       data.supplierTransactions.filter(t => (t.type === 'Payment' || t.type === 'Advance') && inRange(t.date, f) && !isSpotSupplierPayment(t)).forEach(t => {
         const waiver = isSupplierWaiver(t);
         add(t.id, {
@@ -618,7 +618,7 @@ export const financialReports: ReportDefinition[] = [
               key: 'type', label: 'Type', format: 'badge', tones: {
                 Sale: 'good', 'Customer payment': 'good', Deposit: 'good', 'Purchase return': 'good',
                 'Supplier payment': 'warn', Refund: 'warn', 'Milk purchase': 'info', 'Material purchase': 'info',
-                Expense: 'bad', Withdrawal: 'bad', Transfer: 'neutral', 'Khata adjustment': 'neutral', 'Supplier waiver': 'neutral',
+                Expense: 'bad', Withdrawal: 'bad', Transfer: 'neutral', 'Ledger adjustment': 'neutral', 'Supplier waiver': 'neutral',
               },
             },
             { key: 'ref', label: 'Reference' },
@@ -631,7 +631,7 @@ export const financialReports: ReportDefinition[] = [
           rows,
           emptyText: 'Nothing was recorded in these dates.',
         }],
-        notes: [{ tone: 'info', text: 'Sales show cash and online taken at the counter. Credit bills add to khata, not to money in.' }],
+        notes: [{ tone: 'info', text: "Sales show cash and online taken at the counter. Credit bills add to the customer's balance, not to money in." }],
       };
     },
   },

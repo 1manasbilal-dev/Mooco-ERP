@@ -146,8 +146,8 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
   const stockInvalid = stockCount.errors > 0;
 
   const cashCloseBlocked = status.liveShifts > 0;
-  const cashError = triedCash && counted.empty ? 'Cash close se pehle gini hui cash likhein.' : !counted.empty && !counted.valid ? 'Sahi raqam likhein (0 ya zyada).' : undefined;
-  const openingError = !opening.valid ? 'Opening cash sahi likhein (0 ya zyada).' : undefined;
+  const cashError = triedCash && counted.empty ? 'Enter the counted cash before closing cash.' : !counted.empty && !counted.valid ? 'Enter a valid amount (0 or more).' : undefined;
+  const openingError = !opening.valid ? 'Enter a valid opening cash (0 or more).' : undefined;
 
   const stepDone: Record<DayCloseStep, boolean> = {
     check: status.blockers === 0,
@@ -205,7 +205,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
 
   const notesField = (
     <Field label="Close notes (optional)">
-      {control => <Textarea {...control} rows={2} className="min-h-0" value={notes} onChange={event => setNotes(event.target.value)} placeholder="e.g. din saaf khatam hua, koi farq nahi" />}
+      {control => <Textarea {...control} rows={2} className="min-h-0" value={notes} onChange={event => setNotes(event.target.value)} placeholder="e.g. day ended clean, no difference" />}
     </Field>
   );
 
@@ -263,7 +263,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
       dismissible={!anyBusy}
       size="lg"
       title={`Close business day · ${formatBusinessDate(day.business_date)}`}
-      description="Lock hone ke baad is din ki entries band ho jati hain; Owner reopen kar sakta hai."
+      description="Once locked, this day's entries are closed; the Owner can reopen it."
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg"><LockKeyhole size={20} /></span>}
       footer={footer}
     >
@@ -300,28 +300,28 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
       {locked && (
         <p className="mb-4 flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-[13px] font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          {closed ? 'Ye din lock ho chuka hai.' : 'Ye tareekh books lock mein hai.'} Nayi closing ya tabdeeli nahi ho sakti.
+          {closed ? 'This day is locked.' : 'This date is inside the books lock.'} No new closing or changes can be made.
         </p>
       )}
 
       {step === 'check' && (
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 rounded-card bg-surface-2 p-4 ring-1 ring-inset ring-line/70 sm:grid-cols-2">
-            <CheckItem ok={status.openShifts === 0} label="Saari shifts close" count={status.openShifts} hint="Live shift POS se close karein; Pending Review ka farq Audit Trail mein approve karein." />
-            <CheckItem ok={status.pendingRemits === 0} label="Remittances receive" count={status.pendingRemits} hint="Head Inbox mein gin kar receive karein." />
-            <CheckItem ok={status.disputedHandovers === 0} label="Disputed handovers settle" count={status.disputedHandovers} hint="Head Inbox → Drawer handovers." />
-            <CheckItem ok={status.openVariances === 0} label="Variances resolve" count={status.openVariances} hint="Audit Trail mein approve ya reject karein." />
+            <CheckItem ok={status.openShifts === 0} label="All shifts closed" count={status.openShifts} hint="Close live shifts from the POS; approve Pending Review differences in Audit Trail." />
+            <CheckItem ok={status.pendingRemits === 0} label="Remittances received" count={status.pendingRemits} hint="Count and receive them in Head Inbox." />
+            <CheckItem ok={status.disputedHandovers === 0} label="Disputed handovers settled" count={status.disputedHandovers} hint="Head Inbox → Drawer handovers." />
+            <CheckItem ok={status.openVariances === 0} label="Variances resolved" count={status.openVariances} hint="Approve or reject them in Audit Trail." />
           </div>
           {status.blockers > 0 ? (
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[13px] text-fg-subtle">Ye kaam pehle mukammal karein:</p>
-              {(status.pendingRemits > 0 || status.disputedHandovers > 0) && <Button size="sm" variant="secondary" onClick={() => jump('head')}>Head Inbox kholein</Button>}
-              {(status.openVariances > 0 || status.openShifts > 0) && <Button size="sm" variant="secondary" onClick={() => jump('audit')}>Audit Trail kholein</Button>}
+              <p className="text-[13px] text-fg-subtle">Finish these first:</p>
+              {(status.pendingRemits > 0 || status.disputedHandovers > 0) && <Button size="sm" variant="secondary" onClick={() => jump('head')}>Open Head Inbox</Button>}
+              {(status.openVariances > 0 || status.openShifts > 0) && <Button size="sm" variant="secondary" onClick={() => jump('audit')}>Open Audit Trail</Button>}
             </div>
           ) : (
-            <p className="flex items-center gap-2 text-[13px] font-semibold text-success-fg"><CheckCircle2 className="size-4" aria-hidden="true" /> Din close karne ke liye tayyar hai.</p>
+            <p className="flex items-center gap-2 text-[13px] font-semibold text-success-fg"><CheckCircle2 className="size-4" aria-hidden="true" /> Ready to close the day.</p>
           )}
-          <p className="text-xs text-fg-subtle">Drawer mein chhori pending handovers lock par khud accept ho jati hain — cash raat bhar drawer mein rehta hai.</p>
+          <p className="text-xs text-fg-subtle">Pending handovers left in a drawer are accepted automatically on lock — the cash stays in the drawer overnight.</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             <MiniStat label="Shifts">{summary.shifts}</MiniStat>
             <MiniStat label="Gross sales"><Money amount={summary.gross} /></MiniStat>
@@ -340,11 +340,11 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
           {cashCloseBlocked && (
             <p className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-[13px] font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              {status.liveShifts} shift abhi chal rahi hai — drawer istemal mein hai, is liye din ki cash abhi gini nahi ja sakti.
+              {status.liveShifts} {status.liveShifts === 1 ? 'shift is' : 'shifts are'} still running — the drawer is in use, so the day's cash can't be counted yet.
             </p>
           )}
           {day.cash_closed_at && (
-            <p className="text-[13px] text-fg-subtle">Cash closing {formatPkDateTime(day.cash_closed_at)} ko record hui. Lock se pehle dobara gin kar snapshot update kar sakte hain.</p>
+            <p className="text-[13px] text-fg-subtle">Cash closing was recorded at {formatPkDateTime(day.cash_closed_at)}. You can count again before the lock to update the snapshot.</p>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="overflow-hidden rounded-card ring-1 ring-inset ring-line">
@@ -383,7 +383,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
                     className="flex w-full cursor-pointer items-center gap-1.5 px-4 py-2 text-xs font-semibold text-fg-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <ChevronDown className={cn('size-3.5 transition-transform', showOutItems && 'rotate-180')} aria-hidden="true" />
-                    {dayCash.cashOut.items.length} entries {showOutItems ? 'chhupayein' : 'dekhein'}
+                    {showOutItems ? 'Hide' : 'Show'} {dayCash.cashOut.items.length} entries
                   </button>
                   {showOutItems && (
                     <div className="max-h-40 space-y-1 overflow-y-auto bg-surface-2/60 px-4 py-2">
@@ -403,7 +403,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
           <div className="overflow-hidden rounded-card ring-1 ring-inset ring-line">
             <div className="divide-y divide-line text-[13px]">
               <div className="flex items-center justify-between gap-3 px-4 py-2">
-                <label htmlFor="day-close-opening" className="font-semibold text-fg-muted">Opening cash <span className="font-normal text-fg-subtle">· drawers ki pehli shift</span></label>
+                <label htmlFor="day-close-opening" className="font-semibold text-fg-muted">Opening cash <span className="font-normal text-fg-subtle">· first shift of the drawers</span></label>
                 <input
                   id="day-close-opening"
                   type="number"
@@ -432,7 +432,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
               </div>
               {dayCash.recorded.count > 0 && (
                 <div className="flex items-center justify-between gap-3 px-4 py-2">
-                  <span className="text-fg-muted">± Shift farq (pehle se record) <span className="text-fg-subtle">· {dayCash.recorded.count}</span></span>
+                  <span className="text-fg-muted">± Shift difference (already recorded) <span className="text-fg-subtle">· {dayCash.recorded.count}</span></span>
                   <Money amount={dayCash.recorded.total} tone="signed" className="font-semibold" />
                 </div>
               )}
@@ -444,7 +444,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
           </div>
 
           <div className="flex flex-col gap-3">
-            <Field label="Actual counted cash — jo haath mein hai" required error={cashError}>
+            <Field label="Actual counted cash — what is in hand" required error={cashError}>
               {control => (
                 <CountInput
                   id={control.id}
@@ -460,7 +460,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
                 />
               )}
             </Field>
-            <VarianceCallout variance={variance} consequence="day closing ke record mein jayega." />
+            <VarianceCallout variance={variance} consequence="it goes into the day closing record." />
             {notesField}
           </div>
         </div>
@@ -469,13 +469,13 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
       {step === 'stock' && (
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <SearchInput value={stockQuery} onChange={setStockQuery} placeholder="Item dhoondein…" className="min-w-[12rem] flex-1" />
+            <SearchInput value={stockQuery} onChange={setStockQuery} placeholder="Find an item…" className="min-w-[12rem] flex-1" />
             {stockEntries.length > 0 && <Badge tone="brand">{stockEntries.length} counted</Badge>}
             {stockAdjustments > 0 && <Badge tone="warning">{stockAdjustments} adjustment{stockAdjustments > 1 ? 's' : ''}</Badge>}
           </div>
           <div className="max-h-[45vh] overflow-y-auto rounded-card ring-1 ring-inset ring-line">
             {filteredStock.length === 0 ? (
-              <p className="px-4 py-6 text-center text-[13px] text-fg-subtle">Koi item nahi mila.</p>
+              <p className="px-4 py-6 text-center text-[13px] text-fg-subtle">No items found.</p>
             ) : (
               <ul className="divide-y divide-line">
                 {stockList.visibleItems.map(group => {
@@ -500,7 +500,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
                     <li key={group.itemId}>
                       <p className="flex items-baseline justify-between gap-2 bg-surface-2/70 px-3 pb-1 pt-2 text-[13px] font-semibold text-fg">
                         <span className="truncate">{group.name}</span>
-                        <span className="shrink-0 text-[11px] font-medium tabular-nums text-fg-subtle">Kul {formatBaseQty(group.totalBase, group.unit)}</span>
+                        <span className="shrink-0 text-[11px] font-medium tabular-nums text-fg-subtle">Total {formatBaseQty(group.totalBase, group.unit)}</span>
                       </p>
                       <ul className="divide-y divide-line/60 pl-2">
                         {group.piles.map(pile => (
@@ -523,11 +523,11 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
             )}
             <LoadMoreRow sentinelRef={stockList.sentinelRef} hiddenCount={stockList.hiddenCount} onShowMore={stockList.showMore} onShowAll={stockList.showAll} />
           </div>
-          {stockInvalid && <p className="text-xs font-semibold text-danger-fg">Kuch ginti theek nahi: 0 ya zyada likhein, packs poore number mein, purani ginti sirf 0.</p>}
+          {stockInvalid && <p className="text-xs font-semibold text-danger-fg">Some counts are not valid: enter 0 or more, packs in whole numbers, old counts only 0.</p>}
           {stockAdjustments > 0 && (
             <div className="space-y-2">
               <CountTotals changes={stockAdjustments} baseDiff={0} valueDiff={stockCount.valueDiff} />
-              <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] tabular-nums text-fg-subtle" aria-label="Badalne wali ginti">
+              <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] tabular-nums text-fg-subtle" aria-label="Counts that will change">
                 {stockCount.changes.map(change => (
                   <li key={change.key} className="flex justify-between gap-3">
                     <span className="truncate">{change.group.name}{change.group.piles.length > 1 ? ` — ${change.pile.name}` : ''}: {formatQty(change.pile.system, 3)} → {formatQty(change.counted, 3)} {change.pile.unitLabel}</span>
@@ -539,7 +539,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
               </ul>
             </div>
           )}
-          <p className="text-xs text-fg-subtle">Khali chhorna = koi adjustment nahi. Hidden packs aur purani ginti bhi yahan gini ja sakti hai. Farq wali har pile inventory log ke sath adjust hogi.</p>
+          <p className="text-xs text-fg-subtle">Left blank = no adjustment. Hidden packs and old counts can be counted here too. Every pile with a difference is adjusted with an inventory log.</p>
         </div>
       )}
 
@@ -549,8 +549,8 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
               <span className="text-[13px] font-semibold text-fg">Readiness</span>
               {status.blockers === 0
-                ? <Badge tone="success" dot>Sab clear</Badge>
-                : <Button size="sm" variant="secondary" onClick={() => setStep('check')}>{status.blockers} pending dekhein</Button>}
+                ? <Badge tone="success" dot>All clear</Badge>
+                : <Button size="sm" variant="secondary" onClick={() => setStep('check')}>View {status.blockers} pending</Button>}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
               <span className="text-[13px] font-semibold text-fg">Cash</span>
@@ -560,7 +560,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
                 <Badge tone="success" dot>Closed {formatPkDateTime(day.cash_closed_at)}</Badge>
               ) : (
                 <span className="flex items-center gap-1.5 text-[13px] font-semibold text-warning-fg">
-                  <AlertTriangle className="size-4" aria-hidden="true" /> Count nahi hui — expected <Money amount={expected} /> record hoga
+                  <AlertTriangle className="size-4" aria-hidden="true" /> Not counted — expected <Money amount={expected} /> will be recorded
                 </span>
               )}
             </div>
@@ -569,9 +569,9 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
               {day.stock_closed_at ? (
                 <Badge tone="success" dot>Closed {formatPkDateTime(day.stock_closed_at)}</Badge>
               ) : stockEntries.length > 0 ? (
-                <Button size="sm" variant="secondary" onClick={() => setStep('stock')}>{stockEntries.length} counts apply nahi hue</Button>
+                <Button size="sm" variant="secondary" onClick={() => setStep('stock')}>{stockEntries.length} counts not applied</Button>
               ) : (
-                <span className="text-[13px] text-fg-subtle">Count nahi hua — lock par closing complete mark hogi</span>
+                <span className="text-[13px] text-fg-subtle">Not counted — closing will be marked complete on lock</span>
               )}
             </div>
           </div>
@@ -588,7 +588,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
             onChange={setDenominations}
             onApply={total => setCountedRaw(String(total))}
             title="Day close — cash count"
-            subtitle={`${formatBusinessDate(day.business_date)} — drawer ka sara cash gin kar likhein`}
+            subtitle={`${formatBusinessDate(day.business_date)} — count all the drawer cash and enter it`}
             expectedAmount={expected}
           />
         </Suspense>

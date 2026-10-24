@@ -54,7 +54,10 @@ export function returnLinePile(item: ReturnItemSelection, qty: number): ReturnPi
   };
 }
 
-/** The return posts as spoilage (no stock back) when chosen, or when the reason itself says spoiled / defective. */
+/**
+ * The return posts as spoilage (no stock back) when chosen, or when the reason itself says spoiled / defective.
+ * "kharab" (Urdu for spoiled) stays in the pattern so older typed reasons still match.
+ */
 export function returnIsScrap(restockOption: 'restock' | 'scrap_spoilage', finalReason: string): boolean {
   return restockOption === 'scrap_spoilage' || /spoil|defect|kharab/i.test(finalReason);
 }
@@ -227,7 +230,8 @@ export const matchSaleWithToken = (
 
   const modeStr = (sale.payment_mode || '').toLowerCase();
   if (modeStr.includes(tok)) return true;
-  if ((tok === 'credit' || tok === 'khata' || tok === 'udhaar' || tok === 'due') && (sale.payment_mode === 'Credit' || Boolean(sale.customer_id))) {
+  // Roman Urdu aliases (khata, udhaar, nagad, wapsi) stay so staff can keep typing what they are used to.
+  if ((tok === 'credit' || tok === 'ledger' || tok === 'khata' || tok === 'udhaar' || tok === 'due') && (sale.payment_mode === 'Credit' || Boolean(sale.customer_id))) {
     return true;
   }
   if ((tok === 'cash' || tok === 'nagad') && sale.payment_mode === 'Cash') return true;
@@ -275,15 +279,15 @@ export interface ModeChangeRules {
  * dialog's "mark original Online" option (which calls updateSalePaymentMode), use this one rule.
  */
 export function saleModeLockReason(sale: POSBill, rules: ModeChangeRules): string | null {
-  if (sale.payment_mode === 'Credit') return 'Udhaar bill — payment khaate se lein';
+  if (sale.payment_mode === 'Credit') return 'Credit bill — take the payment through the ledger';
   const status = saleStatusOf(sale);
   if (status === 'Returned' || status === 'Partially Returned' || Number(sale.refund_amount || 0) > 0) {
-    return 'Returned bill ka mode nahi badla ja sakta';
+    return "A returned bill's mode can't be changed";
   }
-  if (!rules.canEdit) return 'Aap ko bill ka payment mode badalne ki ijazat nahi hai';
+  if (!rules.canEdit) return "You don't have permission to change a bill's payment mode";
   const shift = sale.shift_session_id ? rules.shiftById?.get(sale.shift_session_id) : undefined;
   if ((sale.date && rules.isDayLocked?.(sale.date)) || (shift && shift.status !== 'Active' && shift.status !== 'Closing')) {
-    return 'Band shift / band din ka bill — mode nahi badla ja sakta';
+    return "Bill from a closed shift / locked day — mode can't be changed";
   }
   return null;
 }

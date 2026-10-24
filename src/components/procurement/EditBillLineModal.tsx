@@ -89,7 +89,7 @@ const EditBillLineModal: React.FC<{
       size="sm"
       icon={<span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-fg-muted"><Package size={18} /></span>}
       title={line.item_name}
-      description={unit ? (unit.kind === 'base' ? `Unit: ${unitName} (base)` : `Unit: ${unit.equals}`) : `Unit "${line.unit}" ab is product mein nahi — neeche se chunein`}
+      description={unit ? (unit.kind === 'base' ? `Unit: ${unitName} (base)` : `Unit: ${unit.equals}`) : `Unit "${line.unit}" is no longer on this product — choose one below`}
       footer={
         <div className="flex w-full items-center justify-between gap-2">
           <Button variant="danger-soft" size="sm" leftIcon={<Trash2 />} onClick={() => onRemove(line)}>Remove</Button>
@@ -103,7 +103,7 @@ const EditBillLineModal: React.FC<{
       <form className="flex flex-col gap-4" onSubmit={event => { event.preventDefault(); save(); }}>
         {units.length > 1 && (
           <div>
-            <p className="mb-1.5 text-xs font-semibold text-fg-muted">Kis unit mein khareeda?</p>
+            <p className="mb-1.5 text-xs font-semibold text-fg-muted">Which unit was it bought in?</p>
             <div className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-0.5" role="radiogroup" aria-label="Purchase unit">
               {UNIT_KINDS.map(kind => {
                 const group = units.filter(u => u.kind === kind);
@@ -129,7 +129,7 @@ const EditBillLineModal: React.FC<{
                             <span className="flex items-center justify-between gap-1"><span className="truncate">{option.unit}</span>{selected && <Check size={12} className="shrink-0" aria-hidden="true" />}</span>
                             <span className="mt-0.5 block text-[10px] font-normal text-fg-subtle">{option.kind === 'base' ? 'Base unit' : option.equals}</span>
                             <span className={cn('mt-0.5 block text-[10px] font-bold', option.kind === 'pack' ? 'text-info-fg' : 'text-success-fg')}>
-                              {option.kind === 'pack' ? `${option.unit} packs mein` : 'Loose stock mein'}
+                              {option.kind === 'pack' ? `Into ${option.unit} packs` : 'Into loose stock'}
                             </span>
                           </button>
                         );
@@ -145,9 +145,9 @@ const EditBillLineModal: React.FC<{
         <Field label={`Quantity (${unitName})`} error={error || undefined}>
           {control => (
             <div className="flex items-center gap-1.5">
-              <IconButton variant="secondary" aria-label="Kam karein" icon={<Minus />} disabled={!((parseFloat(qty) || 0) > step)} onClick={() => changeQty(String((parseFloat(qty) || 0) - step))} />
+              <IconButton variant="secondary" aria-label="Decrease" icon={<Minus />} disabled={!((parseFloat(qty) || 0) > step)} onClick={() => changeQty(String((parseFloat(qty) || 0) - step))} />
               <Input {...control} type="number" step="any" min="0" inputMode="decimal" value={qty} onChange={event => changeQty(event.target.value)} className="text-center text-base font-bold tabular-nums" />
-              <IconButton variant="secondary" aria-label="Zyada karein" icon={<Plus />} onClick={() => changeQty(String((parseFloat(qty) || 0) + step))} />
+              <IconButton variant="secondary" aria-label="Increase" icon={<Plus />} onClick={() => changeQty(String((parseFloat(qty) || 0) + step))} />
             </div>
           )}
         </Field>
@@ -163,7 +163,7 @@ const EditBillLineModal: React.FC<{
           <Field label={`Rate / ${unitName}`}>
             {control => <Input {...control} type="number" step="any" min="0" inputMode="decimal" suffix="Rs" value={rate} onChange={event => changeRate(event.target.value)} className="font-bold tabular-nums" />}
           </Field>
-          <Field label="Total" hint="Total badalne se rate badalta hai, quantity wahi rehti hai.">
+          <Field label="Total" hint="Changing the total changes the rate; the quantity stays the same.">
             {control => <Input {...control} type="number" step="any" min="0" inputMode="decimal" suffix="Rs" value={total} onChange={event => changeTotal(event.target.value)} className="font-bold tabular-nums" />}
           </Field>
         </div>
@@ -171,7 +171,7 @@ const EditBillLineModal: React.FC<{
         {unit && (
           <div className="space-y-1.5 rounded-control bg-surface-2 px-3 py-2.5 text-xs ring-1 ring-inset ring-line" aria-live="polite">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-fg-subtle">Stock mein</span>
+              <span className="text-fg-subtle">Into stock</span>
               <span className="text-right font-bold tabular-nums text-fg">
                 {conversionText(draft.quantity, unit, baseUnit)}
                 <span className={cn('ml-1.5 font-semibold', unit.kind === 'pack' ? 'text-info-fg' : 'text-success-fg')}>→ {unit.lands}</span>

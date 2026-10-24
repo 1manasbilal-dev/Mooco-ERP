@@ -23,7 +23,7 @@ accountable from the moment a drawer opens until the day is closed.
      shift per user.
 
 2. **During shift (every rupee is tagged)**
-   - Sales, customer payments (khata), expenses, purchases and refunds are stamped
+   - Sales, customer payments (ledger), expenses, purchases and refunds are stamped
      with `business_day_id / shift_session_id / drawer_id / cashier_id`.
    - POS checkout is blocked without an active shift, and blocked when the business
      day is closed.

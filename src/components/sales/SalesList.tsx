@@ -53,7 +53,7 @@ export const SaleTableRow = memo(function SaleTableRow({ sale, modeLock, onOpenD
           </span>
           <div className="min-w-0">
             <p className="max-w-[180px] truncate font-semibold text-fg">{sale.customer_name || 'Walk-in'}</p>
-            {sale.customer_id && <p className="text-xs font-medium text-fg-subtle">Khata Customer</p>}
+            {sale.customer_id && <p className="text-xs font-medium text-fg-subtle">Ledger Customer</p>}
           </div>
         </div>
       </TD>
@@ -83,7 +83,7 @@ export const SaleTableRow = memo(function SaleTableRow({ sale, modeLock, onOpenD
           <IconButton size="sm" aria-label="View Invoice Details" icon={<Eye />} onClick={() => onOpenDetail(sale)} />
           <IconButton size="sm" aria-label="View / Print Receipt" icon={<Printer />} onClick={() => onOpenReceipt(sale)} />
           {!modeLock && (
-            <IconButton size="sm" aria-label="Payment Mode Tabdeel Karein (Cash ⇄ Online)" icon={<ArrowLeftRight />} onClick={() => onOpenMode(sale)} />
+            <IconButton size="sm" aria-label="Change Payment Mode (Cash ⇄ Online)" icon={<ArrowLeftRight />} onClick={() => onOpenMode(sale)} />
           )}
           {!isReturned && (
             <Button size="sm" variant="secondary" leftIcon={<RotateCcw />} onClick={() => onOpenReturn(sale)} title="Process Return & Refund">
@@ -150,7 +150,7 @@ export const SaleCard = memo(function SaleCard({ sale, modeLock, expanded, onTog
           </div>
           <IconButton
             size="sm"
-            aria-label={expanded ? 'Details band karein' : 'Details dikhayein'}
+            aria-label={expanded ? 'Hide details' : 'Show details'}
             aria-expanded={expanded}
             icon={<ChevronDown className={cn('transition-transform duration-200', expanded && 'rotate-180')} />}
             onClick={event => { event.stopPropagation(); onToggle(sale.id); }}
@@ -191,7 +191,7 @@ export const SaleCard = memo(function SaleCard({ sale, modeLock, expanded, onTog
               View Receipt
             </Button>
             {!modeLock && (
-              <Button variant="secondary" leftIcon={<ArrowLeftRight />} onClick={() => onOpenMode(sale)} title="Payment Mode Tabdeel Karein">
+              <Button variant="secondary" leftIcon={<ArrowLeftRight />} onClick={() => onOpenMode(sale)} title="Change Payment Mode">
                 Pay Mode
               </Button>
             )}

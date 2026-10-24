@@ -27,7 +27,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-/** Add or edit a supplier profile. The khata balance is only set once, as the opening balance of a new supplier. */
+/** Add or edit a supplier profile. The ledger balance is only set once, as the opening balance of a new supplier. */
 export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
   const { addSupplier, updateSupplier, items = [], suppliers = [] } = useDairy();
   const { showToast } = useToast();
@@ -81,15 +81,15 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
 
   const validate = (): Errors => {
     const next: Errors = {};
-    if (!name.trim()) next.name = 'Supplier ka naam zaroori hai';
-    if (phone.trim() && digits(phone).length < 7) next.phone = 'Sahi phone number likhein';
-    if (!phoneIsWhatsapp && whatsapp.trim() && digits(whatsapp).length < 7) next.whatsapp = 'Sahi WhatsApp number likhein';
-    if (types.length === 0) next.types = 'Kam az kam ek category chunein';
+    if (!name.trim()) next.name = 'Supplier name is required';
+    if (phone.trim() && digits(phone).length < 7) next.phone = 'Enter a valid phone number';
+    if (!phoneIsWhatsapp && whatsapp.trim() && digits(whatsapp).length < 7) next.whatsapp = 'Enter a valid WhatsApp number';
+    if (types.length === 0) next.types = 'Choose at least one category';
     const rateNum = Number(rate);
-    if (rate.trim() && (!Number.isFinite(rateNum) || rateNum < 0)) next.rate = 'Rate 0 ya us se zyada ho';
+    if (rate.trim() && (!Number.isFinite(rateNum) || rateNum < 0)) next.rate = 'Rate must be 0 or more';
     if (!editing && openingAmount.trim()) {
       const opening = Number(openingAmount);
-      if (!Number.isFinite(opening) || opening < 0) next.opening = 'Sahi amount likhein (minus ki zaroorat nahi, upar Payable / Advance chunein)';
+      if (!Number.isFinite(opening) || opening < 0) next.opening = 'Enter a valid amount (no minus needed, choose Payable / Advance above)';
     }
     return next;
   };
@@ -130,14 +130,14 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
       if (editing && supplier) {
         const ok = await updateSupplier(supplier.id, profile);
         if (!ok) return;
-        showToast('Supplier update ho gaya', 'success');
+        showToast('Supplier updated', 'success');
       } else {
         const ok = await addSupplier({ ...profile, pending_balance: openingSide === 'advance' ? -opening : opening } as Omit<Supplier, 'id'>);
         if (!ok) return;
       }
       onClose();
     } catch (err: any) {
-      showToast('Supplier save nahi hua: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Supplier couldn't be saved: " + (err?.message || 'please try again'), 'error');
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -154,8 +154,8 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
       dismissible={!saving}
       initialFocusRef={nameRef}
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg"><Truck className="size-5" /></span>}
-      title={editing ? 'Supplier profile edit karein' : 'Naya supplier'}
-      description="Contact, supply category, rate aur khata"
+      title={editing ? 'Edit supplier profile' : 'New supplier'}
+      description="Contact, supply category, rate and ledger"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -168,10 +168,10 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
       <form id="supplier-profile-form" onSubmit={handleSubmit} noValidate className="flex flex-col gap-6">
         <Section title="Contact">
           <Field
-            label="Supplier / farm ka naam"
+            label="Supplier / farm name"
             required
             error={errors.name}
-            hint={duplicate ? `"${duplicate.name}" naam ka supplier pehle se hai${duplicate.isActive === false ? ' (inactive)' : ''}.` : undefined}
+            hint={duplicate ? `A supplier named "${duplicate.name}" already exists${duplicate.isActive === false ? ' (inactive)' : ''}.` : undefined}
           >
             {control => (
               <Input {...control} ref={nameRef} value={name} placeholder="e.g. Al-Madina Dairy Farm" maxLength={120} onChange={e => { setName(e.target.value); clearError('name'); }} />
@@ -188,15 +188,15 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
                   aria-pressed={phoneIsWhatsapp}
                   onClick={() => setPhoneIsWhatsapp(v => !v)}
                   className="shrink-0"
-                  title={phoneIsWhatsapp ? 'Yehi number WhatsApp hai' : 'WhatsApp alag number par hai'}
+                  title={phoneIsWhatsapp ? 'This number is also on WhatsApp' : 'WhatsApp is on a different number'}
                 >
-                  {phoneIsWhatsapp ? 'WhatsApp' : 'Alag WA'}
+                  {phoneIsWhatsapp ? 'WhatsApp' : 'Other WA'}
                 </Button>
               </div>
             )}
           </Field>
           {!phoneIsWhatsapp && (
-            <Field label="WhatsApp number" error={errors.whatsapp} hint="Statement aur milk slip isi number par bheji jayegi">
+            <Field label="WhatsApp number" error={errors.whatsapp} hint="Statements and milk slips will be sent to this number">
               {control => <Input {...control} type="tel" inputMode="tel" value={whatsapp} placeholder="0300-1234567" className="tabular-nums" onChange={e => { setWhatsapp(e.target.value); clearError('whatsapp'); }} />}
             </Field>
           )}
@@ -210,11 +210,11 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
             </Field>
           </div>
           <Field label="Address">
-            {control => <Input {...control} value={address} placeholder="Gali, farm, nishani..." onChange={e => setAddress(e.target.value)} />}
+            {control => <Input {...control} value={address} placeholder="Street, farm, landmark..." onChange={e => setAddress(e.target.value)} />}
           </Field>
         </Section>
 
-        <Section title="Supply aur rate">
+        <Section title="Supply and rate">
           <div>
             <Label>Supply category<span className="ml-0.5 text-danger" aria-hidden="true">*</span></Label>
             <div className="grid grid-cols-3 gap-2" role="group" aria-label="Supply category">
@@ -244,7 +244,7 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
               <Field label="Default milk">
                 {control => (
                   <Select {...control} value={milkType} onChange={e => setMilkType(e.target.value)}>
-                    <option value="">Chunein...</option>
+                    <option value="">Choose...</option>
                     {isMilkVarietyActive('Buffalo') && <option value="Buffalo">Buffalo milk</option>}
                     {isMilkVarietyActive('Cow') && <option value="Cow">Cow milk</option>}
                     {isMilkVarietyActive('Mixed') && <option value="Mixed">Mixed milk</option>}
@@ -252,7 +252,7 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
                   </Select>
                 )}
               </Field>
-              <Field label="Rate / litre" error={errors.rate} hint="Khali = FAT/SNF chart">
+              <Field label="Rate / litre" error={errors.rate} hint="Blank = FAT/SNF chart">
                 {control => (
                   <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix="Rs" placeholder="e.g. 180" className="tabular-nums" value={rate} onChange={e => { setRate(e.target.value); clearError('rate'); }} />
                 )}
@@ -261,14 +261,14 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
           )}
         </Section>
 
-        <Section title={editing ? 'Khata balance' : 'Opening balance'}>
+        <Section title={editing ? 'Ledger balance' : 'Opening balance'}>
           {editing ? (
             <div className="rounded-control border border-line bg-surface-2 px-3.5 py-3">
               <p className="flex items-center justify-between gap-3 text-sm font-bold">
                 <span className="text-fg-muted">{balanceLabel(currentBalance, true)}</span>
                 <SupplierBalance value={currentBalance} label="none" />
               </p>
-              <p className="mt-1 text-[11px] text-fg-subtle">Balance yahan se nahi badalta. Purchase, payment ya return se khud update hota hai.</p>
+              <p className="mt-1 text-[11px] text-fg-subtle">The balance can't be changed here. Purchases, payments and returns update it on their own.</p>
             </div>
           ) : (
             <>
@@ -278,11 +278,11 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
                 value={openingSide}
                 onChange={setOpeningSide}
                 options={[
-                  { value: 'payable', label: 'Payable · hum ne dena hai' },
-                  { value: 'advance', label: 'Advance · hum ne diya hua' },
+                  { value: 'payable', label: 'Payable · we owe' },
+                  { value: 'advance', label: 'Advance · we paid ahead' },
                 ]}
               />
-              <Field label="Amount" error={errors.opening} hint="Pehle se chalta hisaab ho to likhein, warna khali chhor dein">
+              <Field label="Amount" error={errors.opening} hint="Enter it if there is an existing balance, otherwise leave it blank">
                 {control => (
                   <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix="Rs" placeholder="0" className="tabular-nums" value={openingAmount} onChange={e => { setOpeningAmount(e.target.value); clearError('opening'); }} />
                 )}
@@ -291,13 +291,13 @@ export function SupplierFormModal({ supplier, onClose }: { supplier: Supplier | 
           )}
         </Section>
 
-        <Section title="Notes aur status">
+        <Section title="Notes and status">
           <Field label="Notes">
-            {control => <Textarea {...control} rows={2} value={notes} placeholder="Contact person, delivery time, khaas hidayat..." onChange={e => setNotes(e.target.value)} />}
+            {control => <Textarea {...control} rows={2} value={notes} placeholder="Contact person, delivery time, special instructions..." onChange={e => setNotes(e.target.value)} />}
           </Field>
           <label className="flex cursor-pointer items-center gap-3 rounded-control border border-line bg-surface-2 px-3.5 py-3 text-[13px] font-semibold text-fg">
             <input type="checkbox" className="size-4 cursor-pointer accent-brand" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
-            Active: milk / material purchase mein nazar aaye
+            Active: shows in milk / material purchase
           </label>
         </Section>
       </form>

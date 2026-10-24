@@ -35,10 +35,10 @@ export default function CategoryManagerDialog({ onClose, canManage }: Props) {
   const remove = async (category: string) => {
     const count = usage.get(category.toLowerCase()) || 0;
     if (count > 0 && !(await confirmAction({
-      title: `"${category}" list se hatayen?`,
-      message: `${count} product${count === 1 ? '' : 's'} abhi is category mein hain.`,
-      consequences: ['Woh products apni category rakhenge.', 'Naye products ke liye yeh option list mein nahi aayega.'],
-      confirmLabel: 'Haan, hatayen',
+      title: `Remove "${category}" from the list?`,
+      message: `${count} product${count === 1 ? ' is' : 's are'} in this category now.`,
+      consequences: ['Those products keep their category.', "It won't be offered for new products."],
+      confirmLabel: 'Yes, remove',
       tone: 'warning',
     }))) return;
     removeCategory(category);
@@ -51,8 +51,8 @@ export default function CategoryManagerDialog({ onClose, canManage }: Props) {
       size="sm"
       icon={<div className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-fg-muted"><Tag className="size-5" /></div>}
       title="Product categories"
-      description="Catalog filter aur product form mein yehi categories aati hain."
-      footer={<Button variant="secondary" onClick={onClose}>Band karein</Button>}
+      description="These are the categories in the catalog filter and product form."
+      footer={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
       <div className="space-y-4">
         {canManage && (
@@ -64,19 +64,19 @@ export default function CategoryManagerDialog({ onClose, canManage }: Props) {
               <Input
                 value={name}
                 onChange={event => setName(event.target.value)}
-                placeholder="Nayi category, e.g. Sweets"
-                aria-label="Nayi category ka naam"
+                placeholder="New category, e.g. Sweets"
+                aria-label="New category name"
                 aria-invalid={duplicate || undefined}
                 maxLength={40}
               />
-              {duplicate && <p className="mt-1.5 text-xs font-semibold text-danger-fg">Yeh category pehle se maujood hai.</p>}
+              {duplicate && <p className="mt-1.5 text-xs font-semibold text-danger-fg">This category already exists.</p>}
             </div>
             <Button type="submit" leftIcon={<Plus />} disabled={!trimmed || duplicate}>Add</Button>
           </form>
         )}
 
         {all.length === 0 ? (
-          <EmptyState size="compact" icon={<Tag />} title="Koi category nahi" description="Upar se pehli category add karein." />
+          <EmptyState size="compact" icon={<Tag />} title="No categories" description="Add your first category above." />
         ) : (
           <ul className="max-h-72 divide-y divide-line/70 overflow-y-auto rounded-control border border-line">
             {all.map(category => {
@@ -88,7 +88,7 @@ export default function CategoryManagerDialog({ onClose, canManage }: Props) {
                   <span className="flex shrink-0 items-center gap-1.5">
                     <Badge tone="neutral">{count} {count === 1 ? 'product' : 'products'}</Badge>
                     {canManage && isSaved ? (
-                      <IconButton size="sm" aria-label={`${category} hatayen`} icon={<X />} onClick={() => remove(category)} />
+                      <IconButton size="sm" aria-label={`Remove ${category}`} icon={<X />} onClick={() => remove(category)} />
                     ) : (
                       <span className="size-8" aria-hidden="true" />
                     )}

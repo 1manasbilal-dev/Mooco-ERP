@@ -43,7 +43,7 @@ export const SupplierTableRow = memo(function SupplierTableRow({
         <TD className="w-12" onClick={stop}>
           <input
             type="checkbox"
-            aria-label={`${s.name} select karein`}
+            aria-label={`Select ${s.name}`}
             className="size-4 cursor-pointer accent-brand"
             checked={selected}
             onChange={() => onToggle(s.id)}
@@ -72,9 +72,9 @@ export const SupplierTableRow = memo(function SupplierTableRow({
       <TD numeric><SupplierBalance value={Number(s.pending_balance) || 0} /></TD>
       <TD className="w-28" onClick={stop}>
         <div className="flex justify-end gap-1">
-          {canPay && <IconButton size="sm" aria-label="Payment record karein" icon={<Wallet />} onClick={() => onPay(s)} />}
-          {canEdit && <IconButton size="sm" aria-label="Profile edit karein" icon={<Pencil />} onClick={() => onEdit(s)} />}
-          <IconButton size="sm" aria-label="Khata kholein" icon={<ChevronRight />} onClick={() => onOpen(s.id)} />
+          {canPay && <IconButton size="sm" aria-label="Record payment" icon={<Wallet />} onClick={() => onPay(s)} />}
+          {canEdit && <IconButton size="sm" aria-label="Edit profile" icon={<Pencil />} onClick={() => onEdit(s)} />}
+          <IconButton size="sm" aria-label="Open ledger" icon={<ChevronRight />} onClick={() => onOpen(s.id)} />
         </div>
       </TD>
     </TR>
@@ -115,7 +115,7 @@ export const SupplierPhoneCard = memo(function SupplierPhoneCard({ supplier: s, 
 /** Loading placeholder shaped like the supplier list. */
 export function SupplierListSkeleton({ wide }: { wide: boolean }) {
   return (
-    <Card className="overflow-hidden" aria-busy="true" aria-label="Suppliers load ho rahe hain">
+    <Card className="overflow-hidden" aria-busy="true" aria-label="Loading suppliers">
       <ul className="divide-y divide-line/70">
         {Array.from({ length: 6 }, (_, i) => (
           <li key={i} className={cn('flex items-center gap-3 px-4 py-3.5', wide && 'px-5')}>

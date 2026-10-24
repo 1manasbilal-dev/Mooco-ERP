@@ -76,12 +76,12 @@ const AuditTrail: React.FC<AuditTrailProps> = ({ run, busyKey }) => {
       <Card className="overflow-hidden">
         <CardHeader
           title="Open variances"
-          description="Har farq yahan approve ya reject hota hai. Reject ke liye wajah zaroori hai."
+          description="Every difference is approved or rejected here. A reason is required to reject."
           icon={<AlertTriangle />}
           actions={openVariances.length > 0 ? <Badge tone="danger" dot>{openVariances.length} open</Badge> : <Badge tone="success" dot>All clear</Badge>}
         />
         {openVariances.length === 0 ? (
-          <EmptyState size="compact" icon={<CheckCircle2 />} title="No open variance" description="Har cash farq resolve ho chuka hai." />
+          <EmptyState size="compact" icon={<CheckCircle2 />} title="No open variance" description="Every cash difference has been resolved." />
         ) : (
           <div className="divide-y divide-line border-t border-line">
             {openVariances.map(variance => {
@@ -105,7 +105,7 @@ const AuditTrail: React.FC<AuditTrailProps> = ({ run, busyKey }) => {
       <section aria-labelledby="shift-history-heading" className="flex flex-col gap-3">
         <div>
           <h3 id="shift-history-heading" className="text-[15px] font-bold text-fg">Shift history</h3>
-          <p className="mt-0.5 text-[13px] text-fg-subtle">Har shift ki opening, gini hui closing aur farq — naye pehle.</p>
+          <p className="mt-0.5 text-[13px] text-fg-subtle">Each shift's opening, counted closing and difference — newest first.</p>
         </div>
         <Toolbar>
           <SegmentedControl
@@ -120,11 +120,11 @@ const AuditTrail: React.FC<AuditTrailProps> = ({ run, busyKey }) => {
               { value: 'closed', label: 'Closed', count: counts.closed },
             ]}
           />
-          <SearchInput value={query} onChange={setQuery} placeholder="Cashier, drawer ya date…" className="min-w-[12rem] flex-1" />
+          <SearchInput value={query} onChange={setQuery} placeholder="Cashier, drawer or date…" className="min-w-[12rem] flex-1" />
         </Toolbar>
         <TableContainer>
           {filteredShifts.length === 0 ? (
-            <EmptyState size="compact" icon={<History />} title="Koi shift nahi mili" description={query ? 'Search badal kar dekhein.' : 'Is filter mein koi shift nahi.'} />
+            <EmptyState size="compact" icon={<History />} title="No shifts found" description={query ? 'Try a different search.' : 'No shifts in this filter.'} />
           ) : (
             <Table className="min-w-[860px]">
               <THead>
@@ -196,7 +196,7 @@ const VarianceRow = memo(function VarianceRow({ variance, context, reportedBy, b
     const trimmed = note.trim();
     // A rejection overrides what the cashier said happened, so it must say why.
     if (status === 'Rejected' && trimmed.length < 3) {
-      setError('Reject karne ki wajah likhein.');
+      setError('Write a reason for rejecting.');
       return;
     }
     setError('');

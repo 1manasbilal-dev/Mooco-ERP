@@ -76,7 +76,7 @@ export default function ProductionHistory({ batches, unitByProduct }: Production
   return (
     <div className="flex flex-col gap-4">
       <Toolbar>
-        <SearchInput value={search} onChange={setSearch} placeholder="Batch # ya product search karein..." className="w-full sm:w-72" aria-label="Search batches" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search batch # or product..." className="w-full sm:w-72" aria-label="Search batches" />
         <div className="flex items-center gap-1.5">
           <Input
             type="date"
@@ -84,10 +84,10 @@ export default function ProductionHistory({ batches, unitByProduct }: Production
             max={getTodayLocalDate()}
             onChange={event => setDate(event.target.value)}
             leftIcon={<CalendarDays />}
-            aria-label="Din chunein"
+            aria-label="Choose day"
             className="w-44"
           />
-          {date && <IconButton size="sm" aria-label="Date hatayen" icon={<X />} onClick={() => setDate('')} />}
+          {date && <IconButton size="sm" aria-label="Clear date" icon={<X />} onClick={() => setDate('')} />}
         </div>
         <SegmentedControl
           aria-label="Batch status"
@@ -106,8 +106,8 @@ export default function ProductionHistory({ batches, unitByProduct }: Production
         <Card>
           <EmptyState
             icon={<History />}
-            title={hasFilters ? 'Is filter mein koi batch nahi' : 'Abhi koi production history nahi'}
-            description={hasFilters ? 'Search, din ya status badal kar dekhein.' : 'Complete ya cancel hone wale batches yahan nazar aayenge.'}
+            title={hasFilters ? 'No batches match this filter' : 'No production history yet'}
+            description={hasFilters ? 'Try a different search, day or status.' : 'Completed and cancelled batches will show here.'}
           />
         </Card>
       ) : (
@@ -115,7 +115,7 @@ export default function ProductionHistory({ batches, unitByProduct }: Production
           {groups.map(group => (
             <section key={group.day || 'unknown'} className="flex flex-col gap-2">
               <h3 className="px-1 text-xs font-semibold text-fg-subtle">
-                {group.day ? formatPkDay(group.day, 'long') : 'Date nahi'}
+                {group.day ? formatPkDay(group.day, 'long') : 'No date'}
                 <span className="ml-1.5 tabular-nums text-fg-faint">· {group.rows.length}</span>
               </h3>
               <ul className="flex flex-col gap-2">
@@ -235,7 +235,7 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
 
           {isCompleted && outputBreakdown && (
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="font-semibold text-fg-subtle">Stock mein gaya:</span>
+              <span className="font-semibold text-fg-subtle">Added to stock:</span>
               {(outputBreakdown.loose_qty || 0) > 0 && <Badge>Loose {formatQty(outputBreakdown.loose_qty, 3)} {unit}</Badge>}
               {(outputBreakdown.variants || []).map((v, index) => (
                 <Badge key={`${v.variant_name}-${index}`} tone="brand">{v.count} × {v.variant_name}</Badge>
@@ -245,7 +245,7 @@ const HistoryRow = memo(function HistoryRow({ batch, at, unit, expanded, onToggl
 
           {isCompleted && materialsUsed.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="font-semibold text-fg-subtle">Materials kate:</span>
+              <span className="font-semibold text-fg-subtle">Materials used:</span>
               {materialsUsed.map((m, index) => (
                 <Badge key={`${m.item_id || m.name}-${index}`}>{m.name} {formatQty(m.quantity, 3)} {m.unit || ''}</Badge>
               ))}

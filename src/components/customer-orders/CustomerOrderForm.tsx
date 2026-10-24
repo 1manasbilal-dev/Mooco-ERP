@@ -149,17 +149,17 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
 
   const amounts = orderAmounts(draft.items || [], Number(draft.discount) || 0, Number(draft.advance_paid) || 0);
   // orderAmounts quietly caps the advance at the order total. Money must never change silently, so an
-  // advance above the total, or below what is already posted to the customer khata, is shown and blocks saving.
+  // advance above the total, or below what is already posted to the customer ledger, is shown and blocks saving.
   const typedAdvance = roundCurrency(Number(draft.advance_paid) || 0);
   const postedAdvance = existing ? roundCurrency(Number(existing.advance_posted || 0)) : 0;
   const advanceProblem = typedAdvance < 0
-    ? 'Advance manfi (negative) nahi ho sakta.'
+    ? "The advance can't be negative."
     : postedAdvance > 0 && amounts.total < postedAdvance
-      ? `Order total ${formatCurrency(amounts.total)} ho gaya hai, lekin ${formatCurrency(postedAdvance)} advance pehle hi customer ke khaate mein post ho chuka hai. Total itna kam nahi ho sakta: products ya discount theek karein. Zyada advance wapas karne ka tareeqa app mein abhi nahi hai.`
+      ? `The order total is now ${formatCurrency(amounts.total)}, but an advance of ${formatCurrency(postedAdvance)} is already posted to the customer's ledger. The total can't go that low: fix the products or discount. The app can't refund extra advance yet.`
       : postedAdvance > 0 && typedAdvance < postedAdvance
-        ? `${formatCurrency(postedAdvance)} advance pehle hi customer ke khaate mein post ho chuka hai. Advance us se kam nahi ho sakta.`
+        ? `An advance of ${formatCurrency(postedAdvance)} is already posted to the customer's ledger. The advance can't be less than that.`
         : typedAdvance > amounts.total
-          ? `Advance ${formatCurrency(typedAdvance)} order total ${formatCurrency(amounts.total)} se zyada hai. Advance kam karein ya products barhayein; zyada raqam khud se kam nahi ki jayegi.`
+          ? `The advance ${formatCurrency(typedAdvance)} is more than the order total ${formatCurrency(amounts.total)}. Lower the advance or add products; the extra amount won't be reduced automatically.`
           : '';
 
   const changeCustomer = (id: string) => {
@@ -190,7 +190,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
     const accountId = isOnline
       ? (settings.financial?.defaultDigitalAccountId || accounts.find(account => account.type === 'Bank' || account.type === 'Wallet')?.id)
       : (drawerAccount || settings.financial?.defaultCashAccountId || accounts.find(account => account.type === 'Cash')?.id);
-    if (!accountId) throw new Error(isOnline ? 'Koi Bank/Wallet account nahi mila.' : 'Koi Cash account nahi mila.');
+    if (!accountId) throw new Error(isOnline ? 'No bank / wallet account found.' : 'No cash account found.');
     const inShift = !isOnline && !!drawerAccount;
     const posted = await postCustomerOrderAdvance(order, {
       // One id per advance level, so a retry after a lost response never posts the same money twice.
@@ -209,7 +209,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
     event.preventDefault(); if (busyRef.current) return;
     if (existing ? !canEdit : !canCreate) {
       // Used to return silently, which looked like a dead Save button.
-      setFormError(existing ? 'Aap ko orders edit karne ki ijazat nahi hai.' : 'Aap ko orders book karne ki ijazat nahi hai.');
+      setFormError(existing ? "You don't have permission to edit orders." : "You don't have permission to book orders.");
       return;
     }
     busyRef.current = true; setBusy(true); setFormError('');
@@ -242,13 +242,13 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
         total: calculated.total
       };
       let saved = await saveCustomerOrder(existing ? payload : { ...payload, id: draft.id, order_number: draft.order_number, created_by: currentUser.id }, existing);
-      // The advance is real money received now: post it to the customer khata and the receiving account.
+      // The advance is real money received now: post it to the customer ledger and the receiving account.
       if (unpostedAdvance(saved) > 0) {
         try {
           saved = await postAdvance(saved);
         } catch (postErr: any) {
           onUnposted(saved);
-          throw new Error(`Order save ho gaya, lekin advance khaate mein post nahi hua: ${postErr.message} Dobara Save dabayein.`);
+          throw new Error(`The order was saved, but the advance couldn't be posted to the ledger: ${postErr.message} Press Save again.`);
         }
       }
       onSaved(saved, Boolean(existing));
@@ -289,7 +289,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
                 value={draft.customer_id || ''}
                 onChange={changeCustomer}
                 placeholder="Choose a customer..."
-                searchPlaceholder="Search customer by name, phone or khata..."
+                searchPlaceholder="Search customer by name or phone..."
                 required
                 enableSearch
                 emptyText="No customer found"
@@ -372,8 +372,8 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
               <div role="status" className="mt-3 flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
                 <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
                 <span>
-                  Stock abhi kam hai — {shortages.map(row => shortageText(row, itemById.get(row.itemId))).join('; ')}.
-                  {' '}Order book ho jayega, lekin bill karne se pehle stock tayyar karein.
+                  Not enough stock right now — {shortages.map(row => shortageText(row, itemById.get(row.itemId))).join('; ')}.
+                  {' '}The order will be booked, but get the stock ready before billing.
                 </span>
               </div>
             )}
@@ -390,7 +390,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
                   const pileNeed = pileNeeds.find(row => row.itemId === line.itemId && row.pileId === pileId);
                   const short = shortages.some(row => row.itemId === line.itemId && row.pileId === pileId);
                   const sharedNote = pileNeed && pileNeed.lines > 1
-                    ? ` · ${pileNeed.lines} lines milkar ${formatQty(pileNeed.need, 3)} ${pileId === 'loose' ? (product?.unit || '') : (variant?.name || line.unit)}`
+                    ? ` · ${pileNeed.lines} lines together: ${formatQty(pileNeed.need, 3)} ${pileId === 'loose' ? (product?.unit || '') : (variant?.name || line.unit)}`
                     : '';
                   return (
                     <li key={`${line.itemId}-${line.variantId || 'base'}`} className="rounded-control border border-line bg-surface p-3 shadow-e1">
@@ -469,7 +469,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
             <Field
               label="Advanced Payment"
               error={advanceProblem || undefined}
-              hint={!advanceProblem && postedAdvance > 0 ? `${formatCurrency(postedAdvance)} khaate mein post ho chuka hai.` : undefined}
+              hint={!advanceProblem && postedAdvance > 0 ? `${formatCurrency(postedAdvance)} already posted to the ledger.` : undefined}
             >
               {control => (
                 <Input
@@ -553,7 +553,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
         {!online && (
           <div role="status" className="flex items-center gap-2.5 rounded-control border border-warning/30 bg-warning-soft p-3 text-sm font-semibold text-warning-fg">
             <WifiOff size={18} className="shrink-0" aria-hidden="true" />
-            <span>Internet nahi hai. Order save karne ke liye internet chahiye.</span>
+            <span>No internet. Saving an order needs the internet.</span>
           </div>
         )}
         {formError && (

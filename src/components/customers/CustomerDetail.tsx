@@ -66,7 +66,7 @@ const LedgerTableRow = memo(function LedgerTableRow({ entry, onOpen, onDelete }:
     <TR className={cn(ret && 'bg-danger-soft/40', entry.isPartiallyReturned && 'bg-warning-soft/40')}>
       <TD className={cn('whitespace-nowrap tabular-nums text-fg-muted', PRINT_CELL)}>{entry.dateLabel}</TD>
       <TD className={cn('min-w-[240px] print:min-w-0', PRINT_CELL)}>
-        <button type="button" onClick={() => onOpen(entry)} className="w-full cursor-pointer rounded-md text-left text-[13px] hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring print:text-[11px]" title="Detail dekhein">
+        <button type="button" onClick={() => onOpen(entry)} className="w-full cursor-pointer rounded-md text-left text-[13px] hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring print:text-[11px]" title="View details">
           <EntryDetails entry={entry} />
         </button>
       </TD>
@@ -79,10 +79,10 @@ const LedgerTableRow = memo(function LedgerTableRow({ entry, onOpen, onDelete }:
           {bill ? (
             <Button variant="soft" size="sm" leftIcon={<FileText />} onClick={() => onOpen(entry)}>Bill</Button>
           ) : (
-            <IconButton size="sm" aria-label="Voucher dekhein" icon={<Eye />} onClick={() => onOpen(entry)} />
+            <IconButton size="sm" aria-label="View voucher" icon={<Eye />} onClick={() => onOpen(entry)} />
           )}
           {entry.canDelete && (
-            <IconButton size="sm" aria-label="Entry delete karein" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(entry)} />
+            <IconButton size="sm" aria-label="Delete entry" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(entry)} />
           )}
         </div>
       </TD>
@@ -107,7 +107,7 @@ const LedgerCard = memo(function LedgerCard({ entry, onOpen, onDelete }: { entry
         <div className="flex shrink-0 items-center gap-1">
           <Button variant="soft" size="sm" leftIcon={<Eye />} onClick={() => onOpen(entry)}>{isBillEntry(entry) ? 'Bill' : 'Voucher'}</Button>
           {entry.canDelete && (
-            <IconButton size="sm" aria-label="Entry delete karein" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(entry)} />
+            <IconButton size="sm" aria-label="Delete entry" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(entry)} />
           )}
         </div>
       </div>
@@ -148,7 +148,7 @@ const StatementPrintHeader = ({
           {shop.phone && <p className="text-xs">Tel: {shop.phone}</p>}
         </div>
         <div className="text-right">
-          <p className="text-base font-bold uppercase tracking-wider">Khata Statement</p>
+          <p className="text-base font-bold uppercase tracking-wider">Ledger Statement</p>
           <p className="text-xs">Date: {today}</p>
         </div>
       </div>
@@ -211,7 +211,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
   const printing = usePrintMode();
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Opening a khata from far down the list used to land in the middle of it.
+  // Opening a ledger from far down the list used to land in the middle of it.
   useEffect(() => {
     rootRef.current?.closest('.workspace-pane')?.scrollTo({ top: 0 });
   }, []);
@@ -240,12 +240,12 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
       <StatementPrintHeader customer={customer} ledger={ledger} shop={shop} filter={filter} search={deferredSearch} shownCount={entries.length} />
 
       <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-        <Button variant="ghost" leftIcon={<ArrowLeft />} onClick={onBack}>Sab customers</Button>
+        <Button variant="ghost" leftIcon={<ArrowLeft />} onClick={onBack}>All customers</Button>
         <div className="flex items-center gap-1.5">
           {canOrders && <IconButton variant="secondary" aria-label="Customer orders" icon={<ShoppingCart />} onClick={() => onOpenOrders(customer)} />}
-          {wa && <IconButton variant="secondary" aria-label="WhatsApp statement bhejein" icon={<MessageCircle />} onClick={() => onWhatsApp(customer)} />}
-          <IconButton variant="secondary" aria-label="Statement print karein" icon={<Printer />} onClick={() => window.print()} />
-          {canEdit && <IconButton variant="secondary" aria-label="Customer edit karein" icon={<Pencil />} onClick={() => onEdit(customer)} />}
+          {wa && <IconButton variant="secondary" aria-label="Send statement on WhatsApp" icon={<MessageCircle />} onClick={() => onWhatsApp(customer)} />}
+          <IconButton variant="secondary" aria-label="Print statement" icon={<Printer />} onClick={() => window.print()} />
+          {canEdit && <IconButton variant="secondary" aria-label="Edit customer" icon={<Pencil />} onClick={() => onEdit(customer)} />}
         </div>
       </div>
 
@@ -267,7 +267,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
 
               <div className={cn('mx-4 rounded-control p-4 sm:mx-5', state === 'due' ? 'bg-danger-soft' : state === 'advance' ? 'bg-success-soft' : 'bg-surface-2')}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-fg-muted">Current khata balance</span>
+                  <span className="text-xs font-semibold text-fg-muted">Current balance</span>
                   <BalanceBadge balance={customer.balance} />
                 </div>
                 <KhataBalance balance={customer.balance} label="none" className="mt-2" amountClassName="text-3xl font-bold tracking-tight" />
@@ -299,7 +299,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                       {wa && <Badge tone="success">WhatsApp</Badge>}
                     </a>
                   ) : (
-                    <p className="text-xs italic text-fg-subtle">Primary phone record nahi</p>
+                    <p className="text-xs italic text-fg-subtle">No primary phone on record</p>
                   )}
                   {customer.whatsapp && customer.whatsapp !== customer.phone && (
                     <a href={`tel:${customer.whatsapp}`} className="flex items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2 hover:bg-surface-3">
@@ -341,7 +341,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                 <Button variant="soft" size="sm" leftIcon={<RotateCcw />} onClick={() => onReactivate(customer)}>Reactivate</Button>
               )}
               {canDelete && (
-                <IconButton variant="danger-soft" size="sm" aria-label="Customer delete / archive karein" icon={<Trash2 />} onClick={() => onDelete(customer)} className="md:ml-auto 2xl:ml-0" />
+                <IconButton variant="danger-soft" size="sm" aria-label="Delete / archive customer" icon={<Trash2 />} onClick={() => onDelete(customer)} className="md:ml-auto 2xl:ml-0" />
               )}
             </div>
           )}
@@ -352,13 +352,13 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
             <div role="status" className="flex items-start gap-2 rounded-control border border-warning/30 bg-warning-soft px-3 py-2.5 text-xs text-warning-fg">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>
-                Khaate ka balance ({formatCurrency(Number(customer.balance || 0))}) neeche ki entries ke jor se {formatCurrency(Math.abs(ledger.ledgerGap || 0))}{' '}
-                {(ledger.ledgerGap || 0) > 0 ? 'zyada' : 'kam'} hai. Purani entries load nahi huin ya koi entry ghalat hai. Report par bharosa karne se pehle check karein.
+                The ledger balance ({formatCurrency(Number(customer.balance || 0))}) is {formatCurrency(Math.abs(ledger.ledgerGap || 0))}{' '}
+                {(ledger.ledgerGap || 0) > 0 ? 'more' : 'less'} than the total of the entries below. Older entries didn't load or an entry is wrong. Check before you rely on this report.
               </span>
             </div>
           )}
 
-          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4 print:hidden" aria-label="Khata summary">
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4 print:hidden" aria-label="Ledger summary">
             <StatCard
               label={tileLabel('Billed', 'Total billed')}
               value={<Money amount={ledger.totalDebit} compact={!isMdScreen} />}
@@ -370,13 +370,13 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
               label="Entries"
               value={ledger.entries.length.toLocaleString('en-PK')}
               icon={<ListOrdered />}
-              hint={entries.length !== ledger.entries.length ? `${entries.length} dikh rahi hain` : undefined}
+              hint={entries.length !== ledger.entries.length ? `${entries.length} shown` : undefined}
             />
             <StatCard
-              label={tileLabel('Last paid', 'Aakhri payment')}
+              label={tileLabel('Last paid', 'Last payment')}
               value={lastPayment ? <Money amount={lastPayment.credit} compact={!isMdScreen} /> : '—'}
               icon={<CalendarClock />}
-              hint={lastPayment ? lastPayment.dateLabel : 'Abhi tak koi nahi'}
+              hint={lastPayment ? lastPayment.dateLabel : 'None yet'}
             />
           </section>
 
@@ -385,7 +385,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
               value={search}
               onChange={setSearch}
               placeholder="Entries, bill #, note, amount..."
-              aria-label="Ledger entries search karein"
+              aria-label="Search ledger entries"
               className="w-full sm:w-64"
             />
             {/* Phones get short labels without counts so all five types fit in 390px. */}
@@ -413,8 +413,8 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                 <EmptyState
                   size="compact"
                   icon={<FileText />}
-                  title={ledger.entries.length === 0 ? 'Abhi koi entry nahi' : 'Is filter mein koi entry nahi'}
-                  description={ledger.entries.length === 0 ? 'Record payment ya POS bill se khata shuru hoga.' : 'Search ya filter badal kar dekhein.'}
+                  title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match this filter'}
+                  description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different search or filter.'}
                 />
               ) : (
                 <Table>
@@ -445,8 +445,8 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                   <EmptyState
                     size="compact"
                     icon={<FileText />}
-                    title={ledger.entries.length === 0 ? 'Abhi koi entry nahi' : 'Is filter mein koi entry nahi'}
-                    description={ledger.entries.length === 0 ? 'Record payment ya POS bill se khata shuru hoga.' : 'Search ya filter badal kar dekhein.'}
+                    title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match this filter'}
+                    description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different search or filter.'}
                   />
                 </div>
               ) : (

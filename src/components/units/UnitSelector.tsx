@@ -23,7 +23,7 @@ const GROUPS: { key: GroupKey; label: string; icon: React.ReactNode; match: (u: 
   { key: 'mass', label: 'Weight', icon: <Scale />, match: u => u.type === 'Mass' },
   { key: 'volume', label: 'Liquid / volume', icon: <Droplets />, match: u => u.type === 'Volume' },
   { key: 'count', label: 'Count / packaging', icon: <Package />, match: u => u.type === 'Count' },
-  { key: 'custom', label: 'Apne units', icon: <Sparkles />, match: u => !u.isSystem },
+  { key: 'custom', label: 'Your units', icon: <Sparkles />, match: u => !u.isSystem },
 ];
 
 const EMPTY_UNITS: UnitDefinition[] = [];
@@ -164,12 +164,12 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
                     <span className="truncate font-semibold text-fg">Custom: {value}</span>
                   </>
                 ) : (
-                  <span className="truncate text-fg-faint">Unit chunein (kg, L, pcs...)</span>
+                  <span className="truncate text-fg-faint">Choose a unit (kg, L, pcs...)</span>
                 )}
               </span>
               <ChevronDown className={cn('size-4 shrink-0 text-fg-faint transition-transform duration-150', isOpen && 'rotate-180')} />
             </button>
-            <Button variant="secondary" leftIcon={<Plus />} disabled={disabled} onClick={startCustom} title="Apna unit likhein">
+            <Button variant="secondary" leftIcon={<Plus />} disabled={disabled} onClick={startCustom} title="Type your own unit">
               Custom
             </Button>
           </div>
@@ -183,8 +183,8 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
                     type="text"
                     value={searchTerm}
                     onChange={e => setSearchTerm(e.target.value)}
-                    placeholder="Unit dhoondein (kg, liter, dozen)..."
-                    aria-label="Unit dhoondein"
+                    placeholder="Search units (kg, liter, dozen)..."
+                    aria-label="Search units"
                     className="ds-control h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-brand-accent"
                     autoFocus
                   />
@@ -193,7 +193,7 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
 
               <div id={listId} role="listbox" aria-label="Units" className="max-h-72 overflow-y-auto p-1.5">
                 {groups.length === 0 && (
-                  <p className="px-3 py-6 text-center text-xs text-fg-subtle">Koi unit nahi mila. "Custom" se apna unit likhein.</p>
+                  <p className="px-3 py-6 text-center text-xs text-fg-subtle">No units found. Use "Custom" to type your own.</p>
                 )}
                 {groups.map(group => (
                   <div key={group.key} role="group" aria-label={group.label} className="py-1">
@@ -232,7 +232,7 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
                   onClick={startCustom}
                   className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-brand-fg transition-colors hover:bg-brand-soft"
                 >
-                  <Plus className="size-3.5" />Apna unit likhein...
+                  <Plus className="size-3.5" />Type your own unit...
                 </button>
               </div>
             </div>
@@ -249,7 +249,7 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
                 if (e.key === 'Enter') { e.preventDefault(); if (customInputValue.trim()) setIsCustomMode(false); }
                 if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); leaveCustom(true); }
               }}
-              placeholder="Unit likhein (egg, plate, tray, cup, bori)..."
+              placeholder="Type a unit (egg, plate, tray, cup, bori)..."
               aria-label="Custom unit"
               maxLength={20}
               autoFocus={!disabled}
@@ -273,8 +273,8 @@ export const UnitSelector: React.FC<UnitSelectorProps> = ({
       {warning && <p className="text-xs font-medium text-warning-fg">{warning}</p>}
       <p className="text-xs text-fg-subtle">
         {isCustomMode
-          ? 'Pack sizes (dozen, cup) Sell units tab mein add karein.'
-          : 'Sab se chhota unit jo aap ginte ya tolte hain, e.g. kg, L ya pcs.'}
+          ? 'Add pack sizes (dozen, cup) in the Sell units tab.'
+          : 'The smallest unit you count or weigh in, e.g. kg, L or pcs.'}
       </p>
     </div>
   );

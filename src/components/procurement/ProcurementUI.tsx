@@ -159,7 +159,7 @@ export function PillGroup<T extends string>({
   );
 }
 
-/** Which part of the day a shift name means: morning, noon or evening. */
+/** Which part of the day a shift name means: morning, noon or evening. Also matches Urdu shift names (sham, raat, dopehar). */
 export function shiftPart(name: string): 'morning' | 'noon' | 'evening' {
   const value = name.toLowerCase();
   if (value.includes('evening') || value.includes('night') || value.includes('sham') || value.includes('raat')) return 'evening';
@@ -202,7 +202,7 @@ export function Avatar({ name, owed = false, size = 'md' }: { name: string; owed
   );
 }
 
-/** Paid vs khata split of a bill, as one bar with both amounts underneath. */
+/** Paid vs unpaid (on credit) split of a bill, as one bar with both amounts underneath. */
 export function SettlementBar({ total, paid, formatMoney = formatCurrency }: { total: number; paid: number; formatMoney?: (value: number) => string }) {
   if (total <= 0) return null;
   const paidPart = Math.min(total, Math.max(0, paid));
@@ -215,7 +215,7 @@ export function SettlementBar({ total, paid, formatMoney = formatCurrency }: { t
       </div>
       <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] font-semibold tabular-nums">
         <span className="flex items-center gap-1.5 text-success-fg"><span className="size-1.5 rounded-full bg-success" aria-hidden="true" />Paid {formatMoney(paidPart)}</span>
-        <span className="flex items-center gap-1.5 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" aria-hidden="true" />Khata {formatMoney(due)}</span>
+        <span className="flex items-center gap-1.5 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" aria-hidden="true" />Unpaid {formatMoney(due)}</span>
       </div>
     </div>
   );

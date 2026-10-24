@@ -90,7 +90,7 @@ const LOG_MODES: SegmentOption<'All' | 'Cash' | 'Online'>[] = [
 ];
 
 const VIEW_OPTIONS: SegmentOption<'directory' | 'payments'>[] = [
-  { value: 'directory', label: 'Khata', icon: <BookUser /> },
+  { value: 'directory', label: 'Ledger', icon: <BookUser /> },
   { value: 'payments', label: 'Payments log', icon: <ArrowDownUp /> },
 ];
 
@@ -110,7 +110,7 @@ const LOG_KIND: Record<VendorPaymentLogRow['actionType'], { icon: React.ElementT
 };
 
 const balanceWord = (bal: number) => (bal > 0 ? 'to pay' : bal < 0 ? 'advance' : 'settled');
-// Khata colours (design-system Money tone="balance"): due = danger, advance = success.
+// Ledger colours (design-system Money tone="balance"): due = danger, advance = success.
 const balanceText = (bal: number) => (bal > 0 ? 'text-danger-fg' : bal < 0 ? 'text-success-fg' : 'text-fg-subtle');
 
 const StatMoney: React.FC<{ amount: number }> = ({ amount }) => <Money amount={amount} className="text-xl sm:text-2xl lg:text-[28px]" />;
@@ -242,7 +242,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
           amount: billed - paid,
           paidAmount: 0,
           paymentMode: 'Credit',
-          accountName: 'Vendor khata',
+          accountName: 'Vendor ledger',
           description: `${exp.description || 'Bill'} · on credit`,
         });
       }
@@ -423,7 +423,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               value={logSearch}
               onChange={setLogSearch}
               placeholder="Search vendor, note, reference…"
-              aria-label="Payments search karein"
+              aria-label="Search payments"
               className="min-w-0 flex-1 basis-full sm:basis-56"
             />
             <Button variant="secondary" leftIcon={<Printer />} onClick={() => window.print()} className="hidden lg:inline-flex">Print</Button>
@@ -445,9 +445,9 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               {logPeriod === 'custom_range' && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <CalendarRange size={14} className="text-fg-faint" aria-hidden="true" />
-                  <Input inputSize="sm" type="date" value={logStart} max={logEnd || today} onChange={e => setLogStart(e.target.value)} aria-label="Kab se" className="w-auto" />
+                  <Input inputSize="sm" type="date" value={logStart} max={logEnd || today} onChange={e => setLogStart(e.target.value)} aria-label="From date" className="w-auto" />
                   <span className="text-xs text-fg-subtle">to</span>
-                  <Input inputSize="sm" type="date" value={logEnd} min={logStart || undefined} onChange={e => setLogEnd(e.target.value)} aria-label="Kab tak" className="w-auto" />
+                  <Input inputSize="sm" type="date" value={logEnd} min={logStart || undefined} onChange={e => setLogEnd(e.target.value)} aria-label="To date" className="w-auto" />
                 </div>
               )}
             </div>
@@ -499,7 +499,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
                   value={searchTerm}
                   onChange={setSearchTerm}
                   placeholder="Name, phone, service…"
-                  aria-label="Vendor search karein"
+                  aria-label="Search vendors"
                   className="min-w-0 flex-1"
                 />
                 <Select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)} aria-label="Sort vendors" className="w-auto shrink-0 text-xs">
@@ -572,7 +572,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
               <EmptyState
                 icon={<BookUser />}
                 title={selectedVendorId ? 'Vendor not found' : 'Pick a vendor'}
-                description="Choose a vendor on the left to see their khata, or add a new one."
+                description="Choose a vendor on the left to see their ledger, or add a new one."
                 action={canCreate && <Button leftIcon={<Plus />} onClick={handleOpenAddVendorModal}>Add vendor</Button>}
               />
             )}
@@ -654,7 +654,7 @@ const LogRow: React.FC<{
         {canDelete && (
           <IconButton
             size="sm"
-            aria-label="Payment delete karein"
+            aria-label="Delete payment"
             title="Delete payment"
             icon={<Trash2 />}
             onClick={() => onDelete(row.id)}
@@ -734,7 +734,7 @@ const VendorDetail: React.FC<{
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-col gap-3 border-b border-line p-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <IconButton variant="secondary" aria-label="Wapas jayen" icon={<ArrowLeft />} onClick={onBack} className="shrink-0 xl:hidden print:hidden" />
+          <IconButton variant="secondary" aria-label="Go back" icon={<ArrowLeft />} onClick={onBack} className="shrink-0 xl:hidden print:hidden" />
           <Avatar name={vendor.name} owed={bal > 0} size="lg" />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
@@ -756,7 +756,7 @@ const VendorDetail: React.FC<{
           {onPay && onReceive && (bal >= 0 ? (
             <>
               <Button leftIcon={<ArrowUpRight />} onClick={() => onPay()} className="flex-1 sm:flex-initial">Pay</Button>
-              <Button variant="secondary" leftIcon={<ArrowDownLeft />} onClick={onReceive} title="Refund / advance wapas" aria-label="Receive">
+              <Button variant="secondary" leftIcon={<ArrowDownLeft />} onClick={onReceive} title="Refund / advance returned" aria-label="Receive">
                 <span className="hidden xl:inline">Receive</span>
               </Button>
             </>
@@ -769,14 +769,14 @@ const VendorDetail: React.FC<{
             </>
           ))}
           {onRecordBill && (
-            <Button variant="secondary" leftIcon={<FileText />} onClick={onRecordBill} title="Is vendor ka naya bill likhein" aria-label="Add bill">
+            <Button variant="secondary" leftIcon={<FileText />} onClick={onRecordBill} title="Add a new bill for this vendor" aria-label="Add bill">
               <span className="hidden sm:inline">Add bill</span>
             </Button>
           )}
           <IconButton variant="secondary" aria-label="WhatsApp statement" icon={<MessageCircle />} onClick={onWhatsApp} className="hover:text-success-fg" />
           <IconButton variant="secondary" aria-label="Print statement" icon={<Printer />} onClick={onPrint} className="hidden sm:inline-flex" />
-          {onEdit && <IconButton variant="secondary" aria-label="Vendor edit karein" icon={<Edit />} onClick={onEdit} />}
-          {onDelete && <IconButton variant="secondary" aria-label="Vendor delete karein" icon={<Trash2 />} onClick={onDelete} className="hover:border-danger/30 hover:text-danger-fg" />}
+          {onEdit && <IconButton variant="secondary" aria-label="Edit vendor" icon={<Edit />} onClick={onEdit} />}
+          {onDelete && <IconButton variant="secondary" aria-label="Delete vendor" icon={<Trash2 />} onClick={onDelete} className="hover:border-danger/30 hover:text-danger-fg" />}
         </div>
       </div>
 
@@ -837,7 +837,7 @@ const VendorDetail: React.FC<{
                   icon={Landmark}
                   label="Account / IBAN"
                   value={<span className="flex items-center gap-1.5 font-mono">{accountNo}
-                    <IconButton size="sm" aria-label="Account number copy karein" icon={<Copy />} onClick={copyAccount} className="size-6" />
+                    <IconButton size="sm" aria-label="Copy account number" icon={<Copy />} onClick={copyAccount} className="size-6" />
                     {copied && <span className="font-sans text-[10px] font-bold text-success-fg">Copied</span>}
                   </span>}
                 />
@@ -855,9 +855,9 @@ const VendorDetail: React.FC<{
           {khataDateRange === 'custom' && (
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-2 print:hidden">
               <CalendarRange size={14} className="text-fg-faint" aria-hidden="true" />
-              <Input inputSize="sm" type="date" value={khataStartDate} max={khataEndDate || undefined} onChange={e => setKhataStartDate(e.target.value)} aria-label="Kab se" className="w-auto" />
+              <Input inputSize="sm" type="date" value={khataStartDate} max={khataEndDate || undefined} onChange={e => setKhataStartDate(e.target.value)} aria-label="From date" className="w-auto" />
               <span className="text-xs text-fg-subtle">to</span>
-              <Input inputSize="sm" type="date" value={khataEndDate} min={khataStartDate || undefined} onChange={e => setKhataEndDate(e.target.value)} aria-label="Kab tak" className="w-auto" />
+              <Input inputSize="sm" type="date" value={khataEndDate} min={khataStartDate || undefined} onChange={e => setKhataEndDate(e.target.value)} aria-label="To date" className="w-auto" />
             </div>
           )}
 
@@ -895,7 +895,7 @@ const VendorDetail: React.FC<{
                   const deleteButton = deletable && (
                     <IconButton
                       size="sm"
-                      aria-label="Entry delete karein"
+                      aria-label="Delete entry"
                       title="Delete payment"
                       icon={<Trash2 />}
                       onClick={() => onDeleteTx!(row.id)}

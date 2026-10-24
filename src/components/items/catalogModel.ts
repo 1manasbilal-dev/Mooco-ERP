@@ -244,7 +244,7 @@ export function checkOpeningStock(draft: OpeningStockDraft, variants?: ItemVaria
   const looseRaw = draft.loose.trim();
   if (looseRaw !== '') {
     const loose = Number(looseRaw);
-    if (!Number.isFinite(loose) || loose < 0) errors.loose = 'Stock 0 ya us se zyada likhein.';
+    if (!Number.isFinite(loose) || loose < 0) errors.loose = 'Enter stock of 0 or more.';
     else if (cleanQty(loose) > 0) {
       piles.loose = cleanQty(loose);
       totalBase += piles.loose;
@@ -254,8 +254,8 @@ export function checkOpeningStock(draft: OpeningStockDraft, variants?: ItemVaria
     const raw = (draft.packs[v.id] || '').trim();
     if (raw === '') return;
     const count = Number(raw);
-    if (!Number.isFinite(count) || count < 0) errors.packs[v.id] = 'Packs 0 ya us se zyada likhein.';
-    else if (!Number.isInteger(count)) errors.packs[v.id] = 'Packs poore number mein likhein (e.g. 12).';
+    if (!Number.isFinite(count) || count < 0) errors.packs[v.id] = 'Enter packs of 0 or more.';
+    else if (!Number.isInteger(count)) errors.packs[v.id] = 'Enter packs as a whole number (e.g. 12).';
     else if (count > 0) {
       piles.packs = { ...(piles.packs || {}), [v.id]: count };
       totalBase += count * sellUnitContains(v);

@@ -54,7 +54,7 @@ describe('refunds', () => {
     expect(proportionalRefund({ ...discounted, refund_amount: 900 }, [{ qty: 1, price: 100 }])).toBe(0);
   });
 
-  it('reverses khata first, then cash', () => {
+  it('reverses the ledger (credit) first, then cash', () => {
     const credit = { total: 1000, payment_mode: 'Credit', paid_amount: 400 };
     expect(splitRefund(credit, 700)).toEqual({ khata: 600, cash: 100 });
     expect(splitRefund({ ...credit, refund_amount: 300 }, 500)).toEqual({ khata: 300, cash: 200 });
@@ -86,7 +86,7 @@ describe('cash paid on expenses and purchases', () => {
     expect(purchaseCashPaid({})).toBe(0);
   });
 
-  it('does not treat legacy supplier khata as cash', () => {
+  it('does not treat a legacy unpaid supplier ledger balance as cash', () => {
     expect(materialCashPaid({ total_amount: 900, supplier_id: 'sup1' })).toBe(0);
     expect(materialCashPaid({ total_amount: 900 })).toBe(900);
     expect(materialCashPaid({ total_amount: 900, supplier_id: 'sup1', paid_amount: 300 })).toBe(300);

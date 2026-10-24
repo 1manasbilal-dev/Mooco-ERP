@@ -7,7 +7,7 @@ import {
   Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, TBody, TD, TH, THead, TR, Table, TableContainer,
 } from '../ui';
 import { Avatar, ShiftIcon, varietyDot } from './ProcurementUI';
-import { countOf, formatRate, isActiveEntry, pkTime, settlementLabel, settlementOf, shiftKey } from './procurementData';
+import { SETTLEMENT_TEXT, countOf, formatRate, isActiveEntry, pkTime, settlementLabel, settlementOf, shiftKey } from './procurementData';
 
 const STATUS_TONE = { Paid: 'success', Partial: 'warning', Khata: 'danger' } as const;
 
@@ -74,23 +74,23 @@ export function MilkEntriesTable({
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h3 id="milk-entries-title" className="text-[15px] font-bold tracking-tight text-fg">Slips · {dayLabel}</h3>
-          <p className="text-xs text-fg-subtle">Galat slip ko yahan se theek karein ya supplier ko wapas karein.</p>
+          <p className="text-xs text-fg-subtle">Fix a wrong slip here, or return it to the supplier.</p>
         </div>
-        <Button variant="ghost" size="sm" leftIcon={<History />} onClick={onOpenLog}>Sab dates ka log</Button>
+        <Button variant="ghost" size="sm" leftIcon={<History />} onClick={onOpenLog}>Log for all dates</Button>
       </div>
 
       <TableContainer>
         <div className="flex flex-wrap items-center gap-2 border-b border-line p-2">
           <SegmentedControl aria-label="Shift filter" size="sm" value={shiftFilter} onChange={setShiftFilter} options={shiftOptions} />
-          <SearchInput value={query} onChange={setQuery} placeholder="Farmer dhoondein…" className="w-full sm:ml-auto sm:w-64" />
+          <SearchInput value={query} onChange={setQuery} placeholder="Search farmer…" className="w-full sm:ml-auto sm:w-64" />
         </div>
 
         {rows.length === 0 ? (
           <EmptyState
             size="compact"
             icon={<Milk />}
-            title={entries.length === 0 ? `${dayLabel} abhi koi slip nahi` : 'Is filter mein koi slip nahi'}
-            description={entries.length === 0 ? 'Upar form se pehli slip record karein.' : 'Shift ya search badal kar dekhein.'}
+            title={entries.length === 0 ? `No slips yet · ${dayLabel}` : 'No slips match this filter'}
+            description={entries.length === 0 ? 'Record the first slip with the form above.' : 'Try a different shift or search.'}
           />
         ) : (
           <Table>
@@ -129,7 +129,7 @@ export function MilkEntriesTable({
                   <td className="hidden md:table-cell" />
                   <td className="px-4 py-3 text-right">
                     <Money amount={totals.amount} />
-                    {totals.due > 0.5 && <span className="block text-xs font-semibold text-danger-fg">Khata <Money amount={totals.due} /></span>}
+                    {totals.due > 0.5 && <span className="block text-xs font-semibold text-danger-fg">Unpaid <Money amount={totals.due} /></span>}
                   </td>
                   <td className="hidden sm:table-cell" />
                   <td />
@@ -184,7 +184,7 @@ const SlipRow = memo(function SlipRow({ entry, supplier, onReturn }: { entry: an
           <Badge tone="neutral">Returned</Badge>
         ) : (
           <span className="flex flex-wrap items-center gap-1">
-            <Badge tone={STATUS_TONE[label]} dot>{label}</Badge>
+            <Badge tone={STATUS_TONE[label]} dot>{SETTLEMENT_TEXT[label]}</Badge>
             {partlyReturned && <Badge tone="warning">Part returned</Badge>}
           </span>
         )}
@@ -192,8 +192,8 @@ const SlipRow = memo(function SlipRow({ entry, supplier, onReturn }: { entry: an
       <TD className="px-2 text-right sm:px-4">
         {!returned && (
           <span className="inline-flex flex-col items-center gap-0.5 sm:flex-row">
-            <IconButton size="sm" variant="ghost" icon={<PencilLine />} aria-label={`${name} ki slip theek karein`} title="Galat entry theek karein" onClick={() => onReturn(entry, true)} />
-            <IconButton size="sm" variant="ghost" icon={<RotateCcw />} aria-label={`${name} ka doodh wapas karein`} title="Supplier ko return" onClick={() => onReturn(entry, false)} className="hover:text-warning-fg" />
+            <IconButton size="sm" variant="ghost" icon={<PencilLine />} aria-label={`Fix ${name}'s slip`} title="Fix a wrong entry" onClick={() => onReturn(entry, true)} />
+            <IconButton size="sm" variant="ghost" icon={<RotateCcw />} aria-label={`Return ${name}'s milk`} title="Return to supplier" onClick={() => onReturn(entry, false)} className="hover:text-warning-fg" />
           </span>
         )}
       </TD>

@@ -338,7 +338,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
         <StatCard
           icon={<BookUser />}
           tone={stats.vendorDues > 0 ? 'danger' : 'success'}
-          label="Vendor khata"
+          label="Vendor ledger"
           value={<StatMoney amount={stats.vendorDues} />}
           onClick={onShowVendorDues}
           hint={stats.vendorDueCount > 0 ? `${plural(stats.vendorDueCount, 'vendor')} to pay${stats.onCredit > 0 ? ` · ${formatCurrency(stats.onCredit)} new` : ''}` : 'All vendors settled'}
@@ -352,7 +352,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
           onChange={setSearchTerm}
           placeholder="Search description, vendor, category…"
           shortcut="/"
-          aria-label="Kharche search karein"
+          aria-label="Search expenses"
           className="min-w-0 flex-1 basis-full sm:basis-64"
         />
         <div className="flex min-w-0 max-w-full flex-1 items-center gap-2 sm:flex-initial">
@@ -374,12 +374,12 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
           <div className="flex w-full flex-wrap items-center gap-2 border-t border-line px-1 pt-2">
             {dateFilterMode === 'this_month' && (
               <div className="flex items-center gap-0.5 rounded-control bg-surface-2 p-1 ring-1 ring-inset ring-line/70">
-                <IconButton size="sm" aria-label="Pichla mahina" icon={<ChevronLeft />} onClick={() => setFilterMonth(shiftMonth(filterMonth, -1))} />
+                <IconButton size="sm" aria-label="Previous month" icon={<ChevronLeft />} onClick={() => setFilterMonth(shiftMonth(filterMonth, -1))} />
                 <label className="relative flex h-8 min-w-[5.5rem] cursor-pointer items-center justify-center rounded-lg px-2 text-xs font-bold text-fg hover:bg-surface">
                   {monthLabel(filterMonth)}
-                  <input type="month" value={filterMonth} max={currentMonth} onChange={e => e.target.value && setFilterMonth(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" aria-label="Mahina chunein" />
+                  <input type="month" value={filterMonth} max={currentMonth} onChange={e => e.target.value && setFilterMonth(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" aria-label="Choose month" />
                 </label>
-                <IconButton size="sm" aria-label="Agla mahina" icon={<ChevronRight />} disabled={filterMonth >= currentMonth} onClick={() => setFilterMonth(shiftMonth(filterMonth, 1))} />
+                <IconButton size="sm" aria-label="Next month" icon={<ChevronRight />} disabled={filterMonth >= currentMonth} onClick={() => setFilterMonth(shiftMonth(filterMonth, 1))} />
               </div>
             )}
 
@@ -393,13 +393,13 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
                   options={CUSTOM_KIND}
                 />
                 {dateFilterMode === 'single_date' ? (
-                  <Input inputSize="sm" type="date" value={filterSingleDate} max={today} onChange={e => setFilterSingleDate(e.target.value)} aria-label="Din chunein" className="w-auto" />
+                  <Input inputSize="sm" type="date" value={filterSingleDate} max={today} onChange={e => setFilterSingleDate(e.target.value)} aria-label="Choose day" className="w-auto" />
                 ) : (
                   <div className="flex flex-wrap items-center gap-1.5">
                     <CalendarRange size={14} className="text-fg-faint" aria-hidden="true" />
-                    <Input inputSize="sm" type="date" value={filterStartDate} max={filterEndDate || today} onChange={e => setFilterStartDate(e.target.value)} aria-label="Kab se" className="w-auto" />
+                    <Input inputSize="sm" type="date" value={filterStartDate} max={filterEndDate || today} onChange={e => setFilterStartDate(e.target.value)} aria-label="From date" className="w-auto" />
                     <span className="text-xs text-fg-subtle">to</span>
-                    <Input inputSize="sm" type="date" value={filterEndDate} min={filterStartDate || undefined} onChange={e => setFilterEndDate(e.target.value)} aria-label="Kab tak" className="w-auto" />
+                    <Input inputSize="sm" type="date" value={filterEndDate} min={filterStartDate || undefined} onChange={e => setFilterEndDate(e.target.value)} aria-label="To date" className="w-auto" />
                   </div>
                 )}
               </>
@@ -691,7 +691,7 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
       {canCreate && (
         <IconButton
           size="sm"
-          aria-label="Quick record ke liye save karein"
+          aria-label="Save for quick record"
           title="Save for quick record"
           icon={<BookmarkPlus />}
           onClick={e => { e.stopPropagation(); onBookmark(exp); }}
@@ -701,7 +701,7 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
       {canEdit && (
         <IconButton
           size="sm"
-          aria-label="Edit karein"
+          aria-label="Edit"
           title="Edit"
           icon={<Edit />}
           onClick={e => { e.stopPropagation(); onEdit(exp); }}
@@ -711,7 +711,7 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
       {canDelete && (
         <IconButton
           size="sm"
-          aria-label="Delete karein"
+          aria-label="Delete"
           title="Delete"
           icon={<Trash2 />}
           onClick={e => { e.stopPropagation(); onDelete(exp.id); }}
@@ -750,7 +750,7 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
                     <button
                       type="button"
                       onClick={e => { e.stopPropagation(); onOpenVendor(exp.vendor_id!); }}
-                      title="Vendor khata kholein"
+                      title="Open vendor ledger"
                       className="cursor-pointer truncate font-semibold text-fg-muted underline decoration-line-strong underline-offset-2 hover:text-brand-fg hover:decoration-brand-accent"
                     >
                       {exp.vendor_name}
@@ -771,14 +771,14 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
               <span className="truncate">{exp.account_name || mode}</span>
             </>
           ) : (
-            <span className="truncate font-semibold text-danger-fg">Vendor khata</span>
+            <span className="truncate font-semibold text-danger-fg">On credit</span>
           )}
         </div>
 
         <div className="shrink-0 text-right">
           <Money amount={exp.amount} className="block text-[13px] font-bold text-fg" />
           {status !== 'Paid' ? (
-            <p className="mt-0.5 text-[10px] font-bold tabular-nums text-danger-fg">{formatCurrency(due)} baqi</p>
+            <p className="mt-0.5 text-[10px] font-bold tabular-nums text-danger-fg">{formatCurrency(due)} due</p>
           ) : (
             <p className="mt-0.5 text-[10px] font-semibold text-fg-subtle 2xl:hidden">{mode}</p>
           )}
@@ -800,7 +800,7 @@ const ExpenseRow: React.FC<ExpenseRowProps> = React.memo(({
             </div>
             {status !== 'Paid' && <SettlementBar total={Number(exp.amount || 0)} paid={paid} formatMoney={formatCurrency} />}
             <p className="text-[11px] text-fg-subtle">
-              {paid > 0 ? <>Paid {formatCurrency(paid)} by {mode}{exp.account_name ? ` from ${exp.account_name}` : ''}</> : 'Nothing paid yet — full amount is on the vendor khata.'}
+              {paid > 0 ? <>Paid {formatCurrency(paid)} by {mode}{exp.account_name ? ` from ${exp.account_name}` : ''}</> : 'Nothing paid yet — full amount is on the vendor ledger.'}
             </p>
             {exp.notes && (
               <p className="flex items-start gap-1.5 rounded-lg bg-warning-soft px-2 py-1.5 text-[11px] text-warning-fg"><StickyNote size={12} className="mt-0.5 shrink-0" aria-hidden="true" />{exp.notes}</p>

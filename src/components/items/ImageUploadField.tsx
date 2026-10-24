@@ -17,9 +17,9 @@ interface Props {
 }
 
 function problemWith(file: File): string | null {
-  if (/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)) return 'iPhone ki HEIC photo yahan nahi khulti. Camera ko JPG/"Most Compatible" par set karein ya screenshot use karein.';
-  if (!file.type.startsWith('image/')) return 'Yeh photo nahi hai. JPG, PNG ya WebP file chunein.';
-  if (file.size > MAX_SOURCE_BYTES) return 'Photo bohat bari hai (25 MB se zyada). Choti photo chunein.';
+  if (/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)) return `iPhone HEIC photos don't open here. Set the camera to JPG/"Most Compatible" or use a screenshot.`;
+  if (!file.type.startsWith('image/')) return 'This is not a photo. Choose a JPG, PNG or WebP file.';
+  if (file.size > MAX_SOURCE_BYTES) return 'The photo is too big (over 25 MB). Choose a smaller photo.';
   return null;
 }
 
@@ -56,8 +56,8 @@ export function ImageUploadField({ value, name, disabled, onChange, onError, onB
       if (run !== runRef.current) return;
       console.error('Image optimization error:', err);
       onError(err?.message === 'Failed to load image data'
-        ? 'Yeh photo browser mein nahi khul saki. JPG ya PNG try karein.'
-        : `Photo process nahi hui: ${err?.message || 'unknown error'}`);
+        ? "This photo couldn't open in the browser. Try a JPG or PNG."
+        : `Photo couldn't be processed: ${err?.message || 'unknown error'}`);
     } finally {
       if (run === runRef.current) setBusyState(false);
       if (inputRef.current) inputRef.current.value = '';
@@ -105,19 +105,19 @@ export function ImageUploadField({ value, name, disabled, onChange, onError, onB
           <img src={value} alt={name ? `${name} photo` : 'Product photo'} className="size-full object-cover" decoding="async" />
           {busy && (
             <div className="absolute inset-0 flex items-center justify-center bg-surface/80">
-              <Loader2 className="size-5 animate-spin text-brand-fg" aria-label="Photo process ho rahi hai" />
+              <Loader2 className="size-5 animate-spin text-brand-fg" aria-label="Processing photo" />
             </div>
           )}
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           <p className="text-xs text-fg-subtle">
             {info
-              ? <><span className="font-semibold text-success-fg">{info.optimizedSizeFormatted}</span> ({info.originalSizeFormatted} se {info.savedPercentage}% chhoti, {info.width}×{info.height}px)</>
-              : 'Photo catalog aur POS mein dikhegi.'}
+              ? <><span className="font-semibold text-success-fg">{info.optimizedSizeFormatted}</span> ({info.savedPercentage}% smaller than {info.originalSizeFormatted}, {info.width}×{info.height}px)</>
+              : 'The photo shows in the catalog and POS.'}
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="secondary" leftIcon={<RefreshCw />} onClick={pick} disabled={busy || disabled}>Badlein</Button>
-            <Button size="sm" variant="danger-soft" leftIcon={<Trash2 />} onClick={() => { runRef.current += 1; setInfo(null); setBusyState(false); onChange(''); }} disabled={disabled}>Hatayen</Button>
+            <Button size="sm" variant="secondary" leftIcon={<RefreshCw />} onClick={pick} disabled={busy || disabled}>Change</Button>
+            <Button size="sm" variant="danger-soft" leftIcon={<Trash2 />} onClick={() => { runRef.current += 1; setInfo(null); setBusyState(false); onChange(''); }} disabled={disabled}>Remove</Button>
           </div>
         </div>
       </div>
@@ -143,8 +143,8 @@ export function ImageUploadField({ value, name, disabled, onChange, onError, onB
       <span className="flex size-10 items-center justify-center rounded-full bg-surface text-fg-muted shadow-e1">
         {busy ? <Loader2 className="size-5 animate-spin text-brand-fg" /> : <ImagePlus className="size-5" />}
       </span>
-      <span className="text-sm font-semibold text-fg">{busy ? 'Photo chhoti ki ja rahi hai...' : 'Photo add karein'}</span>
-      <span className="max-w-xs text-xs text-fg-subtle">Click karein ya photo yahan chhoren. Bari photo khud ~30-50 KB ki ho jati hai.</span>
+      <span className="text-sm font-semibold text-fg">{busy ? 'Shrinking photo...' : 'Add photo'}</span>
+      <span className="max-w-xs text-xs text-fg-subtle">Click or drop a photo here. Big photos shrink to ~30-50 KB on their own.</span>
     </button>
     </>
   );

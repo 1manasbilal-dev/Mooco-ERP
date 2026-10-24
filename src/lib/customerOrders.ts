@@ -116,7 +116,7 @@ export async function changeCustomerOrderStatus(order: CustomerOrder, status: Cu
   window.dispatchEvent(new Event('mooco-customer-orders-changed'));
   return data as CustomerOrder;
 }
-/** Posts the not-yet-posted part of the order's advance as a khata payment into the receiving account. */
+/** Posts the not-yet-posted part of the order's advance as a customer ledger payment into the receiving account. */
 export async function postCustomerOrderAdvance(order: CustomerOrder, payload: { tx_id: string; account_id: string; business_day_id?: string | null; shift_session_id?: string | null; drawer_id?: string | null; cashier_id?: string | null }): Promise<CustomerOrder> {
   checkOnline();
   const { data, error } = await loadRead(supabase.rpc('post_customer_order_advance', {

@@ -35,7 +35,7 @@ export default function PaymentModeDialog({
       onClose={onClose}
       dismissible={!saving}
       size="md"
-      title="Payment Mode Tabdeel Karein"
+      title="Change Payment Mode"
       description={<span className="tabular-nums">Bill #{sale.bill_number} • {formatCurrency(sale.total || 0)}</span>}
       icon={
         <span className="flex size-10 items-center justify-center rounded-control bg-info-soft text-info-fg">
@@ -46,7 +46,7 @@ export default function PaymentModeDialog({
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button type="submit" form={FORM_ID} loading={saving} disabled={!targetAccountId} leftIcon={<ArrowLeftRight />}>
-            {saving ? 'Tabdeel Ho Raha Hy...' : `Tabdeel Karein (${targetMode})`}
+            {saving ? 'Changing...' : `Change to ${targetMode}`}
           </Button>
         </>
       }
@@ -63,29 +63,29 @@ export default function PaymentModeDialog({
           </div>
 
           <div role="group" aria-labelledby={`${FORM_ID}-mode`}>
-            <p id={`${FORM_ID}-mode`} className="mb-2 text-xs font-semibold text-fg-muted">Naya Payment Mode Muntakhib Karein</p>
+            <p id={`${FORM_ID}-mode`} className="mb-2 text-xs font-semibold text-fg-muted">Choose New Payment Mode</p>
             <div className="grid grid-cols-2 gap-2">
               <ChoiceCard
                 selected={targetMode === 'Cash'}
                 onSelect={() => onTargetModeChange('Cash')}
                 icon={<Banknote />}
                 title="Cash (Drawer)"
-                description="Physical drawer me jama hoga"
+                description="Goes into the physical drawer"
               />
               <ChoiceCard
                 selected={targetMode === 'Online'}
                 onSelect={() => onTargetModeChange('Online')}
                 icon={<Wallet />}
                 title="Online Transfer"
-                description="Bank / Digital Wallet me jama"
+                description="Goes into bank / digital wallet"
               />
             </div>
           </div>
 
-          <Field label={targetMode === 'Online' ? 'Muntakhib Bank / Digital Wallet Account' : 'Muntakhib Cash Account'}>
+          <Field label={targetMode === 'Online' ? 'Bank / Digital Wallet Account' : 'Cash Account'}>
             {control => (
               <Select {...control} value={targetAccountId} onChange={event => onTargetAccountChange(event.target.value)} required>
-                <option value="">-- Account Select Karein --</option>
+                <option value="">-- Select Account --</option>
                 {options.map(acc => (
                   <option key={acc.id} value={acc.id}>
                     {acc.name} ({acc.type}) - Balance: {formatCurrency(acc.balance)}
@@ -101,8 +101,8 @@ export default function PaymentModeDialog({
               <p className="font-bold">Automatic Financial Balancing:</p>
               <p className="mt-0.5 leading-snug">
                 {sale.payment_mode === 'Cash' && targetMode === 'Online'
-                  ? 'Cash Drawer se yeh raqam nikaal kar muntakhib Bank Account me credit ho jayegi. Drawer closing bilkul exact aur barabar rahegi.'
-                  : 'Bank account se raqam nikaal kar Cash Drawer me add ho jayegi.'}
+                  ? 'This amount is taken out of the cash drawer and credited to the selected bank account. The drawer closing stays exact.'
+                  : 'The amount is taken out of the bank account and added to the cash drawer.'}
               </p>
             </div>
           </div>

@@ -221,13 +221,13 @@ const CustomerOrders: React.FC = () => {
     if (busyRef.current || (status === 'Cancelled' ? !canCancel : !canEdit)) return;
     const postedAdvance = Number(order.advance_posted || 0);
     const cancelNote = postedAdvance > 0
-      ? `Advance ${orderMoney(postedAdvance)} customer ke khaate mein credit rahega. Wapas karna ho to customer khaate se refund karein.`
-      : 'Is order ka koi stock ya payment post nahi hua.';
+      ? `The advance of ${orderMoney(postedAdvance)} stays as credit on the customer's ledger. To give it back, refund it from the customer ledger.`
+      : 'No stock or payment has been posted for this order.';
     if (status === 'Cancelled' && !(await confirmAction({
       tone: 'warning',
-      title: `Order ${order.order_number} cancel karein?`,
+      title: `Cancel order ${order.order_number}?`,
       consequences: [cancelNote],
-      confirmLabel: 'Haan, cancel karein',
+      confirmLabel: 'Yes, cancel',
     }))) return;
     // Something else may have started while the confirmation was open.
     if (busyRef.current) return;
@@ -261,7 +261,7 @@ const CustomerOrders: React.FC = () => {
     {!online && !error && (
       <div role="status" className="flex items-center gap-3 rounded-card border border-warning/30 bg-warning-soft p-4 text-sm font-medium text-warning-fg">
         <WifiOff size={18} className="shrink-0" aria-hidden="true" />
-        <span>Internet nahi hai. Orders dekhne aur save karne ke liye internet chahiye.</span>
+        <span>No internet. Viewing and saving orders needs the internet.</span>
       </div>
     )}
     {error && (
@@ -325,7 +325,7 @@ const CustomerOrders: React.FC = () => {
 
     <p className="flex items-start gap-2 text-xs text-fg-subtle">
       <CheckCircle2 size={15} className="mt-px shrink-0 text-brand-accent" aria-hidden="true" />
-      Orders are bookings. Stock, payment and customer khata update together when you complete billing in POS. Internet is required for orders.
+      Orders are bookings. Stock, payment and customer ledger update together when you complete billing in POS. Internet is required for orders.
     </p>
 
     {editor && (

@@ -62,9 +62,9 @@ export const PosCart = memo(function PosCart({
   const clearCartWithConfirm = async () => {
     const ok = await confirmAction({
       tone: 'warning',
-      title: 'Cart khali karein?',
-      consequences: [`Cart ke ${cart.length} item(s) hat jayenge.`, 'Abhi tak bill save nahi hua, is liye stock ya khaate par asar nahi hoga.'],
-      confirmLabel: 'Haan, khali karein',
+      title: 'Clear the cart?',
+      consequences: [`The ${cart.length} item(s) in the cart will be removed.`, "The bill hasn't been saved yet, so stock and ledgers are not affected."],
+      confirmLabel: 'Yes, clear',
     });
     if (ok) onClearCart();
   };
@@ -118,8 +118,8 @@ export const PosCart = memo(function PosCart({
           <EmptyState
             className="h-full"
             icon={<ShoppingCart />}
-            title="Cart khali hai"
-            description="Catalog se koi product tap karein, ya F2 se search karein."
+            title="The cart is empty"
+            description="Tap a product in the catalog, or press F2 to search."
           />
         ) : (
           <>
@@ -269,7 +269,7 @@ const DesktopCartRow = memo(function DesktopCartRow({ item, lineTotal, locked, u
             type="button"
             disabled={locked}
             onClick={() => openEditItemModal(item)}
-            title="Unit aur quantity chunein"
+            title="Choose unit and quantity"
             className="flex h-8 max-w-[84px] cursor-pointer items-center gap-0.5 rounded-lg bg-brand-soft px-2 text-[11px] font-bold text-brand-fg transition-colors hover:bg-brand/15"
           >
             <span className="truncate">{item.unit}</span>
@@ -285,7 +285,7 @@ const DesktopCartRow = memo(function DesktopCartRow({ item, lineTotal, locked, u
             type="number"
             inputMode="decimal"
             aria-label={`${item.name} line total`}
-            title="Total likhein, quantity khud ban jayegi"
+            title="Type the total and the quantity is worked out"
             step="any"
             value={item.customTotal !== undefined ? item.customTotal : (item.qty === 0 ? '' : lineTotal)}
             placeholder="0"
@@ -339,7 +339,7 @@ const MobileCartRow = memo(function MobileCartRow({ item, lineTotal, locked, upd
         <button
           type="button"
           aria-label={`Edit ${item.name}`}
-          title="Unit aur quantity chunein"
+          title="Choose unit and quantity"
           disabled={locked}
           onClick={() => openEditItemModal(item)}
           className="min-w-0 cursor-pointer text-left active:opacity-70"
@@ -366,7 +366,7 @@ const MobileCartRow = memo(function MobileCartRow({ item, lineTotal, locked, upd
             type="number"
             inputMode="decimal"
             aria-label={`${item.name} line total`}
-            title="Total likhein, quantity khud ban jayegi"
+            title="Type the total and the quantity is worked out"
             step="any"
             value={item.customTotal !== undefined ? item.customTotal : (item.qty === 0 ? '' : lineTotal)}
             placeholder="0"

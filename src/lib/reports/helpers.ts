@@ -410,7 +410,7 @@ export interface SaleFigures {
   net: number;        // kept after returns
   cash: number;
   online: number;
-  credit: number;     // still on khata
+  credit: number;     // still on credit
   paid: number;       // collected at the counter
 }
 
@@ -560,10 +560,10 @@ export const supplierName = (data: ReportData, id?: string, fallback?: string) =
 export const accountName = (data: ReportData, id?: string) =>
   findAccount(data, id)?.name || (id ? 'Other account' : '—');
 
-/* ---------- Khata ---------- */
+/* ---------- Ledger ---------- */
 
 /**
- * Customer ledger effect, the same rule as the customer khata screen: charges and debit adjustments
+ * Customer ledger effect, the same rule as the customer ledger screen: charges and debit adjustments
  * raise what the customer owes, payments and returns lower it. Unknown types move nothing.
  */
 export const customerTxEffect = (type: string, amount: number) => {
@@ -576,20 +576,20 @@ export const isCustomerCharge = (type: string) => customerTxEffect(type, 1) > 0;
 
 const customerMode = (tx: CustomerTransaction) => lower(tx.mode ?? (tx as any).details?.mode);
 
-/** Opening balance rows (ctx_op_*): khata brought forward, no money moved. */
+/** Opening balance rows (ctx_op_*): balance brought forward, no money moved. */
 export const isOpeningCustomerTx = (tx: CustomerTransaction) => String(tx.id || '').startsWith('ctx_op_') || customerMode(tx) === 'opening balance';
-/** Bad-debt write-offs and forfeited advances (ctx_wo_*): settle the khata without money. */
+/** Bad-debt write-offs and forfeited advances (ctx_wo_*): settle the balance without money. */
 export const isWriteOffCustomerTx = (tx: CustomerTransaction) => {
   const raw = tx as any;
   return Boolean(raw.is_write_off || raw.details?.is_write_off) || String(tx.id || '').startsWith('ctx_wo_') || /write.?off|forfeit/.test(customerMode(tx));
 };
-/** Khata rows that move no money: opening balances, write-offs, forfeits and manual balance adjustments. */
+/** Ledger rows that move no money: opening balances, write-offs, forfeits and manual balance adjustments. */
 export const isNonCashCustomerTx = (tx: CustomerTransaction) =>
   isOpeningCustomerTx(tx) || isWriteOffCustomerTx(tx) || lower(tx.type) === 'debit' || customerMode(tx) === 'balance adjustment';
-/** Money actually received from a customer against the khata (wasooli). */
+/** Money actually received from a customer against their balance (a recovery). */
 export const isCustomerReceipt = (tx: CustomerTransaction) => lower(tx.type) === 'payment' && !isNonCashCustomerTx(tx);
 
-/** Supplier waiver / discount: settles the khata, no money leaves an account. */
+/** Supplier waiver / discount: settles the balance, no money leaves an account. */
 export const isSupplierWaiver = (tx: SupplierTransaction) => {
   const raw = tx as any;
   return Boolean(raw.waiver || raw.details?.waiver) || /waiver|discount/i.test(String(tx.mode || raw.details?.mode || ''));

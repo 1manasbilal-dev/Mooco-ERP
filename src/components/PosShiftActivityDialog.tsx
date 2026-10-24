@@ -425,12 +425,12 @@ export const PosShiftActivityDialog: React.FC<PosShiftActivityDialogProps> = ({
     if (!onDeleteVendorTx || deletingRef.current) return;
     const confirmed = await confirmAction(kind === 'payment'
       ? {
-          title: 'Yeh vendor payment delete karein?',
-          consequences: ['Payment ki raqam wapas drawer / account mein aa jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+          title: 'Delete this vendor payment?',
+          consequences: ['The payment amount goes back into the drawer / account.', "The vendor's balance due goes back to what it was.", "This can't be undone."],
         }
       : {
-          title: 'Yeh vendor refund delete karein?',
-          consequences: ['Refund ki raqam account se wapas nikal jayegi.', 'Vendor ka baqi balance pehle jaisa ho jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+          title: 'Delete this vendor refund?',
+          consequences: ['The refund amount is taken back out of the account.', "The vendor's balance due goes back to what it was.", "This can't be undone."],
         });
     if (!confirmed || deletingRef.current) return;
     // One delete at a time: a second click on the same row must not post the reversal twice.

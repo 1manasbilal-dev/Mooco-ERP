@@ -45,13 +45,13 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
   let statusError: string | undefined;
   if (account && account.isActive !== false && !isActive) {
     const assessment = getDeleteAssessment('account', account.id);
-    if (assessment.details?.isSystem) statusError = 'Default account Inactive nahi ho sakta. Pehle Settings mein doosra default chunein.';
-    else if (Number(account.balance || 0) !== 0) statusError = `Is mein ${formatCurrency(account.balance)} hain. Inactive karne se pehle sari raqam doosre account mein transfer karein.`;
+    if (assessment.details?.isSystem) statusError = "The default account can't be made Inactive. Choose another default in Settings first.";
+    else if (Number(account.balance || 0) !== 0) statusError = `It holds ${formatCurrency(account.balance)}. Transfer the full amount to another account before making it Inactive.`;
   }
 
   const errors = {
-    name: !trimmedName ? 'Account ka naam likhein' : duplicate ? 'Is naam ka account pehle se mojood hai' : undefined,
-    opening: !Number.isFinite(openingValue) ? 'Sahi raqam likhein' : undefined,
+    name: !trimmedName ? 'Enter an account name' : duplicate ? 'An account with this name already exists' : undefined,
+    opening: !Number.isFinite(openingValue) ? 'Enter a valid amount' : undefined,
     status: statusError,
   };
   const hasErrors = Object.values(errors).some(Boolean);
@@ -78,18 +78,18 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
       if (account) {
         const ok = await updateAccount(account.id, { name: trimmedName, type, isActive, ...details });
         if (!ok) {
-          showToast('Account update nahi hua. Dobara koshish karein.', 'error');
+          showToast("Account couldn't be updated. Please try again.", 'error');
           return;
         }
-        showToast(`Account "${trimmedName}" update ho gaya`, 'success');
+        showToast(`Account "${trimmedName}" updated`, 'success');
       } else {
         const ok = await addAccount({ name: trimmedName, type, balance: openingValue, isActive: true, ...details });
         if (!ok) return;
-        showToast('Naya account ban gaya', 'success');
+        showToast('New account created', 'success');
       }
       onClose();
     } catch (err: any) {
-      showToast((isEdit ? 'Account update nahi hua: ' : 'Account nahi ban saka: ') + (err?.message || 'dobara koshish karein'), 'error');
+      showToast((isEdit ? "Account couldn't be updated: " : "Account couldn't be created: ") + (err?.message || 'please try again'), 'error');
     } finally {
       busyRef.current = false;
       setSaving(false);
@@ -102,7 +102,7 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
       onClose={onClose}
       dismissible={!saving}
       title={isEdit ? 'Edit account' : 'Add cash / bank account'}
-      description={isEdit ? account!.name : 'Cash counter, bank account ya mobile wallet (JazzCash, Easypaisa).'}
+      description={isEdit ? account!.name : 'Cash counter, bank account or mobile wallet (JazzCash, Easypaisa).'}
       icon={<DialogIcon tone="brand">{isEdit ? <Pencil /> : <Plus />}</DialogIcon>}
       initialFocusRef={nameRef}
       footer={
@@ -123,14 +123,14 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
           <p className="mb-1.5 text-xs font-semibold text-fg-muted">Account type</p>
           <SegmentedControl aria-label="Account type" fullWidth value={type} onChange={setType} options={TYPE_OPTIONS} />
           {isEdit && account!.type !== type && (
-            <p className="mt-1.5 text-xs text-warning-fg">Type badalne se purani entries isi account mein rahengi, sirf reports mein group badlega.</p>
+            <p className="mt-1.5 text-xs text-warning-fg">Changing the type keeps old entries in this account; only the grouping in reports changes.</p>
           )}
         </div>
 
         {type === 'Cash' && (
           <ToggleRow
-            title="Cash drawer ke tor par enable"
-            description="Sirf enabled Cash accounts hi POS shifts / Cash Control mein drawer bante hain."
+            title="Enable as a cash drawer"
+            description="Only enabled Cash accounts become drawers in POS shifts / Cash Control."
             checked={isDrawer}
             onChange={setIsDrawer}
           />
@@ -152,7 +152,7 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
             <div>
               <ToggleRow
                 title="Account active"
-                description="Inactive accounts naye payments aur transfers mein nazar nahi aate."
+                description="Inactive accounts don't show up for new payments and transfers."
                 checked={isActive}
                 onChange={setIsActive}
               />
@@ -164,7 +164,7 @@ export default function AccountFormDialog({ account, onClose }: AccountFormDialo
             </div>
           </>
         ) : (
-          <Field label="Opening balance" hint="Abhi account mein jitni raqam hai. Iski ek Opening Balance entry banegi." error={show(errors.opening)}>
+          <Field label="Opening balance" hint="The amount in the account right now. An Opening Balance entry is created for it." error={show(errors.opening)}>
             {control => (
               <Input
                 {...control}

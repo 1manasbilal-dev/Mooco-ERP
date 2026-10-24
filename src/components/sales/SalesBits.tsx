@@ -16,7 +16,7 @@ const MODE_ICON: Record<string, React.ReactNode> = {
   Credit: <BookOpen aria-hidden="true" />,
 };
 
-/** Cash = neutral, Online = info, Credit (khata / udhaar) = warning. */
+/** Cash = neutral, Online = info, Credit (on account) = warning. */
 export function PaymentModeBadge({ mode, trailing, className, title }: { mode?: string; trailing?: React.ReactNode; className?: string; title?: string }) {
   const key = mode || 'Cash';
   return (
@@ -37,8 +37,8 @@ export function PaymentModeChip({ sale, lockReason, onChange }: { sale: POSBill;
     <button
       type="button"
       onClick={event => { event.stopPropagation(); onChange(sale); }}
-      title="Payment mode badlein (Cash ⇄ Online)"
-      aria-label={`Payment mode ${sale.payment_mode} — badlein`}
+      title="Change payment mode (Cash ⇄ Online)"
+      aria-label={`Payment mode ${sale.payment_mode} — change`}
       // The vertical padding only widens the tap target; the negative margin keeps the row height.
       className="group -my-1.5 inline-flex cursor-pointer rounded-full py-1.5 focus-visible:outline-none"
     >

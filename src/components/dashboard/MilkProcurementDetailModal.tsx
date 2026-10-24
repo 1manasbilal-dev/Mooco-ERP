@@ -117,7 +117,7 @@ const SupplierRow: React.FC<{
         <div id={panelId} className="border-t border-line bg-surface-2/50 p-3 sm:p-4">
           <div className="flex items-center justify-between gap-3 border-b border-line pb-2 text-xs font-semibold text-fg-subtle">
             <span>Delivery history ({sup.entries.length} inward {sup.entries.length === 1 ? 'slip' : 'slips'})</span>
-            {onOpenKhata && <Button variant="ghost" size="sm" rightIcon={<ExternalLink />} onClick={onOpenKhata}>Open supplier khata</Button>}
+            {onOpenKhata && <Button variant="ghost" size="sm" rightIcon={<ExternalLink />} onClick={onOpenKhata}>Open supplier ledger</Button>}
           </div>
           <ul className="divide-y divide-line">
             {sup.entries.map((slip, index) => {
@@ -269,7 +269,7 @@ const MilkProcurementDetailModal: React.FC<MilkProcurementDetailModalProps> = ({
 
   const summary = [
     { label: 'Total milk inward', value: <>{formatQty(totalMilkLiters)}<span className="ml-1 text-xs font-semibold text-fg-subtle">L</span></>, note: `Buffalo ${formatQty(buffaloLiters)} L · Cow ${formatQty(cowLiters)} L` },
-    { label: 'Procurement cost', value: <Money amount={totalMilkCost} />, note: 'Kul khareedari raqam' },
+    { label: 'Procurement cost', value: <Money amount={totalMilkCost} />, note: 'Total purchase amount' },
     { label: 'Weighted avg rate', value: <>{rateText(avgMilkRate)}<span className="ml-1 text-xs font-semibold text-fg-subtle">/L</span></>, note: 'Average rate per litre' },
     { label: 'Active suppliers', value: <>{supplierSummaries.length}<span className="ml-1 text-xs font-semibold text-fg-subtle">farmers</span></>, note: `${livePurchases.length} delivery slips` },
   ];

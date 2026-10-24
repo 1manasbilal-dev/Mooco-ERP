@@ -39,7 +39,7 @@ const DenominationCounter: React.FC<DenominationDialogProps> = ({
   onChange,
   onApply,
   title = 'Cash Denomination Count',
-  subtitle = 'Har note aur sikkay ki taadaad likhein',
+  subtitle = 'Enter how many of each note and coin',
   expectedAmount,
   expectedLabel = 'Expected',
 }) => {
@@ -156,7 +156,7 @@ const DenominationCounter: React.FC<DenominationDialogProps> = ({
                 <button
                   type="button"
                   tabIndex={-1}
-                  aria-label={`Rs ${denomination} ek kam`}
+                  aria-label={`One less Rs ${denomination}`}
                   disabled={count === 0}
                   onClick={() => setCount(denomination, count - 1)}
                   className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-fg-subtle hover:bg-surface-2 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
@@ -185,7 +185,7 @@ const DenominationCounter: React.FC<DenominationDialogProps> = ({
                 <button
                   type="button"
                   tabIndex={-1}
-                  aria-label={`Rs ${denomination} ek zyada`}
+                  aria-label={`One more Rs ${denomination}`}
                   onClick={() => setCount(denomination, count + 1)}
                   className="flex size-8 cursor-pointer items-center justify-center rounded-lg text-fg-subtle hover:bg-surface-2 hover:text-fg"
                 >
@@ -201,9 +201,9 @@ const DenominationCounter: React.FC<DenominationDialogProps> = ({
       </div>
 
       <p className="mt-3 hidden flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-subtle sm:flex">
-        <span><Kbd>Enter</Kbd> agla note</span>
-        <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> upar / neeche</span>
-        <span><Kbd>+</Kbd> <Kbd>−</Kbd> ek zyada / kam</span>
+        <span><Kbd>Enter</Kbd> next note</span>
+        <span><Kbd>↑</Kbd> <Kbd>↓</Kbd> up / down</span>
+        <span><Kbd>+</Kbd> <Kbd>−</Kbd> one more / less</span>
         <span><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> apply</span>
       </p>
     </Modal>

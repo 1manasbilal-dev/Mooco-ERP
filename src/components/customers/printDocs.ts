@@ -1,4 +1,4 @@
-// 80mm thermal receipts for the customer khata. Loaded on demand (import()) the first time someone
+// 80mm thermal receipts for the customer ledger. Loaded on demand (import()) the first time someone
 // prints, so the popup templates stay out of the Customers chunk.
 import type { POSBill } from '../../types';
 import { formatCurrency } from '../../lib/formatters';
@@ -65,7 +65,7 @@ export function printInvoiceReceipt(sale: POSBill, shop: ShopInfo, customerName?
             <h2 style="margin: 0; font-size: 16px; font-weight: 900; letter-spacing: 1px;">${esc(shop.companyName)}</h2>
             <p style="margin: 2px 0; font-size: 10px; color: #475569;">${esc(shop.address)}</p>
             <p style="margin: 2px 0; font-size: 10px; color: #475569;">Tel: ${esc(shop.phone)}</p>
-            ${sale.status === 'Returned' ? '<div style="margin: 4px auto; padding: 2px 6px; background: #fee2e2; color: #b91c1c; font-weight: bold; font-size: 10px; display: inline-block;">*** RETURNED (WAPAS) ***</div>' : ''}
+            ${sale.status === 'Returned' ? '<div style="margin: 4px auto; padding: 2px 6px; background: #fee2e2; color: #b91c1c; font-weight: bold; font-size: 10px; display: inline-block;">*** RETURNED ***</div>' : ''}
           </div>
           <div class="divider"></div>
           <div style="font-size: 11px; line-height: 1.4;">
@@ -95,7 +95,7 @@ export function printInvoiceReceipt(sale: POSBill, shop: ShopInfo, customerName?
               <span>TOTAL:</span> <span>${formatCurrency(Number(sale.total || 0))}</span>
             </div>
             ${sale.payment_mode === 'Credit' && paid > 0 ? `<div class="row"><span>Paid:</span> <span>${formatCurrency(paid)}</span></div>` : ''}
-            ${sale.payment_mode === 'Credit' ? `<div class="row" style="color: #d97706; font-weight: bold;"><span>Charged to Khata:</span> <span>${formatCurrency(roundCurrency(Math.max(0, Number(sale.total || 0) - paid)))}</span></div>` : ''}
+            ${sale.payment_mode === 'Credit' ? `<div class="row" style="color: #d97706; font-weight: bold;"><span>Charged to account:</span> <span>${formatCurrency(roundCurrency(Math.max(0, Number(sale.total || 0) - paid)))}</span></div>` : ''}
             ${sale.return_reason ? `<div style="margin-top: 4px; padding: 4px; background: #fee2e2; color: #991b1b; font-size: 10px;"><strong>Reason:</strong> ${esc(sale.return_reason)}</div>` : ''}
           </div>
           <div class="divider"></div>
@@ -108,7 +108,7 @@ export function printInvoiceReceipt(sale: POSBill, shop: ShopInfo, customerName?
       </html>`);
 }
 
-/** Thermal voucher of a manual khata entry (payment, charge, return). */
+/** Thermal voucher of a manual ledger entry (payment, charge, return). */
 export function printVoucher(entry: LedgerEntry, shop: ShopInfo, customerName?: string) {
   const popup = openPopup(550);
   if (!popup) return;

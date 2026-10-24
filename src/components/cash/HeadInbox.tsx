@@ -95,7 +95,7 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
           icon={<AlertTriangle />}
           tone={openVarianceCount > 0 ? 'danger' : 'neutral'}
           value={openVarianceCount}
-          hint={openVarianceCount > 0 ? 'Review karein' : 'All clear'}
+          hint={openVarianceCount > 0 ? 'Needs review' : 'All clear'}
           onClick={() => onOpenTab('audit')}
         />
       </div>
@@ -104,7 +104,7 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
             <h3 id="remittances-heading" className="text-[15px] font-bold text-fg">Remittances to receive</h3>
-            <p className="mt-0.5 text-[13px] text-fg-subtle">Cashier ka bheja hua cash gin kar account mein receive karein. Har farq variance ban kar record hota hai.</p>
+            <p className="mt-0.5 text-[13px] text-fg-subtle">Count the cash a cashier sent and receive it into an account. Every difference is recorded as a variance.</p>
           </div>
           {pendingRemittances.length > 0 && <Badge tone="warning" dot>{pendingRemittances.length} pending</Badge>}
         </div>
@@ -112,14 +112,14 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
           <div className="flex flex-col gap-2 rounded-card bg-warning-soft px-4 py-3 text-[13px] text-warning-fg ring-1 ring-inset ring-warning/25 sm:flex-row sm:items-center sm:justify-between">
             <span className="flex items-start gap-2 font-semibold">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              {disputedRemittances} remittance{disputedRemittances > 1 ? 's' : ''} ki ginti mein farq hai — Audit Trail mein variance approve ya reject karein.
+              {disputedRemittances} remittance{disputedRemittances > 1 ? 's' : ''} counted with a difference — approve or reject the variance in Audit Trail.
             </span>
             <Button size="sm" variant="secondary" onClick={() => onOpenTab('audit')}>Open Audit Trail</Button>
           </div>
         )}
         {pendingRemittances.length === 0 ? (
           <Card>
-            <EmptyState icon={<CheckCircle2 />} title="No pending remittance" description="Cashiers ka sara bheja hua cash receive ho chuka hai." />
+            <EmptyState icon={<CheckCircle2 />} title="No pending remittance" description="All cash sent by cashiers has been received." />
           </Card>
         ) : (
           pendingRemittances.map(remittance => (
@@ -141,7 +141,7 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
         <TableContainer>
           <CardHeader
             title="Open shifts"
-            description="Drawers abhi kis ke paas hain aur un mein kitna cash hona chahiye. Pending Review = gini ja chuki, farq approve hona baqi."
+            description="Who has each drawer right now and how much cash it should hold. Pending Review = counted, difference not approved yet."
             icon={<Clock3 />}
             actions={<Badge tone="success" dot>{liveShifts.length} open</Badge>}
           />
@@ -167,11 +167,11 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
       <section aria-labelledby="handovers-heading" className="flex flex-col gap-3">
         <div>
           <h3 id="handovers-heading" className="text-[15px] font-bold text-fg">Drawer handovers</h3>
-          <p className="mt-0.5 text-[13px] text-fg-subtle">Drawer mein chhora gaya cash — agli shift isay gin kar opening cash ke tor par leti hai.</p>
+          <p className="mt-0.5 text-[13px] text-fg-subtle">Cash left in a drawer — the next shift counts it and takes it as opening cash.</p>
         </div>
         {openHandovers.length === 0 ? (
           <Card>
-            <EmptyState size="compact" icon={<ArrowRightLeft />} title="No pending handover" description="Har drawer ka cash kisi shift ne le liya hai." />
+            <EmptyState size="compact" icon={<ArrowRightLeft />} title="No pending handover" description="Every drawer's cash has been taken over by a shift." />
           </Card>
         ) : (
           <Card className="divide-y divide-line overflow-hidden">
@@ -195,20 +195,20 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
             open
             onClose={() => setSettling(null)}
             busy={busyKey === `handover:${settling.handover.id}`}
-            title="Disputed handover settle karein"
+            title="Settle disputed handover"
             description={settling.variance
-              ? 'Is handover ka farq approve ho jayega aur handover settle ho jayega.'
-              : 'Handover settle ho jayega; is ka koi open variance nahi mila.'}
+              ? "This handover's difference will be approved and the handover settled."
+              : 'The handover will be settled; no open variance was found for it.'}
             icon={<span className="flex size-10 items-center justify-center rounded-xl bg-warning-soft text-warning-fg"><ShieldCheck size={20} /></span>}
             summary={(
               <div className="grid grid-cols-3 gap-2 rounded-control bg-surface-2 p-3 text-[13px] ring-1 ring-inset ring-line/70">
                 <Detail label="Declared"><Money amount={settling.handover.declared_amount} /></Detail>
                 <Detail label="Counted"><Money amount={settling.handover.counted_amount ?? settling.variance?.counted_amount} /></Detail>
-                <Detail label="Farq"><Money amount={settling.handover.variance ?? settling.variance?.variance} tone="signed" /></Detail>
+                <Detail label="Difference"><Money amount={settling.handover.variance ?? settling.variance?.variance} tone="signed" /></Detail>
               </div>
             )}
-            label="Settle karne ki wajah"
-            placeholder="e.g. Rs 100 ka note pichli shift mein galat gina gaya tha"
+            label="Reason for settling"
+            placeholder="e.g. a Rs 100 note was miscounted in the last shift"
             confirmLabel="Approve & settle"
             confirmIcon={<Check />}
             onConfirm={settleHandover}
@@ -285,12 +285,12 @@ const RemittanceCard = memo(function RemittanceCard({ remittance, drawerName, dr
   const noteTotal = denominationTotal(denominations);
 
   const countError = !count.empty && !count.valid
-    ? 'Sahi raqam likhein (0 ya zyada).'
+    ? 'Enter a valid amount (0 or more).'
     : count.valid && declared > 0 && count.value <= 0
-      ? 'Gini hui raqam 0 se zyada honi chahiye.'
-      : tried && count.empty ? 'Physical count likhein.' : undefined;
-  const destinationError = tried && !destinationId ? 'Receiving account chunein.' : undefined;
-  const notesError = tried && notesNeeded && notes.trim().length < 3 ? 'Farq ki wajah likhein — ye variance ke sath record hogi.' : undefined;
+      ? 'Counted amount must be more than 0.'
+      : tried && count.empty ? 'Enter the physical count.' : undefined;
+  const destinationError = tried && !destinationId ? 'Choose a receiving account.' : undefined;
+  const notesError = tried && notesNeeded && notes.trim().length < 3 ? 'Write the reason for the difference — it is recorded with the variance.' : undefined;
   const ready = count.valid && !(declared > 0 && count.value <= 0) && Boolean(destinationId) && (!notesNeeded || notes.trim().length >= 3);
 
   const handleCountChange = (value: string) => {
@@ -341,20 +341,20 @@ const RemittanceCard = memo(function RemittanceCard({ remittance, drawerName, dr
               />
             )}
           </Field>
-          <VarianceCallout variance={variance} against="declared" consequence="variance record ho kar review mein jayegi." />
+          <VarianceCallout variance={variance} against="declared" consequence="a variance will be recorded and sent for review." />
         </div>
         <div className="flex flex-col gap-3">
           <Field label="Receiving account (Bank & Cash)" required error={destinationError}>
             {control => (
               <Select {...control} value={destinationId} onChange={event => setDestinationId(event.target.value)} disabled={busy}>
-                <option value="">Account chunein…</option>
+                <option value="">Choose account…</option>
                 {receiving.map(account => (
                   <option key={account.id} value={account.id}>{account.name} ({account.type}) · {formatCurrency(account.balance)}</option>
                 ))}
               </Select>
             )}
           </Field>
-          <Field label={notesNeeded ? 'Farq ki wajah' : 'Receipt note (optional)'} required={notesNeeded} error={notesError}>
+          <Field label={notesNeeded ? 'Reason for difference' : 'Receipt note (optional)'} required={notesNeeded} error={notesError}>
             {control => (
               <Textarea
                 {...control}
@@ -363,7 +363,7 @@ const RemittanceCard = memo(function RemittanceCard({ remittance, drawerName, dr
                 value={notes}
                 onChange={event => setNotes(event.target.value)}
                 disabled={busy}
-                placeholder={notesNeeded ? 'e.g. bag mein Rs 500 kam nikle, cashier ko bata diya' : 'e.g. Bag sealed tha, sab theek'}
+                placeholder={notesNeeded ? 'e.g. bag was Rs 500 short, told the cashier' : 'e.g. bag was sealed, all fine'}
               />
             )}
           </Field>
@@ -378,7 +378,7 @@ const RemittanceCard = memo(function RemittanceCard({ remittance, drawerName, dr
           className="inline-flex w-fit cursor-pointer items-center gap-1 rounded-lg text-xs font-semibold text-fg-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronDown className={cn('size-3.5 transition-transform', showDetails && 'rotate-180')} aria-hidden="true" />
-          {showDetails ? 'Hide details' : 'Cashier ki details'}
+          {showDetails ? 'Hide details' : 'Cashier details'}
         </button>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           {count.valid && destination && (
@@ -414,7 +414,7 @@ const RemittanceCard = memo(function RemittanceCard({ remittance, drawerName, dr
             onChange={setDenominations}
             onApply={total => setCountRaw(String(total))}
             title="Head cash count"
-            subtitle={`${remittance.cashier_name} ka bag — har note gin kar likhein`}
+            subtitle={`${remittance.cashier_name}'s bag — count each note and enter it`}
             expectedAmount={declared}
             expectedLabel="Declared"
           />
@@ -444,7 +444,7 @@ const HandoverRow = memo(function HandoverRow({ handover, drawerName, busy, lock
             <Money amount={handover.declared_amount} className="text-sm font-bold text-fg" />
             <Badge tone={disputed ? 'danger' : 'info'} dot>{handover.status}</Badge>
             {disputed && handover.variance !== undefined && handover.variance !== null && (
-              <span className="text-xs font-semibold text-fg-subtle">Farq <Money amount={handover.variance} tone="signed" /></span>
+              <span className="text-xs font-semibold text-fg-subtle">Difference <Money amount={handover.variance} tone="signed" /></span>
             )}
           </div>
           <p className="mt-0.5 truncate text-xs text-fg-subtle">{handover.from_user_name} · {drawerName} · {formatPkDateTime(handover.declared_at)}</p>

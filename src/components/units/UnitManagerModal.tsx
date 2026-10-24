@@ -123,9 +123,9 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
   // Built-in units count too: a custom "kg" next to the real kg would make every conversion ambiguous.
   const clash = symbol ? allUnits.find(u => u.id !== editingUnitId && u.symbol.toLowerCase() === symbol.toLowerCase()) : undefined;
   const errors = {
-    name: !name ? 'Unit ka naam likhein.' : '',
-    symbol: !symbol ? 'Symbol likhein.' : /\s/.test(symbol) ? 'Symbol mein space na rakhein.' : clash ? `"${clash.symbol}" pehle se hai (${clash.name}).` : '',
-    factor: !(factorNum > 0) ? '0 se bara number likhein.' : '',
+    name: !name ? 'Enter the unit name.' : '',
+    symbol: !symbol ? 'Enter a symbol.' : /\s/.test(symbol) ? 'No spaces in the symbol.' : clash ? `"${clash.symbol}" already exists (${clash.name}).` : '',
+    factor: !(factorNum > 0) ? 'Enter a number above 0.' : '',
   };
   const hasErrors = Boolean(errors.name || errors.symbol || errors.factor);
 
@@ -164,13 +164,13 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
   const handleDelete = async (unit: UnitDefinition) => {
     const usageCount = usageMap[unit.symbol.toLowerCase()] || 0;
     if (usageCount > 0) {
-      showToast(`Delete nahi ho sakta: ${usageCount} product(s) "${unit.symbol}" istemal kar rahe hain. Pehle un products ka unit badlein.`, 'warning');
+      showToast(`Can't delete: ${usageCount} product(s) use "${unit.symbol}". Change the unit of those products first.`, 'warning');
       return;
     }
     if (await confirmAction({
-      title: `Unit "${unit.name} (${unit.symbol})" delete karein?`,
-      message: 'Koi product yeh unit istemal nahi kar raha.',
-      consequences: ['Yeh unit list se hat jayega.', 'Yeh kaam wapas nahi ho sakta.'],
+      title: `Delete unit "${unit.name} (${unit.symbol})"?`,
+      message: 'No product uses this unit.',
+      consequences: ['This unit is removed from the list.', "This can't be undone."],
     })) {
       await deleteUnit(unit.id);
       if (editingUnitId === unit.id) resetForm();
@@ -189,15 +189,15 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
       dismissible={!saving}
       icon={<div className="flex size-10 items-center justify-center rounded-xl bg-surface-2 text-fg-muted"><Scale className="size-5" /></div>}
       title={<span className="flex items-center gap-2">Measurement units <Badge tone="neutral">{allUnits.length}</Badge></span>}
-      description="Weight, liquid aur count ke base aur conversion units."
+      description="Base and conversion units for weight, liquid and count."
       footer={<>
-        <p className="mr-auto hidden self-center text-xs text-fg-subtle sm:block">Jo unit products mein lage hain, unka symbol, type aur size nahi badalta.</p>
-        <Button variant="secondary" onClick={onClose} disabled={saving}>Band karein</Button>
+        <p className="mr-auto hidden self-center text-xs text-fg-subtle sm:block">Units used by products keep their symbol, type and size.</p>
+        <Button variant="secondary" onClick={onClose} disabled={saving}>Close</Button>
       </>}
     >
       <div className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Naam, symbol ya Urdu se dhoondein..." aria-label="Units dhoondein" className="flex-1" />
+          <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search by name, symbol or Urdu..." aria-label="Search units" className="flex-1" />
           {canManage && (
             <Button
               variant={isFormOpen && !editingUnitId ? 'secondary' : 'primary'}
@@ -207,7 +207,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                 else { resetForm(); setIsFormOpen(true); }
               }}
             >
-              {isFormOpen && !editingUnitId ? 'Form band karein' : 'Naya unit'}
+              {isFormOpen && !editingUnitId ? 'Close form' : 'New unit'}
             </Button>
           )}
         </div>
@@ -215,7 +215,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
         {/* Pack sizes live on the product, not here */}
         <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
           <Info className="size-3.5 shrink-0" />
-          Product ke pack sizes (dozen, tray, cup) us product ke Sell units tab mein add karein.
+          Add a product's pack sizes (dozen, tray, cup) in that product's Sell units tab.
         </p>
 
         <SegmentedControl
@@ -237,19 +237,19 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
             <div className="flex items-center justify-between">
               <h4 className="flex items-center gap-2 text-[15px] font-bold text-fg">
                 {editingUnitId ? <Pencil className="size-4" /> : <Plus className="size-4" />}
-                {editingUnitId ? `Edit: ${editingUnit?.name || 'unit'}` : 'Naya unit'}
+                {editingUnitId ? `Edit: ${editingUnit?.name || 'unit'}` : 'New unit'}
               </h4>
               <Button size="sm" variant="ghost" onClick={resetForm} disabled={saving}>Cancel</Button>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Naam" required error={err('name')}>
+              <Field label="Name" required error={err('name')}>
                 {control => <Input {...control} value={formData.name} maxLength={40} placeholder="e.g. Maund, Gallon, Carton" onChange={e => setFormData({ ...formData, name: e.target.value })} />}
               </Field>
               <Field label="Symbol" required error={err('symbol')}>
                 {control => <Input {...control} value={formData.symbol} maxLength={12} disabled={editingInUse} className="font-mono font-bold" placeholder="e.g. maund, gal, ctn" onChange={e => setFormData({ ...formData, symbol: e.target.value })} />}
               </Field>
-              <Field label="Qisam" required>
+              <Field label="Type" required>
                 {control => (
                   <Select {...control} value={formData.type} disabled={editingInUse} onChange={e => setFormData({ ...formData, type: e.target.value as UnitForm['type'] })}>
                     <option value="Count">Count (pieces, packs, dozen)</option>
@@ -258,32 +258,32 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                   </Select>
                 )}
               </Field>
-              <Field label={`1 unit = kitne ${baseSymbolForType}`} required error={err('factor')}>
+              <Field label={`1 unit = how many ${baseSymbolForType}`} required error={err('factor')}>
                 {control => (
                   <Input {...control} type="number" inputMode="decimal" step="any" min="0.0001" value={formData.factor} disabled={editingInUse} suffix={baseSymbolForType}
                     className="font-mono font-bold" placeholder="e.g. 40, 24, 0.25" onWheel={e => e.currentTarget.blur()} onChange={e => setFormData({ ...formData, factor: e.target.value })} />
                 )}
               </Field>
-              <Field label="Urdu naam (optional)">
+              <Field label="Urdu name (optional)">
                 {control => <Input {...control} dir="auto" value={formData.urduName} maxLength={40} onChange={e => setFormData({ ...formData, urduName: e.target.value })} />}
               </Field>
               <Field label="Note">
-                {control => <Input {...control} value={formData.description} maxLength={80} placeholder="e.g. Carton mein 24 packs" onChange={e => setFormData({ ...formData, description: e.target.value })} />}
+                {control => <Input {...control} value={formData.description} maxLength={80} placeholder="e.g. 24 packs per carton" onChange={e => setFormData({ ...formData, description: e.target.value })} />}
               </Field>
             </div>
 
             {editingInUse && (
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-warning-fg"><Lock className="size-3" />Products mein istemal ho raha hai: symbol, qisam aur size lock hain.</p>
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-warning-fg"><Lock className="size-3" />Used by products: symbol, type and size are locked.</p>
             )}
 
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-line bg-surface px-3.5 py-2.5 text-sm">
-              <span className="flex items-center gap-1.5 text-fg-subtle"><Info className="size-4" />Hisaab</span>
+              <span className="flex items-center gap-1.5 text-fg-subtle"><Info className="size-4" />Calculation</span>
               <span className="font-mono font-bold text-fg">1 {symbol || 'unit'} = {formData.factor || '1'} {baseSymbolForType}</span>
             </div>
 
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={resetForm} disabled={saving}>Cancel</Button>
-              <Button type="submit" loading={saving}>{editingUnitId ? 'Update unit' : 'Unit save karein'}</Button>
+              <Button type="submit" loading={saving}>{editingUnitId ? 'Update unit' : 'Save unit'}</Button>
             </div>
           </form>
         )}
@@ -292,8 +292,8 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
           <EmptyState
             size="compact"
             icon={<Scale />}
-            title="Koi unit nahi mila"
-            description={canManage ? 'Search badlein ya upar se naya unit banayein.' : 'Search badal kar dekhein.'}
+            title="No units found"
+            description={canManage ? 'Change the search or add a new unit above.' : 'Try a different search.'}
           />
         ) : (
           <div className="grid gap-2.5 sm:grid-cols-2">
@@ -316,7 +316,7 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                         <span className="truncate text-sm font-semibold text-fg">{unit.name}</span>
                         {unit.urduName && <span className="text-xs text-fg-subtle" dir="auto">({unit.urduName})</span>}
                       </div>
-                      <p className="mt-0.5 truncate text-[11px] text-fg-subtle">{unit.description || (isSystem ? 'Built-in unit' : 'Aap ka banaya unit')}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-fg-subtle">{unit.description || (isSystem ? 'Built-in unit' : 'Your own unit')}</p>
                       <Badge tone={ROLE_TONE[role.role] || 'neutral'} className="mt-1.5 cursor-help" title={role.hint}>{role.label}</Badge>
                     </div>
                     <span className="shrink-0 rounded-lg bg-surface-2 px-2 py-1 font-mono text-xs font-bold text-fg ring-1 ring-inset ring-line">{unit.symbol}</span>
@@ -330,16 +330,16 @@ export const UnitManagerModal: React.FC<UnitManagerModalProps> = ({
                     </span>
                     <span className="flex shrink-0 items-center gap-0.5">
                       {onSelectUnit && (
-                        <Button size="sm" variant="soft" onClick={() => { onSelectUnit(unit.symbol); onClose(); }}>Chunein</Button>
+                        <Button size="sm" variant="soft" onClick={() => { onSelectUnit(unit.symbol); onClose(); }}>Select</Button>
                       )}
                       {isSystem ? (
                         <span title="Built-in unit (protected)" className="flex size-8 items-center justify-center text-fg-faint"><Lock className="size-3.5" /></span>
                       ) : canManage && (
                         <>
-                          <IconButton size="sm" aria-label={`${unit.name} edit karein`} icon={<Pencil />} onClick={() => handleStartEdit(unit)} />
+                          <IconButton size="sm" aria-label={`Edit ${unit.name}`} icon={<Pencil />} onClick={() => handleStartEdit(unit)} />
                           <IconButton
                             size="sm"
-                            aria-label={usageCount > 0 ? `${unit.name}: ${usageCount} products mein istemal, delete nahi hoga` : `${unit.name} delete karein`}
+                            aria-label={usageCount > 0 ? `${unit.name}: used by ${usageCount} products, can't be deleted` : `Delete ${unit.name}`}
                             icon={<Trash2 />}
                             className="hover:bg-danger-soft hover:text-danger-fg"
                             onClick={() => handleDelete(unit)}

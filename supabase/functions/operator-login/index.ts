@@ -75,11 +75,11 @@ async function verifyPin(body: any): Promise<{ user?: any; message?: string }> {
   } else if (mode === 'user' && typeof body.user_id === 'string' && body.user_id.trim() && isPin(body.pin)) {
     rpc = { fn: 'app_verify_pin', args: { p_user_id: body.user_id.trim(), p_pin: body.pin.trim() } };
   }
-  if (!rpc) return { message: 'Ghalat Username ya PIN code!' };
+  if (!rpc) return { message: 'Wrong username or PIN code!' };
 
   const { data, error } = await admin.rpc(rpc.fn, rpc.args);
   // The RPC messages are already user-facing (wrong PIN, too many attempts).
-  if (error || !data) return { message: error?.message || 'Ghalat Username ya PIN code!' };
+  if (error || !data) return { message: error?.message || 'Wrong username or PIN code!' };
   return { user: data };
 }
 
@@ -135,6 +135,6 @@ Deno.serve(async (req: Request) => {
     });
   } catch (e) {
     console.error('[operator-login]', (e as Error).message);
-    return json({ message: 'Login abhi mukammal nahi ho saka. Dobara koshish karein.' }, 502);
+    return json({ message: 'Login could not be completed. Please try again.' }, 502);
   }
 });

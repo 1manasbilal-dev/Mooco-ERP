@@ -138,7 +138,7 @@ export const ReportCatalogGrid = memo(({ reports, query, isLocked, onOpen }: {
   if (!results.length) {
     return (
       <Card>
-        <EmptyState icon={<SearchX />} title={`No report matches “${query}”`} description="Try another word: sales, khata, milk, stock, profit, cash…" />
+        <EmptyState icon={<SearchX />} title={`No report matches “${query}”`} description="Try another word: sales, ledger, milk, stock, profit, cash…" />
       </Card>
     );
   }

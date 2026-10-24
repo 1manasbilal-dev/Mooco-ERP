@@ -57,7 +57,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
         { key: 'create', label: 'Allocate milk' },
       ] },
       { id: 'suppliers', label: 'Suppliers', actions: [
-        { key: 'view', label: 'View suppliers & khata' },
+        { key: 'view', label: 'View suppliers & ledgers' },
         { key: 'create', label: 'Add supplier' },
         { key: 'edit', label: 'Edit supplier & rates' },
         { key: 'delete', label: 'Delete supplier' },
@@ -89,7 +89,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     group: 'Finance',
     modules: [
       { id: 'customers', label: 'Customers', actions: [
-        { key: 'view', label: 'View customers & khata' },
+        { key: 'view', label: 'View customers & ledgers' },
         { key: 'create', label: 'Add customer' },
         { key: 'edit', label: 'Edit customer' },
         { key: 'delete', label: 'Delete customer' },

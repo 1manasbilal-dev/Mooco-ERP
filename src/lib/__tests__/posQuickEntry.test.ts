@@ -104,13 +104,13 @@ describe('quick presets', () => {
   it('hints small-unit shortcuts in everyday words', () => {
     const ml = buildQuickPreview(0.22, 'ml').qty;
     expect(ml[0]).toMatchObject({ qty: 250, title: '250 ml', hint: '1 Glass', converted: 'Rs 55' });
-    expect(buildQuickPreview(0.5, 'g').qty.find(q => q.qty === 250)).toMatchObject({ hint: '1 Paao' });
+    expect(buildQuickPreview(0.5, 'g').qty.find(q => q.qty === 250)).toMatchObject({ hint: 'Quarter kg' });
   });
 
   it('previews the conversions the cashier will see', () => {
     const preview = buildQuickPreview(220, 'kg');
     expect(preview.usingDefaultCash).toBe(true);
     expect(preview.cash[0]).toEqual({ amount: 50, qty: 0.227, label: 'Rs 50', converted: '0.227 kg' });
-    expect(preview.qty[0]).toMatchObject({ qty: 0.25, title: '0.25 kg', hint: '1 Paao', total: 55, converted: 'Rs 55' });
+    expect(preview.qty[0]).toMatchObject({ qty: 0.25, title: '0.25 kg', hint: 'Quarter kg', total: 55, converted: 'Rs 55' });
   });
 });

@@ -56,10 +56,10 @@ export const VarianceCallout: React.FC<{
   variance: number | null;
   /** What the count was compared against, e.g. "declared" or "expected". */
   against?: string;
-  /** Extra sentence after over/short, e.g. "— variance record hogi". */
+  /** Extra sentence after over/short, e.g. "a variance will be recorded". */
   consequence?: string;
   className?: string;
-}> = ({ variance, against = 'expected', consequence = 'variance record hogi.', className }) => {
+}> = ({ variance, against = 'expected', consequence = 'a variance will be recorded.', className }) => {
   if (variance === null) return null;
   const tone = variance === 0 ? 'exact' : variance > 0 ? 'over' : 'short';
   const Icon = tone === 'exact' ? CheckCircle2 : tone === 'over' ? TrendingUp : TrendingDown;
@@ -74,7 +74,7 @@ export const VarianceCallout: React.FC<{
     >
       <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <span>
-        {tone === 'exact' && <>Exact — counted cash {against} ke barabar hai.</>}
+        {tone === 'exact' && <>Exact — counted cash matches the {against} amount.</>}
         {tone !== 'exact' && (
           <>
             {tone === 'over' ? 'Over' : 'Short'} by <Money amount={Math.abs(variance)} className="font-bold" /> vs {against} — {consequence}
@@ -103,7 +103,7 @@ export const CountInput: React.FC<{
   countLabel?: string;
 }> = ({
   id, value, onChange, onCount, denominationTotal = 0, denominationPieces = 0, placeholder = '0', invalid, disabled, inputRef, onKeyDown,
-  countLabel = 'Note count — har note ginti', ...aria
+  countLabel = 'Note count — count each note', ...aria
 }) => (
   <div>
     <div className="relative">

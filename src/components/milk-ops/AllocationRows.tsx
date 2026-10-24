@@ -59,7 +59,7 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
       <button
         type="button"
         onClick={() => onOpen(entry)}
-        aria-label={`${entry.name}: ${formatQty(entry.available, 3)} L baqi. ${inCart ? 'Cart qty badlein' : 'Cart mein dalein'}`}
+        aria-label={`${entry.name}: ${formatQty(entry.available, 3)} L left. ${inCart ? 'Change cart qty' : 'Add to cart'}`}
         className={cn(
           'group flex w-full cursor-pointer items-center gap-3 rounded-control border px-3 py-3 text-left transition-[border-color,background-color] duration-150 sm:px-4',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -69,7 +69,7 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <p className="truncate text-sm font-semibold text-fg">{entry.name}</p>
-            {inCart && <Badge tone="brand" variant="solid">{formatQty(inCartQty, 3)} L cart mein</Badge>}
+            {inCart && <Badge tone="brand" variant="solid">{formatQty(inCartQty, 3)} L in cart</Badge>}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-fg-subtle">
             {entry.source === 'retail' ? (
@@ -97,7 +97,7 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
         </div>
 
         <div className="shrink-0 text-right">
-          <p className="text-[11px] font-semibold text-fg-subtle">Baqi</p>
+          <p className="text-[11px] font-semibold text-fg-subtle">Left</p>
           <p className="text-lg font-bold leading-tight tabular-nums text-fg">
             {formatQty(entry.available, 3)}
             <span className="ml-0.5 text-xs font-semibold text-fg-subtle">L</span>
@@ -132,8 +132,8 @@ interface CartLineProps {
 /** Problem with one cart line, or '' when it can be allocated. */
 export const cartLineError = (line: CartItem, available: number) => {
   const qty = parseQty(line.qty);
-  if (!(qty > 0)) return 'Qty likhein';
-  if (qty > Math.max(0, available) + 0.001) return `Sirf ${formatQty(Math.max(0, available), 3)} L baqi hai`;
+  if (!(qty > 0)) return 'Enter a qty';
+  if (qty > Math.max(0, available) + 0.001) return `Only ${formatQty(Math.max(0, available), 3)} L left`;
   return '';
 };
 
@@ -157,7 +157,7 @@ export const CartLine = memo(function CartLine({ line, available, onQtyChange, o
         </div>
         <IconButton
           size="sm"
-          aria-label={`${name} cart se hatayen`}
+          aria-label={`Remove ${name} from cart`}
           icon={<X />}
           onClick={() => onRemove(line.allocationId)}
           className="-mr-1 -mt-1 hover:bg-danger-soft hover:text-danger-fg"

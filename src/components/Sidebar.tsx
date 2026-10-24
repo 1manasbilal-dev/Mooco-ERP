@@ -82,8 +82,8 @@ const MENU_ITEMS: NavItem[] = [
   { id: "items", label: "Product Catalog", icon: Package, type: "link" },
 
   { type: "section", label: "Parties & Ledgers" },
-  { id: "customers", label: "Customers Khata", icon: Users, type: "link" },
-  { id: "suppliers", label: "Suppliers Khata", icon: Truck, type: "link" },
+  { id: "customers", label: "Customer Ledgers", icon: Users, type: "link" },
+  { id: "suppliers", label: "Supplier Ledgers", icon: Truck, type: "link" },
   { id: "expenses", label: "Expenses & Vendors", icon: Receipt, type: "link" },
 
   { type: "section", label: "Finance & Accounts" },

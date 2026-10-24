@@ -109,7 +109,7 @@ const Accounts: React.FC = () => {
 
   const denyIfNoAccess = () => {
     if (canCreate) return false;
-    showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+    showToast("You don't have permission to do this.", 'warning');
     return true;
   };
 
@@ -122,8 +122,8 @@ const Accounts: React.FC = () => {
     setBusyId(node.id);
     try {
       const ok = await updateManualAccount(node.id, { isActive: active });
-      if (ok) showToast(`Account ${active ? 'Active' : 'Inactive'} kar diya gaya`, 'info');
-      else showToast('Account update nahi hua. Dobara koshish karein.', 'error');
+      if (ok) showToast(`Account is now ${active ? 'Active' : 'Inactive'}`, 'info');
+      else showToast("Account couldn't be updated. Please try again.", 'error');
     } finally {
       setBusyId(null);
     }
@@ -137,38 +137,38 @@ const Accounts: React.FC = () => {
   const handleDelete = async (shown: COANode) => {
     if (busyId || denyIfNoAccess()) return;
     const node = nodeById.get(shown.id) || shown;
-    if (node.isSystem) { showToast('System account delete nahi ho sakta.', 'warning'); return; }
-    if (node.children && node.children.length > 0) { showToast('Is account ke neeche sub-accounts hain, pehle unhein hatayen.', 'error'); return; }
-    if (Math.abs(node.balance) > 0) { showToast('Account mein balance baqi hai. Delete ke bajaye Inactive karein.', 'warning'); return; }
+    if (node.isSystem) { showToast("A system account can't be deleted.", 'warning'); return; }
+    if (node.children && node.children.length > 0) { showToast('This account has sub-accounts under it. Remove them first.', 'error'); return; }
+    if (Math.abs(node.balance) > 0) { showToast('The account still has a balance. Make it Inactive instead of deleting it.', 'warning'); return; }
 
     // Journal lines and deposit / withdrawal entries still point at it: keep it, only hide it.
     if (referenced.has(node.id)) {
       if (node.isActive === false) {
-        showToast(`"${node.name}" pehle se Inactive hai. Is ki entries ki wajah se yeh delete nahi ho sakta.`, 'info');
+        showToast(`"${node.name}" is already Inactive. It can't be deleted because it has entries.`, 'info');
         return;
       }
       const deactivate = await confirmAction({
         tone: 'warning',
-        title: `"${node.name}" Inactive karein?`,
-        message: 'Is account par journal ya bank entries record hain, is liye yeh delete nahi hoga balkay Inactive ho jayega.',
-        consequences: ['Purani entries waise hi rahengi.', 'Naye journal aur deposit / withdrawal mein yeh nazar nahi aayega.', 'Baad mein dobara Active kiya ja sakta hai.'],
-        confirmLabel: 'Haan, Inactive karein',
+        title: `Make "${node.name}" Inactive?`,
+        message: "This account has journal or bank entries recorded, so it won't be deleted but made Inactive.",
+        consequences: ['Old entries stay as they are.', 'It will no longer show up for new journal and deposit / withdrawal entries.', 'It can be made Active again later.'],
+        confirmLabel: 'Yes, make Inactive',
       });
       if (deactivate) await setActive(node, false);
       return;
     }
 
     const ok = await confirmAction({
-      title: `"${node.name}" delete karein?`,
-      message: 'Yeh account chart of accounts se hamesha ke liye hat jayega.',
-      consequences: ['Is ka balance zero hai aur is par koi entry nahi, is liye kisi ledger par asar nahi hoga.', 'Yeh kaam wapas nahi ho sakta.'],
+      title: `Delete "${node.name}"?`,
+      message: 'This account will be removed from the chart of accounts for good.',
+      consequences: ['Its balance is zero and it has no entries, so no ledger is affected.', "This can't be undone."],
     });
     if (!ok) return;
     setBusyId(node.id);
     try {
       const deleted = await deleteManualAccount(node.id);
-      if (deleted) showToast('Account delete ho gaya', 'success');
-      else showToast('Account delete nahi hua. Dobara koshish karein.', 'error');
+      if (deleted) showToast('Account deleted', 'success');
+      else showToast("Account couldn't be deleted. Please try again.", 'error');
     } finally {
       setBusyId(null);
     }
@@ -192,7 +192,7 @@ const Accounts: React.FC = () => {
     <div className="flex flex-col gap-6 pb-4">
       <PageHeader
         eyebrow="Finance"
-        description="Chart of accounts, ledger balances aur double-entry journal vouchers."
+        description="Chart of accounts, ledger balances and double-entry journal vouchers."
         actions={canCreate && activeTab === 'chart' ? (
           <Button leftIcon={<Plus />} onClick={() => openAdd()}>New account</Button>
         ) : undefined}
@@ -233,7 +233,7 @@ const Accounts: React.FC = () => {
 
           <section aria-label="Chart of accounts" className="flex flex-col gap-3">
             <Toolbar>
-              <SearchInput value={search} onChange={setSearch} placeholder="Naam ya code..." className="w-full sm:w-64" />
+              <SearchInput value={search} onChange={setSearch} placeholder="Name or code..." className="w-full sm:w-64" />
               <SegmentedControl aria-label="Account type" size="sm" value={typeFilter} onChange={setTypeFilter} options={TYPE_OPTIONS} />
               <div className="flex items-center gap-1 sm:ml-auto">
                 <Button variant="ghost" size="sm" leftIcon={<ChevronsUpDown />} onClick={expandAll} disabled={searching}>Expand all</Button>
@@ -254,13 +254,13 @@ const Accounts: React.FC = () => {
                 <EmptyState
                   size="compact"
                   icon={<Landmark />}
-                  title="Koi account nahi mila"
-                  description="Naam ya code badal kar search karein, ya type filter hatayen."
+                  title="No account found"
+                  description="Search with a different name or code, or clear the type filter."
                 />
               }
             />
             <p className="px-1 text-xs text-fg-subtle">
-              Dr = debit balance, Cr = credit balance. Lock wale system accounts app khud records se banati hai (Bank & Cash, khata, stock, sales, expenses).
+              Dr = debit balance, Cr = credit balance. The app builds the locked system accounts itself from its records (Bank & Cash, ledgers, stock, sales, expenses).
             </p>
           </section>
         </>

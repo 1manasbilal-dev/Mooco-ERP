@@ -38,7 +38,7 @@ export function proportionalRefund(sale: any, lines: Array<{ qty?: number; price
 }
 
 /**
- * Khata is reversed first. Cash/bank is refunded only for the part the customer had actually paid.
+ * The part charged to the customer ledger (`khata`) is reversed first. Cash/bank is refunded only for the part the customer had actually paid.
  */
 export function splitRefund(sale: any, refundAmount: number): { khata: number; cash: number } {
   const total = Math.max(0, Number(sale?.total || 0));
@@ -54,8 +54,8 @@ export function splitRefund(sale: any, refundAmount: number): { khata: number; c
 }
 
 /**
- * Money a bill still keeps after its returns, split by where it sits. Refunds reverse khata first,
- * so only the part above the unpaid khata was paid back in cash/online.
+ * Money a bill still keeps after its returns, split by where it sits. Refunds reverse the ledger (credit) first,
+ * so only the part above the unpaid credit was paid back in cash/online.
  */
 export function saleNetCollection(sale: any): { cash: number; online: number; credit: number; net: number } {
   const total = Math.max(0, Number(sale?.total || 0));
@@ -94,7 +94,7 @@ export function purchaseCashPaid(row: any): number {
   return roundCurrency(Math.max(0, Number(paid) || 0));
 }
 
-/** Cash that left an account for this material line. Legacy supplier bills did not store the split, so unpaid khata is not treated as cash. */
+/** Cash that left an account for this material line. Legacy supplier bills did not store the split, so an unpaid ledger balance is not treated as cash. */
 export function materialCashPaid(row: any): number {
   const explicit = row?.paid_amount ?? row?.details?.paid_amount;
   if (explicit !== undefined && explicit !== null && explicit !== '') {

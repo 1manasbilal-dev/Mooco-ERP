@@ -59,7 +59,7 @@ export interface VendorPaymentLogRow {
   vendorServiceType?: string;
   vendorPhone?: string;
   actionType: 'Payment' | 'Refund' | 'Bill';
-  direction: 'out' | 'in'; // 'out' = payment di (paid), 'in' = payment li/refund (received)
+  direction: 'out' | 'in'; // 'out' = payment made (paid), 'in' = payment / refund received
   amount: number;
   paidAmount?: number;
   paymentMode: string;

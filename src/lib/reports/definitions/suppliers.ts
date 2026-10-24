@@ -44,7 +44,7 @@ export const supplierReports: ReportDefinition[] = [
         later(lastPurchase, m.supplier_id, dayOf(m.date));
         if (inRange(m.date, f)) add(bought, m.supplier_id, n(m.total_amount));
       });
-      // A waiver settles the khata but pays nothing, so it is neither "paid" nor the last payment.
+      // A waiver settles the balance but pays nothing, so it is neither "paid" nor the last payment.
       data.supplierTransactions.forEach(t => {
         if (!t || !isPayment(t) || isWaiver(t)) return;
         later(lastPayment, t.supplier_id, dayOf(t.date));
@@ -106,7 +106,7 @@ export const supplierReports: ReportDefinition[] = [
   },
   {
     id: 'supplier_statement',
-    title: 'Supplier Statement (Khata)',
+    title: 'Supplier Statement',
     subtitle: 'Opening balance, every purchase and payment, and running balance for one supplier',
     category: 'suppliers',
     icon: 'BookOpen',
@@ -169,7 +169,7 @@ export const supplierReports: ReportDefinition[] = [
         tables: [{
           id: 'ledger', title: supplier.name, subtitle: 'Credit = bought from supplier (we owe more), Debit = paid to supplier',
           sort: { key: 'date', dir: 'asc' }, showTotals: true,
-          emptyText: 'No khata entries in this period.',
+          emptyText: 'No ledger entries in this period.',
           columns: [
             { key: 'date', label: 'Date', format: 'date' },
             { key: 'description', label: 'Details', wrap: true },
@@ -250,7 +250,7 @@ export const supplierReports: ReportDefinition[] = [
         kpis: [
           { key: 'amount', label: 'Purchased', value: amount, format: 'money', inverse: true },
           { key: 'paid', label: 'Cash paid', value: paid, format: 'money' },
-          { key: 'due', label: 'On supplier khata', value: r2(Math.max(0, amount - paid)), format: 'money', inverse: true },
+          { key: 'due', label: 'On credit', value: r2(Math.max(0, amount - paid)), format: 'money', inverse: true },
           { key: 'lines', label: 'Purchase lines', value: lines.length, format: 'number' },
           { key: 'items', label: 'Items', value: itemRows.length, format: 'number' },
         ],
@@ -269,7 +269,7 @@ export const supplierReports: ReportDefinition[] = [
               { key: 'rate', label: 'Avg rate', format: 'money' },
               { key: 'amount', label: 'Amount', format: 'money', total: true },
               { key: 'paid', label: 'Cash paid', format: 'money', total: true },
-              { key: 'due', label: 'On khata', format: 'money', total: true },
+              { key: 'due', label: 'On credit', format: 'money', total: true },
             ],
             rows: itemRows,
           },
@@ -281,7 +281,7 @@ export const supplierReports: ReportDefinition[] = [
               { key: 'items', label: 'Items', format: 'number' },
               { key: 'amount', label: 'Amount', format: 'money', total: true },
               { key: 'paid', label: 'Cash paid', format: 'money', total: true },
-              { key: 'due', label: 'On khata', format: 'money', total: true },
+              { key: 'due', label: 'On credit', format: 'money', total: true },
             ],
             rows: supplierRows,
           },
@@ -297,7 +297,7 @@ export const supplierReports: ReportDefinition[] = [
               { key: 'rate', label: 'Rate', format: 'money' },
               { key: 'amount', label: 'Amount', format: 'money', total: true },
               { key: 'paid', label: 'Cash paid', format: 'money', total: true },
-              { key: 'due', label: 'On khata', format: 'money', total: true },
+              { key: 'due', label: 'On credit', format: 'money', total: true },
             ],
             rows: lines,
           },

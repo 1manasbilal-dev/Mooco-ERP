@@ -76,7 +76,7 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
     return key.length >= 7 ? phoneOwners.get(key) : undefined;
   };
 
-  const nameError = submitted && !name.trim() ? 'Customer ka naam zaroori hai' : undefined;
+  const nameError = submitted && !name.trim() ? 'Customer name is required' : undefined;
   const opening = openingAmount.trim() === '' || Number(openingAmount.replace(/,/g, '')) === 0
     ? { value: 0 }
     : parseAmount(openingAmount);
@@ -129,8 +129,8 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
       dismissible={!saving}
       initialFocusRef={nameRef}
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg">{editing ? <UserCog size={20} /> : <UserPlus size={20} />}</span>}
-      title={editing ? 'Customer edit karein' : 'Naya customer'}
-      description={editing ? customer?.name : 'Naam zaroori hai, baqi sab baad mein bhi bhar sakte hain.'}
+      title={editing ? 'Edit customer' : 'New customer'}
+      description={editing ? customer?.name : 'Only the name is required; you can fill in the rest later.'}
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button type="submit" form={FORM_ID} loading={saving}>{editing ? 'Update customer' : 'Save customer'}</Button>
@@ -142,22 +142,22 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Primary phone" hint={phoneOwner ? `Ye number pehle se "${phoneOwner}" ke naam hai` : undefined}>
+          <Field label="Primary phone" hint={phoneOwner ? `This number is already saved under "${phoneOwner}"` : undefined}>
             {control => <Input {...control} type="tel" inputMode="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="03001234567" />}
           </Field>
           {!isPhoneWhatsApp && (
-            <Field label="WhatsApp number" hint={whatsappOwner ? `Ye number pehle se "${whatsappOwner}" ke naam hai` : undefined}>
+            <Field label="WhatsApp number" hint={whatsappOwner ? `This number is already saved under "${whatsappOwner}"` : undefined}>
               {control => <Input {...control} type="tel" inputMode="tel" value={whatsapp} onChange={e => setWhatsapp(e.target.value)} placeholder="03001234567" />}
             </Field>
           )}
         </div>
-        <CheckRow id="customer-phone-is-whatsapp" checked={isPhoneWhatsApp} onChange={setIsPhoneWhatsApp} label="Primary phone WhatsApp bhi hai" />
+        <CheckRow id="customer-phone-is-whatsapp" checked={isPhoneWhatsApp} onChange={setIsPhoneWhatsApp} label="Primary phone is also on WhatsApp" />
 
         {extraPhones.map((item, index) => (
           <div key={index} className="space-y-3 rounded-control border border-line bg-surface-2 p-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-fg-muted">Secondary contact #{index + 1}</span>
-              <IconButton size="sm" aria-label="Ye number hatayen" icon={<X />} onClick={() => setExtraPhones(prev => prev.filter((_, i) => i !== index))} />
+              <IconButton size="sm" aria-label="Remove this number" icon={<X />} onClick={() => setExtraPhones(prev => prev.filter((_, i) => i !== index))} />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Phone">
@@ -167,7 +167,7 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
                 {control => <Input {...control} value={item.label} onChange={e => updateExtra(index, { label: e.target.value })} placeholder="Home, Brother..." />}
               </Field>
             </div>
-            <CheckRow id={`customer-extra-wa-${index}`} checked={item.is_whatsapp} onChange={checked => updateExtra(index, { is_whatsapp: checked })} label="WhatsApp hai" />
+            <CheckRow id={`customer-extra-wa-${index}`} checked={item.is_whatsapp} onChange={checked => updateExtra(index, { is_whatsapp: checked })} label="On WhatsApp" />
           </div>
         ))}
         <Button
@@ -176,7 +176,7 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
           leftIcon={<Plus />}
           onClick={() => setExtraPhones(prev => [...prev, { phone: '', is_whatsapp: false, label: 'Secondary' }])}
         >
-          Aur phone number
+          Add phone number
         </Button>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -193,11 +193,11 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
             <span className="font-semibold text-fg-muted">Current balance: {formatCurrency(Math.abs(Number(customer?.balance || 0)))}{' '}
               {openBalance === 'due' ? 'Due' : openBalance === 'advance' ? 'Advance' : 'Settled'}
             </span>
-            <span className="mt-0.5 block">Balance khaate ki entries (Payment / Charge) se badalta hai, yahan se nahi.</span>
+            <span className="mt-0.5 block">The balance changes through ledger entries (Payment / Charge), not here.</span>
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <Field label="Opening balance (sabqa baqaya)" error={openingError} hint={!openingError ? 'Khali chhor dein agar purana hisaab nahi' : undefined}>
+            <Field label="Opening balance" error={openingError} hint={!openingError ? 'Leave blank if there is no old balance' : undefined}>
               {control => (
                 <Input {...control} inputMode="decimal" value={openingAmount} onChange={e => setOpeningAmount(e.target.value)} placeholder="0" suffix="Rs" />
               )}
@@ -208,8 +208,8 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
               onChange={setOpeningSide}
               className="sm:mb-[22px]"
               options={[
-                { value: 'due', label: 'Customer ne dena hai' },
-                { value: 'advance', label: 'Advance diya hai' },
+                { value: 'due', label: 'Customer owes' },
+                { value: 'advance', label: 'Paid in advance' },
               ]}
             />
           </div>
@@ -225,8 +225,8 @@ export default function CustomerFormModal({ customer, customers, onClose, onSubm
           onChange={setIsActive}
           label="Active customer account"
           hint={editing && !isActive && openBalance !== 'settled'
-            ? `Is customer ka ${formatCurrency(Math.abs(Number(customer?.balance || 0)))} ${openBalance === 'due' ? 'baqaya' : 'advance'} hai. Inactive karne se khata wahi rahega, sirf POS aur lists se chhup jayega.`
-            : 'Inactive customer POS aur routes mein nazar nahi aata.'}
+            ? `This customer has ${formatCurrency(Math.abs(Number(customer?.balance || 0)))} ${openBalance === 'due' ? 'due' : 'advance'}. Making them inactive keeps the ledger as it is; they are only hidden from POS and lists.`
+            : 'An inactive customer does not show in POS or routes.'}
         />
       </form>
     </Modal>

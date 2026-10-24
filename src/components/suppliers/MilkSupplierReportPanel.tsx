@@ -144,8 +144,8 @@ export function MilkSupplierReportPanel(props: {
         <Card>
           <EmptyState
             icon={<Milk />}
-            title={report.rangeCount > 0 ? 'Is filter mein koi milk nahi' : 'Is period mein koi milk nahi'}
-            description={report.rangeCount > 0 ? 'Saari collections dekhne ke liye All milk / All shifts chunein.' : 'Tareekh badlein, ya is supplier ka milk record karein.'}
+            title={report.rangeCount > 0 ? 'No milk matches this filter' : 'No milk in this period'}
+            description={report.rangeCount > 0 ? 'Choose All milk / All shifts to see every collection.' : 'Change the dates, or record milk for this supplier.'}
           />
         </Card>
       ) : (

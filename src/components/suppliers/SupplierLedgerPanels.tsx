@@ -26,7 +26,7 @@ const VIEWS: SegmentOption<LedgerView>[] = [
   { value: 'payments', label: 'Payments', icon: <Receipt /> },
 ];
 
-/** Kept for older call sites: a khata amount with a Pay / Adv tag. */
+/** Kept for older call sites: a ledger amount with a Pay / Adv tag. */
 export function BalanceAmount({ value, className = '' }: { value: number; className?: string }) {
   return <SupplierBalance value={value} className={className} />;
 }
@@ -51,7 +51,7 @@ export const LedgerRangeBar = memo(function LedgerRangeBar(props: {
     <Card className="flex flex-col gap-3 p-3 sm:p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {props.onView && props.view ? (
-          <SegmentedControl aria-label="Khata view" value={props.view} onChange={props.onView} options={VIEWS} />
+          <SegmentedControl aria-label="Ledger view" value={props.view} onChange={props.onView} options={VIEWS} />
         ) : (
           <p className="flex items-center gap-1.5 text-[13px] font-semibold text-fg-muted">
             <CalendarDays className="size-4 text-fg-faint" aria-hidden="true" />
@@ -61,7 +61,7 @@ export const LedgerRangeBar = memo(function LedgerRangeBar(props: {
         <div className="flex items-center gap-2">
           {props.onShare && (
             <Button variant="soft" size="sm" leftIcon={<ImageDown />} onClick={props.onShare} loading={props.sharing}>
-              {props.sharing ? 'Ban raha hai...' : props.shareLabel || 'Send image'}
+              {props.sharing ? 'Making...' : props.shareLabel || 'Send image'}
             </Button>
           )}
           <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={props.onPrint}>
@@ -82,7 +82,7 @@ export const LedgerRangeBar = memo(function LedgerRangeBar(props: {
             To
             <Input type="date" inputSize="sm" value={props.to} min={props.from || undefined} onChange={event => props.onTo(event.target.value)} className="sm:w-40" />
           </label>
-          <p className="col-span-2 text-[11px] text-fg-subtle">Dono tareekhein shamil hain (Pakistan time).</p>
+          <p className="col-span-2 text-[11px] text-fg-subtle">Both dates are included (Pakistan time).</p>
         </div>
       )}
 
@@ -123,14 +123,14 @@ const CashRow = memo(function CashRow({
         {row.note && <p className="break-words text-[11px] text-fg-subtle">{row.note}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <span className={cn('mr-1 text-sm font-bold', isRefund ? 'text-warning-fg' : 'text-success-fg')} title={isRefund ? 'Refund wapas aaya' : 'Supplier ko diya'}>
+        <span className={cn('mr-1 text-sm font-bold', isRefund ? 'text-warning-fg' : 'text-success-fg')} title={isRefund ? 'Refund received' : 'Paid to supplier'}>
           {isRefund ? '−' : ''}<Money amount={row.amount} />
         </span>
-        {onVoucher && <IconButton size="sm" aria-label="Voucher print karein" icon={<Printer />} onClick={() => onVoucher(row)} />}
+        {onVoucher && <IconButton size="sm" aria-label="Print voucher" icon={<Printer />} onClick={() => onVoucher(row)} />}
         {row.canDelete && onDelete && (
           <IconButton
             size="sm"
-            aria-label="Payment delete karein"
+            aria-label="Delete payment"
             icon={<Trash2 />}
             className="hover:bg-danger-soft hover:text-danger-fg"
             onClick={() => onDelete(row.id)}
@@ -187,8 +187,8 @@ export function CashPaymentDays(props: {
         <EmptyState
           size="compact"
           icon={<Receipt />}
-          title={props.emptyText || 'Is period mein koi payment nahi'}
-          description="Tareekh badlein ya supplier ki payment record karein."
+          title={props.emptyText || 'No payments in this period'}
+          description="Change the dates or record a supplier payment."
         />
       </Card>
     );

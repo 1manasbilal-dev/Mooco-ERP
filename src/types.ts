@@ -337,7 +337,7 @@ export interface CustomerOrder {
   discount: number;
   total: number;
   advance_paid?: number;
-  /** Part of advance_paid already posted to the customer khata and an account (set by the server). */
+  /** Part of advance_paid already posted to the customer ledger and an account (set by the server). */
   advance_posted?: number;
   payment_mode?: CustomerOrderPaymentMode;
   payment_status?: CustomerOrderPaymentStatus;

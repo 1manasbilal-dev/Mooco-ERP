@@ -44,7 +44,7 @@ export const adjustItemStock = (
 ) => {
   const deltas = Object.entries(variantDeltas || {});
   if (!Number.isFinite(Number(looseDelta)) || deltas.some(([, v]) => !Number.isFinite(Number(v)))) {
-    return Promise.resolve({ data: null, error: new Error('Stock ki tabdeeli ghalat number hai; kuch save nahi hua.') });
+    return Promise.resolve({ data: null, error: new Error('The stock change is not a valid number; nothing was saved.') });
   }
   const packs = deltas.map(([k, v]) => [k, roundQuantity(v)] as const).filter(([, v]) => v !== 0);
   return supabase.rpc('adjust_item_stock', {

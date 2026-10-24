@@ -35,19 +35,19 @@ export function settleRequest(key: string, error: unknown): void {
   if (!error || !isLostResponse(error)) openRequests.delete(key);
 }
 
-/** What to tell the user when a money RPC fails. The functions raise readable Roman Urdu messages. */
+/** What to tell the user when a money RPC fails. The functions raise readable messages (older servers in Roman Urdu, newer ones in English). */
 export function moneyRpcMessage(err: any): string {
   const code = String(err?.code || '');
   const message = String(err?.message || '').trim();
   if (code === 'PGRST202' || code === '42883') {
-    return 'Server par ye hisaab abhi purane tareeqe par hai (database update baqi hai). Admin se rabta karein; kuch save nahi hua.';
+    return 'The server still handles this the old way (a database update is pending). Please contact the admin; nothing was saved.';
   }
-  if (code === 'MOOCO401' || code === 'PGRST301' || /login zaroori|jwt expired/i.test(message)) {
-    return 'Login zaroori hai. Dobara sign in karein; kuch save nahi hua.';
+  if (code === 'MOOCO401' || code === 'PGRST301' || /login zaroori|login required|jwt expired/i.test(message)) {
+    return 'Login required. Please sign in again; nothing was saved.';
   }
-  if (/row-level security|permission denied/i.test(message)) return 'Aap ko is kaam ki ijazat nahi hai.';
+  if (/row-level security|permission denied/i.test(message)) return "You don't have permission to do this.";
   if (isLostResponse(err)) {
-    return 'Server se jawab nahi aaya. Internet check karke dobara Save karein: agar pehli koshish save ho chuki thi to dobara post nahi hogi.';
+    return "No reply from the server. Check the internet and press Save again: if the first try was already saved, it won't be posted twice.";
   }
-  return message || 'Kuch ghalat ho gaya. Dobara koshish karein.';
+  return message || 'Something went wrong. Please try again.';
 }

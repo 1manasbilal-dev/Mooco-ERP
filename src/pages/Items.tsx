@@ -44,13 +44,13 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
 
 const SORT_OPTIONS: { value: `${SortField}:${SortOrder}`; label: string }[] = [
   { value: 'sort_order:asc', label: 'POS order' },
-  { value: 'name:asc', label: 'Naam A-Z' },
-  { value: 'stock:asc', label: 'Kam stock pehle' },
-  { value: 'stock:desc', label: 'Zyada stock pehle' },
-  { value: 'selling_price:desc', label: 'Mehnga pehle' },
-  { value: 'selling_price:asc', label: 'Sasta pehle' },
-  { value: 'margin:asc', label: 'Kam margin pehle' },
-  { value: 'margin:desc', label: 'Zyada margin pehle' },
+  { value: 'name:asc', label: 'Name A-Z' },
+  { value: 'stock:asc', label: 'Lowest stock first' },
+  { value: 'stock:desc', label: 'Highest stock first' },
+  { value: 'selling_price:desc', label: 'Highest price first' },
+  { value: 'selling_price:asc', label: 'Lowest price first' },
+  { value: 'margin:asc', label: 'Lowest margin first' },
+  { value: 'margin:desc', label: 'Highest margin first' },
 ];
 
 function SheetLoading({ onClose }: { onClose: () => void }) {
@@ -328,9 +328,9 @@ const Items: React.FC = () => {
       <div className="rounded-card border border-line bg-surface shadow-e1">
         <EmptyState
           icon={<Boxes />}
-          title="Abhi koi product nahi"
-          description="Doodh, dahi, packaging ya raw material: pehla product add karein, phir POS aur inventory mein dikhega."
-          action={canCreate ? <Button leftIcon={<Plus />} onClick={openCreate}>Product add karein</Button> : undefined}
+          title="No products yet"
+          description="Milk, yogurt, packaging or raw material: add your first product and it will show in POS and inventory."
+          action={canCreate ? <Button leftIcon={<Plus />} onClick={openCreate}>Add product</Button> : undefined}
         />
       </div>
     );
@@ -339,9 +339,9 @@ const Items: React.FC = () => {
       <div className="rounded-card border border-line bg-surface shadow-e1">
         <EmptyState
           icon={<Boxes />}
-          title="Koi product nahi mila"
-          description={search.trim() ? `"${search.trim()}" se milta koi product in filters mein nahi.` : 'In filters mein koi product nahi.'}
-          action={<Button variant="secondary" leftIcon={<X />} onClick={clearFilters}>Filters saaf karein</Button>}
+          title="No products found"
+          description={search.trim() ? `No product matching "${search.trim()}" in these filters.` : 'No products in these filters.'}
+          action={<Button variant="secondary" leftIcon={<X />} onClick={clearFilters}>Clear filters</Button>}
         />
       </div>
     );
@@ -395,7 +395,7 @@ const Items: React.FC = () => {
     <div className="flex flex-col gap-4 pb-20 sm:gap-5">
       <PageHeader
         eyebrow="Product catalog"
-        description="Products, raw materials aur packaging: rate, cost, units aur POS order ek jagah."
+        description="Products, raw materials and packaging: rate, cost, units and POS order in one place."
         actions={<>
           <Button variant="secondary" leftIcon={<Tag />} onClick={() => setCategoriesOpen(true)}>Categories</Button>
           <Button variant="secondary" leftIcon={<Ruler />} onClick={() => setUnitsOpen(true)}>Units</Button>
@@ -409,18 +409,18 @@ const Items: React.FC = () => {
           value={stats.active}
           icon={<Boxes />}
           tone="brand"
-          hint={`${stats.sale} POS mein`}
+          hint={`${stats.sale} in POS`}
           loading={loading}
           onClick={stockFilter !== 'all' ? () => setStockFilter('all') : undefined}
         />
-        <StatCard label="Low stock" value={stats.low} icon={<AlertTriangle />} tone={stats.low ? 'warning' : 'neutral'} hint="alert se kam" loading={loading} onClick={() => setStockFilter(stockFilter === 'low' ? 'all' : 'low')} />
-        <StatCard label="Out of stock" value={stats.out} icon={<PackageX />} tone={stats.out ? 'danger' : 'neutral'} hint="bik nahi sakte" loading={loading} onClick={() => setStockFilter(stockFilter === 'out' ? 'all' : 'out')} />
-        <StatCard label="Stock value" value={<Money amount={stats.value} compact />} icon={<Wallet />} hint="cost par" loading={loading} />
+        <StatCard label="Low stock" value={stats.low} icon={<AlertTriangle />} tone={stats.low ? 'warning' : 'neutral'} hint="below alert" loading={loading} onClick={() => setStockFilter(stockFilter === 'low' ? 'all' : 'low')} />
+        <StatCard label="Out of stock" value={stats.out} icon={<PackageX />} tone={stats.out ? 'danger' : 'neutral'} hint="can't be sold" loading={loading} onClick={() => setStockFilter(stockFilter === 'out' ? 'all' : 'out')} />
+        <StatCard label="Stock value" value={<Money amount={stats.value} compact />} icon={<Wallet />} hint="at cost" loading={loading} />
       </section>
 
       <div className="flex flex-col gap-2">
         <Toolbar>
-          <SearchInput value={search} onChange={setSearch} placeholder="Product ya category dhoondein..." aria-label="Products search karein" className="w-full sm:w-64 lg:w-72" />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search product or category..." aria-label="Search products" className="w-full sm:w-64 lg:w-72" />
           <SegmentedControl aria-label="Product type" size="sm" value={filterType} onChange={setFilterType} options={typeOptions} />
           <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
             <Select aria-label="Status" value={filterStatus} onChange={event => setFilterStatus(event.target.value as StatusFilter)} className="h-9 w-auto min-w-0 flex-1 text-xs sm:flex-none">
@@ -462,14 +462,14 @@ const Items: React.FC = () => {
             <span className="font-semibold text-fg-muted">{filteredRows.length} of {items.length} products</span>
             {stockFilter !== 'all' && (
               <Badge tone={stockFilter === 'low' ? 'warning' : 'danger'}>
-                {stockFilter === 'low' ? 'Sirf low stock' : 'Sirf out of stock'}
-                <button type="button" aria-label="Stock filter hatayen" className="-mr-1 cursor-pointer rounded-full p-0.5 hover:bg-black/5" onClick={() => setStockFilter('all')}><X className="size-3" /></button>
+                {stockFilter === 'low' ? 'Low stock only' : 'Out of stock only'}
+                <button type="button" aria-label="Remove stock filter" className="-mr-1 cursor-pointer rounded-full p-0.5 hover:bg-black/5" onClick={() => setStockFilter('all')}><X className="size-3" /></button>
               </Badge>
             )}
-            {filtersOn && <Button size="sm" variant="ghost" onClick={clearFilters}>Filters saaf karein</Button>}
+            {filtersOn && <Button size="sm" variant="ghost" onClick={clearFilters}>Clear filters</Button>}
             {view === 'list' && canEdit && (
               <span className="ml-auto hidden sm:inline">
-                {reorderEnabled ? 'Row khench kar ya ↑↓ se POS order badlein.' : 'POS order badalne ke liye sort "POS order" rakhein.'}
+                {reorderEnabled ? 'Drag a row or use ↑↓ to change the POS order.' : 'To change the POS order, sort by "POS order".'}
               </span>
             )}
           </div>

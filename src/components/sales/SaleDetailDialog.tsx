@@ -64,14 +64,14 @@ export default function SaleDetailDialog({ sale, modeLock, onClose, onCopy, onCh
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Customer</p>
             <p className="mt-0.5 truncate font-semibold text-fg">{sale.customer_name || 'Walk-in Customer'}</p>
-            {sale.customer_id && <p className="text-xs font-medium text-fg-subtle">Khata Account</p>}
+            {sale.customer_id && <p className="text-xs font-medium text-fg-subtle">Ledger Account</p>}
           </div>
           <div className="min-w-0 text-right">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Payment Mode</p>
             <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5">
               <PaymentModeBadge mode={sale.payment_mode} title={modeLock || undefined} />
               {!modeLock && (
-                <Button size="sm" variant="ghost" leftIcon={<ArrowLeftRight />} onClick={() => onChangeMode(sale)} title="Payment mode tabdeel karein">
+                <Button size="sm" variant="ghost" leftIcon={<ArrowLeftRight />} onClick={() => onChangeMode(sale)} title="Change payment mode">
                   Change
                 </Button>
               )}

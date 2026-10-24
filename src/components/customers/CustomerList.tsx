@@ -23,7 +23,7 @@ const SortHeader = ({
       <button
         type="button"
         onClick={() => onSortChange(active ? 'default' : value)}
-        title={active ? 'Asal tarteeb par wapas' : value === 'name' ? 'Naam se sort (A-Z)' : 'Sab se zyada baqaya pehle'}
+        title={active ? 'Back to the original order' : value === 'name' ? 'Sort by name (A-Z)' : 'Highest balance due first'}
         className={cn('inline-flex cursor-pointer items-center gap-1 uppercase tracking-wider hover:text-fg', active && 'text-brand-fg')}
       >
         {label}
@@ -111,7 +111,7 @@ const CustomerTableRow = memo(function CustomerTableRow({ customer: c, selected,
         <TD className="w-10" onClick={stop}>
           <input
             type="checkbox"
-            aria-label={`${c.name} select karein`}
+            aria-label={`Select ${c.name}`}
             className="size-4 cursor-pointer rounded accent-brand"
             checked={selected}
             onChange={() => onToggle(c.id)}
@@ -150,12 +150,12 @@ const CustomerTableRow = memo(function CustomerTableRow({ customer: c, selected,
       </TD>
       <TD onClick={stop}>
         <div className="flex justify-end gap-1">
-          <IconButton size="sm" aria-label="Khata ledger dekhein" icon={<FileText />} onClick={() => onOpen(c.id)} />
-          {canEdit && <IconButton size="sm" aria-label="Customer edit karein" icon={<Pencil />} onClick={() => onEdit(c)} />}
+          <IconButton size="sm" aria-label="View ledger" icon={<FileText />} onClick={() => onOpen(c.id)} />
+          {canEdit && <IconButton size="sm" aria-label="Edit customer" icon={<Pencil />} onClick={() => onEdit(c)} />}
           {canDelete && (
             <IconButton
               size="sm"
-              aria-label="Customer delete / archive karein"
+              aria-label="Delete / archive customer"
               icon={<Trash2 />}
               className="hover:bg-danger-soft hover:text-danger-fg"
               onClick={() => onDelete(c)}
@@ -245,16 +245,16 @@ export function CustomerList(props: CustomerListProps) {
   const emptyState = !hasAnyCustomer ? (
     <EmptyState
       icon={<Users />}
-      title="Abhi koi customer nahi"
-      description="Pehla customer add karein, phir unka khata yahan nazar aayega."
+      title="No customers yet"
+      description="Add your first customer and their ledger will show here."
       action={canCreate ? <Button leftIcon={<UserPlus />} onClick={onAdd}>Add customer</Button> : undefined}
     />
   ) : (
     <EmptyState
       icon={<Users />}
-      title="Koi customer nahi mila"
-      description="Search ya filter badal kar dobara dekhein."
-      action={<Button variant="secondary" onClick={onClearFilters}>Filters saaf karein</Button>}
+      title="No customers found"
+      description="Try a different search or filter."
+      action={<Button variant="secondary" onClick={onClearFilters}>Clear filters</Button>}
     />
   );
 
@@ -264,8 +264,8 @@ export function CustomerList(props: CustomerListProps) {
         <SearchInput
           value={search}
           onChange={onSearchChange}
-          placeholder="Naam, phone, city ya bill # ..."
-          aria-label="Customers search karein"
+          placeholder="Name, phone, city or bill # ..."
+          aria-label="Search customers"
           className="flex-1 sm:w-72 sm:flex-none"
         />
         {/* Phones: the primary action sits next to search so it never wraps out of reach. */}
@@ -292,13 +292,13 @@ export function CustomerList(props: CustomerListProps) {
           >
             <option value="Active">Active ({statusCounts.Active})</option>
             <option value="Inactive">Inactive / archived ({statusCounts.Inactive})</option>
-            <option value="All">Sab customers ({statusCounts.All})</option>
+            <option value="All">All customers ({statusCounts.All})</option>
           </Select>
           {!isTable && (
             <Select aria-label="Sort" value={sort} onChange={e => onSortChange(e.target.value as CustomerSort)} className="sm:w-auto">
-              <option value="default">Asal tarteeb</option>
-              <option value="name">Naam (A-Z)</option>
-              <option value="balance">Zyada baqaya pehle</option>
+              <option value="default">Original order</option>
+              <option value="name">Name (A-Z)</option>
+              <option value="balance">Highest due first</option>
             </Select>
           )}
         </div>
@@ -306,7 +306,7 @@ export function CustomerList(props: CustomerListProps) {
           <div className="ml-auto hidden items-center gap-2 sm:flex">
             {canDelete && selectedCount > 0 && (
               <Button variant="danger-soft" size="sm" leftIcon={<Archive />} onClick={onBulkArchive}>
-                {selectedCount} archive karein
+                Archive {selectedCount}
               </Button>
             )}
             {canCreate && <Button leftIcon={<UserPlus />} onClick={onAdd}>Add customer</Button>}
@@ -324,7 +324,7 @@ export function CustomerList(props: CustomerListProps) {
                     <TH className="w-10">
                       <input
                         type="checkbox"
-                        aria-label="Sab customers select karein"
+                        aria-label="Select all customers"
                         className="size-4 cursor-pointer rounded accent-brand"
                         checked={allSelected}
                         onChange={e => onToggleAll(e.target.checked)}

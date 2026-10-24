@@ -13,7 +13,7 @@ const Icon = ({ tone, children }: { tone: 'danger' | 'warning'; children: React.
 );
 
 /**
- * Remove a supplier safely: a supplier with history or an open khata is archived (made inactive), never
+ * Remove a supplier safely: a supplier with history or an open ledger balance is archived (made inactive), never
  * hard-deleted, so milk slips and payments stay in the books. `ids` with more than one entry is a bulk archive.
  */
 export function SupplierDeleteDialog({ ids, onClose, onDone }: {
@@ -73,23 +73,23 @@ export function SupplierDeleteDialog({ ids, onClose, onDone }: {
         dismissible={!busy}
         role="alertdialog"
         icon={<Icon tone="warning"><Archive /></Icon>}
-        title={`${active.length} supplier${active.length === 1 ? '' : 's'} inactive karein?`}
-        description="Inactive supplier milk intake mein nahi aate. Unki milk slips, FAT/SNF aur payments mehfooz rehti hain."
+        title={`Make ${active.length} supplier${active.length === 1 ? '' : 's'} inactive?`}
+        description="Inactive suppliers don't show in milk intake. Their milk slips, FAT/SNF and payments stay safe."
         footer={
           <>
             {cancel}
             <Button variant="danger" leftIcon={<Archive />} loading={busy === 'deactivate'} disabled={active.length === 0} onClick={() => run('deactivate')}>
-              {busy ? `Inactive ho rahe hain ${progress}/${active.length}` : 'Inactive karein'}
+              {busy ? `Making inactive ${progress}/${active.length}` : 'Make inactive'}
             </Button>
           </>
         }
       >
         <ul className="space-y-1.5 text-[13px] text-fg-muted">
-          {targets.length > active.length && <li>{targets.length - active.length} pehle se inactive hain, unhein chhor diya jayega.</li>}
+          {targets.length > active.length && <li>{targets.length - active.length} already inactive, they will be skipped.</li>}
           {payable.length > 0 && (
             <li className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 font-medium text-warning-fg">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-              <span>{payable.length} supplier ka <Money amount={payableTotal} /> payable khata mein rahega.</span>
+              <span><Money amount={payableTotal} /> payable to {payable.length} supplier{payable.length === 1 ? '' : 's'} stays in the ledger.</span>
             </li>
           )}
         </ul>
@@ -114,32 +114,32 @@ export function SupplierDeleteDialog({ ids, onClose, onDone }: {
         dismissible={!busy}
         role="alertdialog"
         icon={<Icon tone="warning"><AlertTriangle /></Icon>}
-        title={payable ? 'Is supplier ka payable baqi hai' : 'Is supplier par advance baqi hai'}
-        description={`${target.name}: open khata wala supplier delete nahi hota, warna creditors ka hisaab ghalat ho jayega.`}
+        title={payable ? 'We still owe this supplier' : 'This supplier still has an advance'}
+        description={`${target.name}: a supplier with an open ledger balance can't be deleted, or the creditors balance would be wrong.`}
         footer={
           <div className="flex w-full flex-col gap-2">
             {payable && (
               <Button variant="danger" fullWidth loading={busy === 'settle_discount'} disabled={Boolean(busy)} onClick={() => run('settle_discount')}>
-                Waiver / discount se settle karke inactive karein
+                Settle with a waiver / discount and make inactive
               </Button>
             )}
             {!alreadyInactive && (
               <Button variant="secondary" fullWidth leftIcon={<Archive />} loading={busy === 'deactivate'} disabled={Boolean(busy)} onClick={() => run('deactivate')}>
-                {payable ? 'Payable khata mein rakh kar inactive karein' : 'Advance khata mein rakh kar inactive karein'}
+                {payable ? 'Keep payable in the ledger and make inactive' : 'Keep advance in the ledger and make inactive'}
               </Button>
             )}
-            <Button variant="ghost" fullWidth onClick={onClose} disabled={Boolean(busy)}>Cancel, active rehne dein</Button>
+            <Button variant="ghost" fullWidth onClick={onClose} disabled={Boolean(busy)}>Cancel, keep active</Button>
           </div>
         }
       >
         <div className={cn('rounded-control px-4 py-3 text-center', payable ? 'bg-danger-soft text-danger-fg' : 'bg-success-soft text-success-fg')}>
-          <p className="text-[11px] font-semibold uppercase tracking-wider">{payable ? 'Payable · hum ne dena hai' : 'Advance · supplier ne wapas karna hai'}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider">{payable ? 'Payable · we owe' : 'Advance · supplier owes us back'}</p>
           <Money amount={Math.abs(balance)} className="mt-1 block text-2xl font-bold" />
         </div>
         <p className="mt-3 text-xs text-fg-subtle">
           {payable
-            ? 'Waiver ek "Supplier Waiver / Discount" entry banata hai: khata zero hota hai, kisi account se paisa nahi nikalta.'
-            : 'Advance waiver se khatam nahi hota. Pehle paisa wapas lein ya milk se adjust karein, ya khata rakh kar inactive karein.'}
+            ? 'A waiver makes a "Supplier Waiver / Discount" entry: the ledger goes to zero and no money leaves any account.'
+            : "A waiver can't clear an advance. First take the money back or adjust it against milk, or keep the ledger and make inactive."}
         </p>
       </Modal>
     );
@@ -153,21 +153,21 @@ export function SupplierDeleteDialog({ ids, onClose, onDone }: {
         dismissible={!busy}
         role="alertdialog"
         icon={<Icon tone="warning"><Archive /></Icon>}
-        title={alreadyInactive ? 'Supplier pehle se inactive hai' : 'Supplier inactive karein?'}
-        description={`${target.name}: ${historyText}. Purana record hamesha mehfooz rahega.`}
+        title={alreadyInactive ? 'Supplier is already inactive' : 'Make supplier inactive?'}
+        description={`${target.name}: ${historyText}. Old records always stay safe.`}
         footer={
           <>
             {cancel}
             {!alreadyInactive && (
-              <Button variant="danger" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Inactive karein</Button>
+              <Button variant="danger" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Make inactive</Button>
             )}
           </>
         }
       >
         <p className="text-[13px] text-fg-muted">
           {alreadyInactive
-            ? 'History wala supplier permanently delete nahi hota. Wapas laane ke liye profile par Reactivate dabayein.'
-            : 'Khata settled hai (Rs 0). Inactive supplier daily milk intake mein nahi aayega, lekin slips, FAT/SNF aur payments mehfooz rahengi.'}
+            ? "A supplier with history can't be deleted permanently. To bring them back, press Reactivate on the profile."
+            : "The ledger is settled (Rs 0). An inactive supplier won't show in daily milk intake, but slips, FAT/SNF and payments stay safe."}
         </p>
       </Modal>
     );
@@ -180,8 +180,8 @@ export function SupplierDeleteDialog({ ids, onClose, onDone }: {
       dismissible={!busy}
       role="alertdialog"
       icon={<Icon tone="danger"><Trash2 /></Icon>}
-      title="Permanently delete karein?"
-      description={`${target.name} ka koi milk intake, material ya payment record nahi, aur khata Rs 0 hai.`}
+      title="Delete permanently?"
+      description={`${target.name} has no milk intake, material or payment records, and the ledger is Rs 0.`}
       footer={
         <>
           {cancel}
@@ -189,7 +189,7 @@ export function SupplierDeleteDialog({ ids, onClose, onDone }: {
         </>
       }
     >
-      <p className="text-[13px] text-fg-muted">Supplier database se hamesha ke liye hat jayega. Ye wapas nahi hoga.</p>
+      <p className="text-[13px] text-fg-muted">The supplier will be removed from the database for good. This can't be undone.</p>
     </Modal>
   );
 }

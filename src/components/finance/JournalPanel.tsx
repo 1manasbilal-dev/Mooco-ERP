@@ -82,8 +82,8 @@ export default function JournalPanel() {
     const list: SelectableAccount[] = [];
     manualAccounts.filter(a => a.isActive !== false).forEach(a => list.push({ id: a.id, name: a.name, kind: 'Manual', category: a.type }));
     accounts.filter(a => a.isActive).forEach(a => list.push({ id: a.id, name: a.name, kind: 'Bank', category: 'Asset' }));
-    // Customer / supplier khata is not offered: a journal line cannot post to those ledgers, and it
-    // used to be dropped silently. Use Receive Payment / Pay Supplier (or a khata charge) instead.
+    // Customer / supplier ledgers are not offered: a journal line cannot post to those ledgers, and it
+    // used to be dropped silently. Use Receive Payment / Pay Supplier (or a ledger charge) instead.
     return list;
   }, [manualAccounts, accounts]);
   const selectableById = useMemo(() => new Map(selectable.map(a => [a.id, a])), [selectable]);
@@ -102,9 +102,9 @@ export default function JournalPanel() {
   const isEmpty = totalDebit === 0 && totalCredit === 0;
 
   const problems: string[] = [];
-  if (!date) problems.push('Tareekh chunein.');
-  else if (isPeriodLocked(date)) problems.push(`Books ${settings.security?.lockDate} tak band hain. Baad ki tareekh chunein.`);
-  if (lines.some(l => !l.accountId)) problems.push('Har line mein account chunein.');
+  if (!date) problems.push('Choose a date.');
+  else if (isPeriodLocked(date)) problems.push(`Books are closed up to ${settings.security?.lockDate}. Choose a later date.`);
+  if (lines.some(l => !l.accountId)) problems.push('Choose an account on every line.');
   if (lines.some(l => {
     const dr = parseAmount(l.debit);
     const cr = parseAmount(l.credit);
@@ -112,8 +112,8 @@ export default function JournalPanel() {
     const hasCr = Number.isFinite(cr) && cr > 0;
     const badInput = (l.debit.trim() && !(Number.isFinite(dr) && dr >= 0)) || (l.credit.trim() && !(Number.isFinite(cr) && cr >= 0));
     return badInput || hasDr === hasCr;
-  })) problems.push('Har line mein sirf Debit ya sirf Credit mein raqam likhein.');
-  if (!isBalanced) problems.push('Debit aur Credit barabar hone chahiyen.');
+  })) problems.push('Enter an amount in either Debit or Credit on each line, not both.');
+  if (!isBalanced) problems.push('Debit and Credit must be equal.');
 
   const updateLine = (id: string, patch: Partial<DraftLine>) => setLines(prev => prev.map(line => (line.id === id ? { ...line, ...patch } : line)));
   const removeLine = (id: string) => setLines(prev => (prev.length <= 2 ? prev : prev.filter(line => line.id !== id)));
@@ -121,7 +121,7 @@ export default function JournalPanel() {
   const handlePost = async () => {
     setSubmitted(true);
     if (!canCreate) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return;
     }
     if (busyRef.current || problems.length > 0) return;
@@ -144,13 +144,13 @@ export default function JournalPanel() {
       const ok = await addJournalEntry({ date, referenceNo: reference.trim(), narration: narration.trim(), lines: payloadLines, totalAmount: totalDebit });
       // Keep the form on failure so nothing typed is lost. addJournalEntry already toasts the reason on every failure.
       if (!ok) return;
-      showToast('Journal entry post ho gayi', 'success');
+      showToast('Journal entry posted', 'success');
       setReference('');
       setNarration('');
       setLines(blankLines());
       setSubmitted(false);
     } catch (err: any) {
-      showToast('Journal entry post nahi hui: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Journal entry couldn't be posted: " + (err?.message || 'please try again'), 'error');
     } finally {
       busyRef.current = false;
       setSaving(false);
@@ -162,7 +162,7 @@ export default function JournalPanel() {
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <Card>
-        <CardHeader icon={<BookOpen />} title="New journal voucher" description="Debit aur Credit barabar hon tab hi post hoga." />
+        <CardHeader icon={<BookOpen />} title="New journal voucher" description="It posts only when Debit and Credit are equal." />
         <CardBody className="flex flex-col gap-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Date" required>
@@ -173,7 +173,7 @@ export default function JournalPanel() {
             </Field>
           </div>
           <Field label="Narration">
-            {control => <Input {...control} placeholder="Entry ki wajah / tafseel..." value={narration} onChange={event => setNarration(event.target.value)} maxLength={300} />}
+            {control => <Input {...control} placeholder="Reason / details of the entry..." value={narration} onChange={event => setNarration(event.target.value)} maxLength={300} />}
           </Field>
 
           <div className="flex flex-col gap-2">
@@ -195,7 +195,7 @@ export default function JournalPanel() {
                     onChange={event => updateLine(line.id, { accountId: event.target.value })}
                     aria-invalid={submitted && !line.accountId ? true : undefined}
                   >
-                    <option value="">Account chunein...</option>
+                    <option value="">Choose account...</option>
                     {groups.map(group => (
                       <optgroup key={group.label} label={group.label}>
                         {group.accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
@@ -203,7 +203,7 @@ export default function JournalPanel() {
                     ))}
                   </Select>
                   <IconButton
-                    aria-label={`Line ${index + 1} hatayen`}
+                    aria-label={`Remove line ${index + 1}`}
                     icon={<Trash2 />}
                     size="sm"
                     disabled={lines.length <= 2}
@@ -234,7 +234,7 @@ export default function JournalPanel() {
                   className="text-right font-semibold tabular-nums"
                 />
                 <IconButton
-                  aria-label={`Line ${index + 1} hatayen`}
+                  aria-label={`Remove line ${index + 1}`}
                   icon={<Trash2 />}
                   size="sm"
                   disabled={lines.length <= 2}
@@ -273,7 +273,7 @@ export default function JournalPanel() {
             leftIcon={<CheckCircle2 />}
             loading={saving}
             disabled={!canCreate || totalDebit === 0}
-            title={!canCreate ? 'Aap ko journal entry post karne ki ijazat nahi hai' : undefined}
+            title={!canCreate ? "You don't have permission to post journal entries" : undefined}
             onClick={handlePost}
           >
             Post journal entry
@@ -289,7 +289,7 @@ export default function JournalPanel() {
           className="border-b border-line pb-4"
         />
         {journalEntries.length === 0 ? (
-          <EmptyState size="compact" icon={<BookOpen />} title="Abhi koi journal entry nahi" description="Post ki gayi entries yahan nazar aayengi." />
+          <EmptyState size="compact" icon={<BookOpen />} title="No journal entries yet" description="Posted entries will show up here." />
         ) : (
           <ul className="divide-y divide-line">
             {visibleItems.map(entry => <VoucherCard key={entry.id} entry={entry} />)}

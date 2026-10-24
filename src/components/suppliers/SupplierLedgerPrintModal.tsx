@@ -79,26 +79,26 @@ export interface SupplierLedgerPrintModalProps {
 }
 
 const MODAL_PRESETS: { id: DatePreset; label: string; desc: string }[] = [
-  { id: 'all', label: 'All time', desc: 'Poori history' },
-  { id: 'today', label: 'Today', desc: 'Sirf aaj' },
-  { id: 'week', label: 'This week', desc: 'Monday se aaj tak' },
-  { id: 'tendays', label: '10 days cycle', desc: 'Dahha billing' },
+  { id: 'all', label: 'All time', desc: 'Full history' },
+  { id: 'today', label: 'Today', desc: 'Today only' },
+  { id: 'week', label: 'This week', desc: 'Monday to today' },
+  { id: 'tendays', label: '10 days cycle', desc: '10-day billing' },
   { id: 'fifteendays', label: '15 days cycle', desc: 'Fortnightly' },
-  { id: 'month', label: 'This month', desc: 'Is mahine' },
-  { id: 'lastmonth', label: 'Last month', desc: 'Pichla mahina' },
-  { id: 'custom', label: 'Custom range', desc: 'Apni tareekhein' }
+  { id: 'month', label: 'This month', desc: 'This month so far' },
+  { id: 'lastmonth', label: 'Last month', desc: 'Previous month' },
+  { id: 'custom', label: 'Custom range', desc: 'Your own dates' }
 ];
 
 const TYPE_OPTIONS: { id: LedgerTypeFilter; title: string; desc: string }[] = [
-  { id: 'All', title: 'All records', desc: 'Poora ledger' },
+  { id: 'All', title: 'All records', desc: 'Full ledger' },
   { id: 'Milk', title: 'Milk only', desc: 'Milk supply' },
   { id: 'Payment', title: 'Payments only', desc: 'Cash & bank' },
   { id: 'Material', title: 'Materials / feed', desc: 'Feed & items' }
 ];
 
 const LAYOUTS: { id: 'detailed' | 'daily_summary'; title: string; desc: string }[] = [
-  { id: 'detailed', title: 'Detailed ledger', desc: 'Har purchase, material aur payment voucher tareekh ke hisaab se' },
-  { id: 'daily_summary', title: 'Daily summary', desc: 'Har din ki ek line, subah + shaam ka milk mila kar (aksar 1 page)' }
+  { id: 'detailed', title: 'Detailed ledger', desc: 'Every purchase, material and payment voucher by date' },
+  { id: 'daily_summary', title: 'Daily summary', desc: 'One line per day, morning + evening milk together (often 1 page)' }
 ];
 
 /** Selectable tile used for the preset, type and layout choices. */
@@ -206,7 +206,7 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
       <div className="flex flex-col gap-5 text-fg">
         <section>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <StepLabel icon={<CalendarDays />}>1. Tareekh chunein</StepLabel>
+            <StepLabel icon={<CalendarDays />}>1. Choose dates</StepLabel>
             <Badge tone="brand" className="-mt-2">{statement.rangeLabel}</Badge>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -224,7 +224,7 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
                 To
                 <Input type="date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} className="mt-1" />
               </label>
-              <p className="col-span-2 text-[11px] text-fg-subtle">Dono tareekhein statement mein shamil hongi.</p>
+              <p className="col-span-2 text-[11px] text-fg-subtle">Both dates will be included in the statement.</p>
             </div>
           )}
         </section>
@@ -250,7 +250,7 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
         <section className="rounded-card border border-line bg-surface-2 p-4">
           <div className="mb-3 flex items-center justify-between gap-2 text-xs">
             <span className="font-semibold text-fg-muted">Preview</span>
-            <span className="text-fg-subtle">{statement.printRows.length} entries print hongi</span>
+            <span className="text-fg-subtle">{statement.printRows.length} entries will print</span>
           </div>
           <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <div className="rounded-control border border-line bg-surface p-2.5">
@@ -283,7 +283,7 @@ export function SupplierLedgerPrintModal(props: SupplierLedgerPrintModalProps) {
         {blocked && (
           <p role="alert" className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-xs font-medium text-warning-fg">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            Browser ne print window rok di. Address bar mein popups allow karein, phir dobara Print dabayein.
+            The browser blocked the print window. Allow popups in the address bar, then press Print again.
           </p>
         )}
       </div>

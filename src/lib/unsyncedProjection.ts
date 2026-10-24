@@ -5,7 +5,7 @@ import { addMove, saleLineMove } from './saleStockMove';
  * Server snapshot + local journal.
  * Atomic vouchers (milk, supplier payment, expense, customer receipt) are
  * replayed only when their document is not already on the server.
- * A POS sale is two steps (sale row, then stock/cash/khata), so its effects
+ * A POS sale is two steps (sale row, then stock/cash/ledger), so its effects
  * stay on screen until the local order is marked synced.
  */
 

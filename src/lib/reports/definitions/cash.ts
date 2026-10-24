@@ -78,7 +78,7 @@ export const cashReports: ReportDefinition[] = [
             { key: 'cash', label: 'Cash', format: 'money', total: true },
             { key: 'online', label: 'Online', format: 'money', total: true },
             { key: 'credit', label: 'Credit', format: 'money', total: true },
-            { key: 'recovered', label: 'Khata recovered', format: 'money', total: true, hidden: true },
+            { key: 'recovered', label: 'Credit recovered', format: 'money', total: true, hidden: true },
             { key: 'expenses', label: 'Paid out', format: 'money', total: true, hidden: true },
             { key: 'expected', label: 'Expected cash', format: 'money', total: true },
             { key: 'counted', label: 'Counted', format: 'money', total: true },

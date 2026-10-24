@@ -172,10 +172,10 @@ export function readPileCount(pile: CountPile, typed: string | undefined): PileC
   const text = String(typed ?? '').trim().replace(/,/g, '');
   if (!text) return { counted: null, error: '', diff: 0, baseDiff: 0 };
   const value = Number(text);
-  const error = !Number.isFinite(value) ? 'Sahi number likhein.'
-    : value < 0 ? 'Minus ginti nahi ho sakti.'
-    : pile.kind === 'stray' && value !== 0 ? 'Purani ginti sirf 0 ki ja sakti hai.'
-    : pile.wholeOnly && !Number.isInteger(value) ? 'Packs poore number mein likhein.'
+  const error = !Number.isFinite(value) ? 'Enter a valid number.'
+    : value < 0 ? "Count can't be negative."
+    : pile.kind === 'stray' && value !== 0 ? 'An old count can only be set to 0.'
+    : pile.wholeOnly && !Number.isInteger(value) ? 'Enter packs as whole numbers.'
     : '';
   if (error) return { counted: null, error, diff: 0, baseDiff: 0 };
   const diff = cleanQty(value - pile.system);

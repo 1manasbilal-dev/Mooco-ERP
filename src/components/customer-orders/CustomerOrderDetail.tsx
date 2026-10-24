@@ -129,7 +129,7 @@ export default function CustomerOrderDetail({ order: detail, busy, onClose, onEd
             </p>
             {hasPermission('customers') && (
               <Button variant="ghost" leftIcon={<Wallet />} className="-ml-3 mt-1 text-brand-fg hover:text-brand-fg" onClick={() => goTo(`/customers?id=${encodeURIComponent(detail.customer_id)}`)}>
-                Customer khata
+                Customer ledger
               </Button>
             )}
           </div>

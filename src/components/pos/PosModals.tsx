@@ -22,7 +22,7 @@ const dialogIcon = (icon: React.ReactNode, tone: 'brand' | 'warning' | 'success'
   )}>{icon}</span>
 );
 
-/** "10:42 AM", or "Kal 10:42 AM" / date for bills parked on an earlier day (the id carries the park time). */
+/** "10:42 AM", or "Yesterday 10:42 AM" / date for bills parked on an earlier day (the id carries the park time). */
 const parkedWhen = (held: HeldOrder) => {
   const parkedAt = Number(String(held.id).replace(/^hold_/, ''));
   if (!Number.isFinite(parkedAt) || parkedAt <= 0) return held.timestamp;
@@ -30,7 +30,7 @@ const parkedWhen = (held: HeldOrder) => {
   const today = new Date();
   const dayDiff = Math.round((new Date(today.toDateString()).getTime() - new Date(parked.toDateString()).getTime()) / 86_400_000);
   if (dayDiff <= 0) return held.timestamp;
-  if (dayDiff === 1) return `Kal ${held.timestamp}`;
+  if (dayDiff === 1) return `Yesterday ${held.timestamp}`;
   return `${parked.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} ${held.timestamp}`;
 };
 
@@ -46,10 +46,10 @@ export const PosHeldOrdersModal: React.FC<PosHeldOrdersModalProps> = ({ open, on
   const removeHeld = async (held: HeldOrder) => {
     const ok = await confirmAction({
       tone: 'danger',
-      title: 'Parked bill delete karein?',
+      title: 'Delete parked bill?',
       message: `${held.customerName} · ${formatCurrency(held.grandTotal)}`,
-      consequences: [`Is bill ke ${held.cart.length} item(s) hamesha ke liye hat jayenge.`, 'Stock ya khaate par koi asar nahi (bill save nahi hua tha).'],
-      confirmLabel: 'Haan, delete karein',
+      consequences: [`The ${held.cart.length} item(s) on this bill will be removed for good.`, "Stock and ledgers are not affected (the bill wasn't saved)."],
+      confirmLabel: 'Yes, delete',
     });
     if (ok) handleDeleteHeldOrder(held.id);
   };
@@ -61,10 +61,10 @@ export const PosHeldOrdersModal: React.FC<PosHeldOrdersModalProps> = ({ open, on
       size="lg"
       icon={dialogIcon(<PauseCircle />, 'warning')}
       title="Held / parked bills"
-      description="Parked bill ko wapas cart mein laayein."
+      description="Bring a parked bill back into the cart."
     >
       {heldOrders.length === 0 ? (
-        <EmptyState size="compact" icon={<PauseCircle />} title="Koi bill park nahi" description="Cart mein items hon to Hold (F8) se bill park karein." />
+        <EmptyState size="compact" icon={<PauseCircle />} title="No parked bills" description="With items in the cart, press Hold (F8) to park the bill." />
       ) : (
         <ul className="max-h-[60vh] space-y-2 overflow-y-auto pb-1">
           {heldOrders.map(held => (
@@ -76,7 +76,7 @@ export const PosHeldOrdersModal: React.FC<PosHeldOrdersModalProps> = ({ open, on
                 </p>
                 <p className="mt-1 text-xs text-fg-subtle">
                   {held.cart.length} item(s) · <Money amount={held.grandTotal} className="font-bold text-fg" />
-                  {held.paymentMode && held.paymentMode !== 'Cash' && <> · {held.paymentMode === 'Credit' ? 'Khata' : held.paymentMode}</>}
+                  {held.paymentMode && held.paymentMode !== 'Cash' && <> · {held.paymentMode}</>}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
@@ -98,12 +98,12 @@ interface PosShortcutsModalProps {
 
 const SHORTCUTS = [
   { key: 'F2', action: 'Product search' },
-  { key: 'Enter', action: 'Search mein pehla product kholein' },
-  { key: '↓', action: 'Search se product cards par jayein' },
+  { key: 'Enter', action: 'Open the first product in search' },
+  { key: '↓', action: 'Move from search to the product cards' },
   { key: 'F4', action: 'Customer search / select' },
-  { key: 'F8', action: 'Bill hold / park karein' },
-  { key: 'F9', action: 'Sale confirm aur payment complete' },
-  { key: 'Esc', action: 'Khula dialog ya list band karein' },
+  { key: 'F8', action: 'Hold / park the bill' },
+  { key: 'F9', action: 'Confirm sale and complete payment' },
+  { key: 'Esc', action: 'Close the open dialog or list' },
 ];
 
 export const PosShortcutsModal: React.FC<PosShortcutsModalProps> = ({ open, onClose }) => (
@@ -112,7 +112,7 @@ export const PosShortcutsModal: React.FC<PosShortcutsModalProps> = ({ open, onCl
     onClose={onClose}
     icon={dialogIcon(<Keyboard />)}
     title="POS keyboard shortcuts"
-    description="Counter par tez kaam ke liye."
+    description="For faster work at the counter."
   >
     <ul className="divide-y divide-line overflow-hidden rounded-control border border-line">
       {SHORTCUTS.map(sc => (
@@ -196,7 +196,7 @@ export const PosReceiptModal: React.FC<PosReceiptModalProps> = ({ open, onClose,
           )}
           <div className="receipt-line flex justify-between border-t pt-1 text-sm font-extrabold"><span>TOTAL:</span><span>{formatCurrency(sale.grandTotal)}</span></div>
           <div className="flex justify-between"><span>Paid:</span><span>{formatCurrency(sale.paidAmount)}</span></div>
-          {sale.dueAmount > 0 && <div className="receipt-warn flex justify-between"><span>Khata / Due:</span><span>{formatCurrency(sale.dueAmount)}</span></div>}
+          {sale.dueAmount > 0 && <div className="receipt-warn flex justify-between"><span>Credit / Due:</span><span>{formatCurrency(sale.dueAmount)}</span></div>}
           {sale.paymentMode === 'Cash' && sale.cashGiven > 0 && (
             <>
               <div className="receipt-muted flex justify-between text-[10px] font-normal"><span>Cash Received:</span><span>{formatCurrency(sale.cashGiven)}</span></div>
@@ -239,7 +239,7 @@ export const PosNewCustomerModal: React.FC<PosNewCustomerModalProps> = ({ open, 
       dismissible={!isCreatingCustomer}
       icon={dialogIcon(<UserPlus />)}
       title="Quick register customer"
-      description="Naya customer banayein; ye isi bill mein select ho jayega."
+      description="Create a new customer; they will be selected on this bill."
       initialFocusRef={nameRef}
       footer={
         <>
@@ -276,7 +276,7 @@ export const PosNewCustomerModal: React.FC<PosNewCustomerModalProps> = ({ open, 
             className="size-4 rounded accent-[rgb(var(--success))]"
           />
           <MessageCircle className="size-4" aria-hidden="true" />
-          Phone number hi WhatsApp hai
+          Phone number is also WhatsApp
         </label>
 
         {!newCustomer.is_phone_whatsapp && (
@@ -295,7 +295,7 @@ export const PosNewCustomerModal: React.FC<PosNewCustomerModalProps> = ({ open, 
         </div>
 
         <div className="space-y-2.5 rounded-control bg-surface-2 p-3 ring-1 ring-inset ring-line/70">
-          <Label className="mb-0">Opening balance (starting khata)</Label>
+          <Label className="mb-0">Opening balance (starting ledger)</Label>
           <SegmentedControl
             aria-label="Opening balance type"
             fullWidth
@@ -312,14 +312,14 @@ export const PosNewCustomerModal: React.FC<PosNewCustomerModalProps> = ({ open, 
                   step="any"
                   required
                   aria-label="Opening balance amount"
-                  placeholder="Opening balance likhein..."
+                  placeholder="Enter opening balance..."
                   className={cn(controlClass, 'h-10 pl-9 pr-3 font-bold tabular-nums')}
                   value={newCustomer.balanceAmount}
                   onChange={val => update({ balanceAmount: val })}
                 />
               </div>
               <p className={cn('mt-1.5 text-xs font-semibold', newCustomer.balanceType === 'Due' ? 'text-danger-fg' : 'text-success-fg')}>
-                {newCustomer.balanceType === 'Due' ? 'Customer ne ye raqam deni hai (due).' : 'Customer ki ye raqam aap ke paas jama hai (advance).'}
+                {newCustomer.balanceType === 'Due' ? 'The customer owes this amount (due).' : 'You hold this amount for the customer (advance).'}
               </p>
             </div>
           )}
@@ -443,14 +443,14 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
       <div className="space-y-4">
         {hiddenUnit && (
           <p role="status" className="rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
-            {hiddenUnit.name || 'Ye pack'} ab hidden hai, is liye bik nahi sakta. Neeche se doosri unit chunein ya line hata dein.
+            {hiddenUnit.name || 'This pack'} is now hidden, so it can't be sold. Choose another unit below or remove the line.
           </p>
         )}
         {(variants.length > 0 || hiddenUnit) && sellOptions.length > 0 && (
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <Label className="mb-0">Unit / packaging</Label>
-              <span className="text-[11px] text-fg-subtle">Abhi: {editingCartItem.unit}</span>
+              <span className="text-[11px] text-fg-subtle">Now: {editingCartItem.unit}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {sellOptions.map(unitOption)}
@@ -490,8 +490,8 @@ export const PosEditItemModal: React.FC<PosEditItemModalProps> = ({
           {leftAfter !== null && (
             <p className={cn('mt-1.5 text-[11px] font-semibold tabular-nums', leftAfter < -0.0005 ? (allowNegativeStock ? 'text-warning-fg' : 'text-danger-fg') : 'text-fg-subtle')}>
               {leftAfter < -0.0005
-                ? `${formatQty(-leftAfter, 3)} ${selectedUnitName} stock se zyada${allowNegativeStock ? ' (minus stock allowed)' : ''}`
-                : `Is bill ke baad ${formatQty(leftAfter, 3)} ${selectedUnitName} baqi`}
+                ? `${formatQty(-leftAfter, 3)} ${selectedUnitName} more than stock${allowNegativeStock ? ' (minus stock allowed)' : ''}`
+                : `${formatQty(leftAfter, 3)} ${selectedUnitName} left after this bill`}
             </p>
           )}
         </div>

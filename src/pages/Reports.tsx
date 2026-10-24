@@ -230,7 +230,7 @@ const Reports: React.FC = () => {
   const doExport = (kind: ExportKind) => {
     setExportOpen(false);
     if (kind === 'link') { copyLink(); return; }
-    if (!canExport) { showToast('Aap ko reports export karne ki ijazat nahi hai.', 'warning'); return; }
+    if (!canExport) { showToast("You don't have permission to export reports.", 'warning'); return; }
     if (exporting) return;
     const input = exportInput();
     if (!input) return;
@@ -454,7 +454,7 @@ const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onToggleF
       <PageHeader
         eyebrow="Reports centre"
         title={`${REPORTS.length} live reports for your dairy`}
-        description="Sales, profit, khata, milk, stock and cash — every figure from your live records, with compare, drill-down and one-click Excel / PDF."
+        description="Sales, profit, ledgers, milk, stock and cash — every figure from your live records, with compare, drill-down and one-click Excel / PDF."
       />
 
       {overview?.length ? (
@@ -473,7 +473,7 @@ const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onToggleF
         </section>
       ) : null}
 
-      <SearchInput ref={searchRef as any} value={query} onChange={onQuery} placeholder="Find a report — sales, khata, milk, stock, profit…" aria-label="Find a report" shortcut="/" className="max-w-xl" />
+      <SearchInput ref={searchRef as any} value={query} onChange={onQuery} placeholder="Find a report — sales, ledger, milk, stock, profit…" aria-label="Find a report" shortcut="/" className="max-w-xl" />
 
       {!query && quick.length > 0 && (
         <section className="space-y-2">

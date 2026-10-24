@@ -1,6 +1,6 @@
 # Mooco ERP
 
-Point-of-sale and accounting system for a dairy business: milk procurement and allocation, production batches, POS with offline sales, cash custody (shifts, drawers, day close), customer and supplier khata, expenses, bank/cash accounts and reporting.
+Point-of-sale and accounting system for a dairy business: milk procurement and allocation, production batches, POS with offline sales, cash custody (shifts, drawers, day close), customer and supplier ledgers, expenses, bank/cash accounts and reporting.
 
 **Stack:** React 19, TypeScript, Vite 6, Tailwind CSS 3, Supabase (Postgres, Auth, Edge Functions), Dexie (IndexedDB), Recharts, Framer Motion.
 
@@ -64,7 +64,7 @@ A second project, **Mooco ERP Test** (`qsztaanbendzbhddwied`), has the same sche
 
 ## Offline behaviour
 
-POS sales and new customers are written to IndexedDB first and synced in the background with retries, a dead-letter queue and a cross-tab lock. Order side effects (stock, cash, khata) are applied by the idempotent `pos_sync_order_effects` RPC, so retries never double-post. Other modules require a connection.
+POS sales and new customers are written to IndexedDB first and synced in the background with retries, a dead-letter queue and a cross-tab lock. Order side effects (stock, cash, customer ledger) are applied by the idempotent `pos_sync_order_effects` RPC, so retries never double-post. Other modules require a connection.
 
 ## Deployment
 

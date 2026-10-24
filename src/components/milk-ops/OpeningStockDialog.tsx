@@ -57,14 +57,14 @@ export default function OpeningStockDialog({ row, onSubmit, onClose }: OpeningSt
       onClose={onClose}
       dismissible={!busy}
       title={`Opening stock · ${row.item.name}`}
-      description="Naye product ka shuru ka stock. Ye ek dafa ka kaam hai; baad ki tabdeeli stock count se hogi."
+      description="Starting stock for a new product. This is a one-time step; later changes go through a stock count."
       initialFocusRef={firstInputRef}
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg"><PackagePlus className="size-5" aria-hidden="true" /></span>}
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>Band karein</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Close</Button>
           <Button type="submit" form="opening-stock-form" loading={busy} disabled={summary.changes.length === 0}>
-            {busy ? 'Saving...' : 'Opening stock save karein'}
+            {busy ? 'Saving...' : 'Save opening stock'}
           </Button>
         </>
       )}
@@ -86,19 +86,19 @@ export default function OpeningStockDialog({ row, onSubmit, onClose }: OpeningSt
         </ul>
 
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2.5">
-          <span className="text-xs font-semibold text-fg-muted">Kul stock</span>
+          <span className="text-xs font-semibold text-fg-muted">Total stock</span>
           <span className="text-right">
             <span className="text-lg font-bold tabular-nums text-fg">{formatBaseQty(summary.baseDiff, unit)}</span>
             {cost > 0 ? (
-              <span className="block text-[11px] font-semibold text-fg-subtle">Cost par <Money amount={cleanNumber(summary.baseDiff * cost)} /></span>
+              <span className="block text-[11px] font-semibold text-fg-subtle">At cost <Money amount={cleanNumber(summary.baseDiff * cost)} /></span>
             ) : summary.baseDiff > 0 ? (
-              <span className="block text-[11px] font-semibold text-warning-fg">Cost price set nahi; value 0 dikhegi</span>
+              <span className="block text-[11px] font-semibold text-warning-fg">No cost price set; value will show as 0</span>
             ) : null}
           </span>
         </div>
 
         <Field label="Notes (optional)">
-          {control => <Textarea {...control} rows={2} placeholder="e.g. dukaan khulne par gini hui ginti" value={notes} onChange={event => setNotes(event.target.value)} />}
+          {control => <Textarea {...control} rows={2} placeholder="e.g. counted when the shop opened" value={notes} onChange={event => setNotes(event.target.value)} />}
         </Field>
       </form>
     </Modal>

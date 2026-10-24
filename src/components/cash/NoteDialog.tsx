@@ -29,7 +29,7 @@ const NoteDialog: React.FC<NoteDialogProps> = ({
   const [touched, setTouched] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
   const trimmed = note.trim();
-  const error = touched && trimmed.length < MIN_NOTE ? 'Wajah likhna zaroori hai — ye audit record mein jati hai.' : undefined;
+  const error = touched && trimmed.length < MIN_NOTE ? 'A reason is required — it goes into the audit record.' : undefined;
 
   const submit = async () => {
     setTouched(true);

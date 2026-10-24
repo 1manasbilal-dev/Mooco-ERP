@@ -184,7 +184,7 @@ export function sellableLabel(reading: StockReading): string {
   return formatBaseQty(Math.max(0, reading.sellableBase), reading.unit);
 }
 
-/** Readable status words, Roman Urdu / English mix used across the app. */
+/** Readable status words used across the app. */
 export const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
   minus: 'Minus stock',
   out: 'Out of stock',

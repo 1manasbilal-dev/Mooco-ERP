@@ -144,7 +144,7 @@ const Suppliers: React.FC = () => {
   const [registerFrom, setRegisterFrom] = useState('');
   const [registerTo, setRegisterTo] = useState('');
 
-  // Khata (detail) state
+  // Ledger (detail) state
   const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
   const [ledgerTypeFilter, setLedgerTypeFilter] = useState<LedgerTypeFilter>('All');
   const [ledgerPreset, setLedgerPreset] = useState<DatePreset>('all');
@@ -277,7 +277,7 @@ const Suppliers: React.FC = () => {
 
   const activeStatementSupplier = useMemo(() => (activeSupplier ? toStatementSupplier(activeSupplier) : null), [activeSupplier]);
 
-  // Khata statement plus date-wise cash payments, only while a supplier is open.
+  // Ledger statement plus date-wise cash payments, only while a supplier is open.
   const ledgerDetails = useMemo(() => {
     if (!activeStatementSupplier) return null;
     return buildSupplierStatement({
@@ -367,7 +367,7 @@ const Suppliers: React.FC = () => {
   const handleDeleteTransaction = useCallback(async (id: string) => {
     const tx: any = supplierTransactions.find(t => t.id === id);
     if (!tx) {
-      showToast('Ye entry nahi mili. Screen refresh karein.', 'warning');
+      showToast('This entry was not found. Please refresh the screen.', 'warning');
       return;
     }
     const supplier = supplierList.find(s => s.id === tx.supplier_id);
@@ -379,24 +379,24 @@ const Suppliers: React.FC = () => {
     const balanceAfter = balanceNow + amount;
     const describe = (value: number) => (Math.abs(value) < SETTLED_EPSILON ? 'Rs 0 (settled)' : `${formatCurrency(Math.abs(value))} ${value > 0 ? '(payable)' : '(advance)'}`);
     const confirmed = await confirmAction({
-      title: `Payment ${formatCurrency(amount)} delete karein?`,
+      title: `Delete payment ${formatCurrency(amount)}?`,
       consequences: [
-        `${supplier?.name || 'Supplier'} ka khata: ${describe(balanceNow)} → ${describe(balanceAfter)}`,
-        isWaiver ? 'Ye maafi (waiver) thi, koi account nahi badlega' : account ? `${formatCurrency(amount)} wapas "${account.name}" mein aayenge` : 'Kisi account mein paisa wapas nahi aayega',
-        'Ye wapas nahi hoga.',
+        `${supplier?.name || 'Supplier'} ledger: ${describe(balanceNow)} → ${describe(balanceAfter)}`,
+        isWaiver ? 'This was a waiver, so no account will change' : account ? `${formatCurrency(amount)} goes back into "${account.name}"` : 'No money goes back into any account',
+        "This can't be undone.",
       ],
     });
     if (!confirmed) return;
     const ok = await deleteSupplierTransaction(id);
-    if (ok) showToast('Entry delete ho gayi', 'success');
+    if (ok) showToast('Entry deleted', 'success');
   }, [supplierTransactions, supplierList, accounts, deleteSupplierTransaction, showToast]);
 
   const warnIfPrintBlocked = useCallback((opened: boolean) => {
-    if (!opened) showToast('Print ke liye browser mein popups allow karein.', 'warning');
+    if (!opened) showToast('Allow popups in the browser to print.', 'warning');
   }, [showToast]);
 
   const handlePrintVoucher = useCallback((line: CashLine) => {
-    // The voucher shows that supplier's current khata, also from the all-supplier register.
+    // The voucher shows that supplier's current ledger balance, also from the all-supplier register.
     const supplier = supplierList.find(s => s.id === line.supplierId);
     warnIfPrintBlocked(printPaymentVoucher({
       company: statementCompany,
@@ -445,10 +445,10 @@ const Suppliers: React.FC = () => {
         }),
         phone: input.supplier.whatsapp || input.supplier.phone
       });
-      if (result === 'shared') showToast('Milk slip bhejne ke liye tayyar hai.', 'success');
-      else if (result === 'downloaded') showToast('Milk slip ki image save ho gayi. WhatsApp mein attach karein.', 'success');
+      if (result === 'shared') showToast('Milk slip is ready to send.', 'success');
+      else if (result === 'downloaded') showToast('Milk slip image saved. Attach it in WhatsApp.', 'success');
     } catch {
-      showToast('Milk slip ki image nahi ban saki.', 'error');
+      showToast("Couldn't make the milk slip image.", 'error');
     } finally {
       setSharingMilkImage(false);
     }
@@ -478,7 +478,7 @@ const Suppliers: React.FC = () => {
   const handleSendWhatsAppReminder = useCallback((supplier: Supplier, chosenStatement?: SupplierStatement) => {
     const cleanPhone = (supplier.whatsapp || supplier.phone || '').replace(/[^0-9]/g, '');
     if (cleanPhone.length < 10) {
-      showToast('Supplier ka sahi phone / WhatsApp number nahi hai', 'warning');
+      showToast('Supplier has no valid phone / WhatsApp number', 'warning');
       return;
     }
     const formattedPhone = cleanPhone.startsWith('0')
@@ -550,7 +550,7 @@ const Suppliers: React.FC = () => {
       <div className="flex flex-col gap-4 pb-16">
         <div className="flex items-center justify-between gap-2">
           <Button variant="ghost" size="sm" leftIcon={<ArrowLeft />} onClick={() => selectSupplier(null)}>All suppliers</Button>
-          <span className="hidden text-xs font-medium text-fg-subtle sm:block">Supplier khata</span>
+          <span className="hidden text-xs font-medium text-fg-subtle sm:block">Supplier ledger</span>
         </div>
 
         <div className="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)]">
@@ -599,7 +599,7 @@ const Suppliers: React.FC = () => {
                   <StatCard label="Litres" icon={<Milk />} tone="info" value={milkReport ? `${formatQty(milkReport.litres)} L` : '—'} hint={milkReport ? `${milkReport.dayCount} days` : undefined} loading={!milkReport} />
                   <StatCard label="Milk amount" icon={<HandCoins />} value={<Money amount={milkReport?.amount || 0} compact={isPhone} />} loading={!milkReport} />
                   <StatCard label="Average rate" icon={<Scale />} value={milkReport ? `${formatMilkRate(milkReport.rate)}/L` : '—'} hint={milkReport && milkReport.fat > 0 ? `Fat ${formatMilkQty(milkReport.fat)}` : undefined} loading={!milkReport} />
-                  <StatCard label="Khata balance" icon={<Wallet />} value={<SupplierBalance value={ledgerDetails.closingBalance} compact={isPhone} />} hint={milkReport ? `${milkReport.slipCount} slips` : undefined} />
+                  <StatCard label="Ledger balance" icon={<Wallet />} value={<SupplierBalance value={ledgerDetails.closingBalance} compact={isPhone} />} hint={milkReport ? `${milkReport.slipCount} slips` : undefined} />
                 </>
               ) : (
                 <>
@@ -629,7 +629,7 @@ const Suppliers: React.FC = () => {
                   value={ledgerSearchTerm}
                   onChange={setLedgerSearchTerm}
                   placeholder={ledgerView === 'payments' ? 'Payment, mode, note...' : 'Entry, milk, note, account...'}
-                  aria-label="Khata mein search"
+                  aria-label="Search ledger"
                   className="w-full sm:w-72"
                 />
                 {ledgerView === 'statement' && (
@@ -671,8 +671,8 @@ const Suppliers: React.FC = () => {
   return (
     <div className="flex flex-col gap-4 pb-16">
       <PageHeader
-        eyebrow="Supplier khata"
-        description="Milk aur material suppliers ka hisaab: kis ko kitna dena hai, kis ko advance diya, aur har payment."
+        eyebrow="Supplier ledgers"
+        description="Balances for milk and material suppliers: who we owe, who has an advance, and every payment."
         actions={canCreate ? <Button leftIcon={<Plus />} onClick={openAdd}>Add supplier</Button> : undefined}
       >
         <SegmentedControl
@@ -690,7 +690,7 @@ const Suppliers: React.FC = () => {
       {listView === 'payments' ? (
         <>
           <Toolbar>
-            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Supplier, mode ya note..." aria-label="Payments mein search" className="w-full sm:w-80" />
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Supplier, mode or note..." aria-label="Search payments" className="w-full sm:w-80" />
           </Toolbar>
           <LedgerRangeBar
             preset={registerPreset}
@@ -716,7 +716,7 @@ const Suppliers: React.FC = () => {
               onOpenSupplier={selectSupplier}
               onVoucher={handlePrintVoucher}
               onDelete={onDeleteTx}
-              emptyText="Is period mein supplier ki koi payment nahi"
+              emptyText="No supplier payments in this period"
               resetKey={`${registerRange.from}|${registerRange.to}|${deferredSearch}`}
             />
           )}
@@ -729,7 +729,7 @@ const Suppliers: React.FC = () => {
               icon={<Wallet />}
               tone="danger"
               value={<Money amount={stats.payable} compact={isPhone} />}
-              hint={`${stats.payableCount} ko dena hai`}
+              hint={`Owed to ${stats.payableCount}`}
               loading={isLoading}
               onClick={() => { setFilterBalance('Payable'); setFilterActiveStatus('All'); }}
             />
@@ -738,7 +738,7 @@ const Suppliers: React.FC = () => {
               icon={<HandCoins />}
               tone="success"
               value={<Money amount={stats.advance} compact={isPhone} />}
-              hint={`${stats.advanceCount} ko diya hua`}
+              hint={`Paid ahead to ${stats.advanceCount}`}
               loading={isLoading}
               onClick={() => { setFilterBalance('Advance'); setFilterActiveStatus('All'); }}
             />
@@ -752,7 +752,7 @@ const Suppliers: React.FC = () => {
               onClick={() => { setFilterActiveStatus('Active'); setFilterBalance('All'); }}
             />
             <StatCard
-              label="Is mahine ka milk"
+              label="Milk this month"
               icon={<Milk />}
               tone="info"
               value={`${formatQty(monthMilk.litres)} L`}
@@ -762,7 +762,7 @@ const Suppliers: React.FC = () => {
           </div>
 
           <Toolbar>
-            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Naam, phone, village..." aria-label="Supplier search" className="w-full sm:w-72" />
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Name, phone, village..." aria-label="Supplier search" className="w-full sm:w-72" />
             <SegmentedControl
               aria-label="Balance filter"
               size="sm"
@@ -795,7 +795,7 @@ const Suppliers: React.FC = () => {
               <span className="text-[13px] font-semibold text-fg">{visibleSelectedIds.length} selected</span>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" leftIcon={<X />} onClick={() => setSelectedIds(new Set())}>Clear</Button>
-                <Button variant="danger-soft" size="sm" leftIcon={<Archive />} onClick={() => setDeleteIds(visibleSelectedIds)}>Inactive karein</Button>
+                <Button variant="danger-soft" size="sm" leftIcon={<Archive />} onClick={() => setDeleteIds(visibleSelectedIds)}>Make inactive</Button>
               </div>
             </Card>
           )}
@@ -807,16 +807,16 @@ const Suppliers: React.FC = () => {
               {supplierList.length === 0 ? (
                 <EmptyState
                   icon={<Truck />}
-                  title="Abhi koi supplier nahi"
-                  description="Pehla milk ya material supplier add karein, phir unka khata yahan nazar aayega."
+                  title="No suppliers yet"
+                  description="Add your first milk or material supplier, and their ledger will show here."
                   action={canCreate ? <Button leftIcon={<Plus />} onClick={openAdd}>Add supplier</Button> : undefined}
                 />
               ) : (
                 <EmptyState
                   icon={<FilterX />}
-                  title="Is filter mein koi supplier nahi"
-                  description="Search ya filters badal kar dekhein."
-                  action={<Button variant="secondary" onClick={clearListFilters}>Filters saaf karein</Button>}
+                  title="No suppliers match this filter"
+                  description="Try a different search or filters."
+                  action={<Button variant="secondary" onClick={clearListFilters}>Clear filters</Button>}
                 />
               )}
             </Card>
@@ -829,7 +829,7 @@ const Suppliers: React.FC = () => {
                       <TH className="w-12">
                         <input
                           type="checkbox"
-                          aria-label="Sab select karein"
+                          aria-label="Select all"
                           className="size-4 cursor-pointer accent-brand"
                           checked={allVisibleSelected}
                           onChange={e => toggleSelectAll(e.target.checked)}
@@ -839,7 +839,7 @@ const Suppliers: React.FC = () => {
                     <TH>Supplier</TH>
                     <TH>Phone</TH>
                     <TH>Category</TH>
-                    <TH numeric title="Payable = hum ne dena hai, Advance = hum ne diya hua">Balance</TH>
+                    <TH numeric title="Payable = we owe, Advance = we paid ahead">Balance</TH>
                     <TH className="w-28 text-right">Actions</TH>
                   </tr>
                 </THead>

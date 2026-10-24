@@ -169,7 +169,7 @@ export default function UiGallery() {
               <Field label="Customer name" required hint="As written on the bill">
                 {control => <Input {...control} placeholder="e.g. Al Rehman Sweets" />}
               </Field>
-              <Field label="Amount" error="Amount zero se zyada honi chahiye">
+              <Field label="Amount" error="Amount must be more than zero">
                 {control => <Input {...control} inputMode="decimal" defaultValue="0" suffix="Rs" />}
               </Field>
               <Field label="Payment mode">
@@ -193,8 +193,8 @@ export default function UiGallery() {
           <Card>
             <EmptyState
               icon={<Users />}
-              title="Abhi koi customer nahi"
-              description="Pehla customer add karein, phir unka khata yahan nazar aayega."
+              title="No customers yet"
+              description="Add your first customer, then their ledger shows here."
               action={<Button leftIcon={<Plus />}>Add customer</Button>}
             />
           </Card>
@@ -220,7 +220,7 @@ export default function UiGallery() {
           </>
         }
       >
-        <p className="text-sm text-fg-muted">Total <Money amount={2500} className="font-bold text-fg" /> cash mein.</p>
+        <p className="text-sm text-fg-muted">Total <Money amount={2500} className="font-bold text-fg" /> in cash.</p>
       </Modal>
     </div>
   );

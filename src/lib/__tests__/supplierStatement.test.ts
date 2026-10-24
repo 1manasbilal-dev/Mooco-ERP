@@ -121,7 +121,7 @@ describe('buildSupplierStatement', () => {
   ];
   const input = { purchases, materialPurchases: materials, transactions, accountNames: { acc_bank: 'Meezan Bank' } };
 
-  it('reconciles the khata to the supplier balance with an opening line', () => {
+  it('reconciles the ledger to the supplier balance with an opening line', () => {
     const statement = buildSupplierStatement({ ...input, supplier: supplier(12500) });
     expect(statement.openingBalance).toBe(2000);
     expect(statement.closingBalance).toBe(12500);
@@ -182,7 +182,7 @@ describe('buildSupplierStatement', () => {
     expect(statement.cashPaid).toBe(2000);
   });
 
-  it('hides a fully returned purchase and its refunded payment from the khata but not the cash register', () => {
+  it('hides a fully returned purchase and its refunded payment from the ledger but not the cash register', () => {
     const statement = buildSupplierStatement({
       supplier: supplier(0),
       purchases: [{ id: 'p4', supplier_id: 'sup1', date: '2026-10-12', quantity: 20, total_amount: 4000, paid_amount: 4000, status: 'Returned' }],
@@ -198,7 +198,7 @@ describe('buildSupplierStatement', () => {
     expect(statement.paymentDays.map(d => d.date)).toEqual(['2026-10-13', '2026-10-12']);
   });
 
-  it('nets an unlinked return into the khata and shows waivers without cash', () => {
+  it('nets an unlinked return into the ledger and shows waivers without cash', () => {
     const statement = buildSupplierStatement({
       supplier: supplier(3000 - 500 - 1000),
       purchases: [{ id: 'p5', supplier_id: 'sup1', date: '2026-10-12', quantity: 20, total_amount: 3000 }],

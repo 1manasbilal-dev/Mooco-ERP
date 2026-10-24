@@ -12,7 +12,7 @@ export const localDay = (value?: string): string => {
   return businessDate(trimmed.replace(' ', 'T')) || trimmed.slice(0, 10);
 };
 
-/** A khata balance closer to zero than this is floating-point residue, not money owed either way. */
+/** A ledger balance closer to zero than this is floating-point residue, not money owed either way. */
 export const BALANCE_EPSILON = 0.01;
 
 export type BalanceState = 'due' | 'advance' | 'settled';
@@ -159,7 +159,7 @@ export interface LedgerSummary {
   entries: LedgerEntry[];
   totalDebit: number;
   totalCredit: number;
-  /** Stored khata balance minus what the entries add up to; non-zero means the history is incomplete or wrong. */
+  /** Stored ledger balance minus what the entries add up to; non-zero means the history is incomplete or wrong. */
   ledgerGap: number;
   returnedCount: number;
   returnedAmount: number;
@@ -204,7 +204,7 @@ export const indexByCustomer = <T,>(rows: T[], customerIdOf: (row: T) => string 
 export const saleCustomerId = (s: POSBill) => s.customer_id || s.details?.customer_id;
 
 /**
- * The customer's khata: POS bills plus manual khata rows, oldest first for the running balance,
+ * The customer's ledger: POS bills plus manual ledger rows, oldest first for the running balance,
  * returned newest first. Pure, so the page can memoise it per customer.
  */
 export function buildLedger(
@@ -230,7 +230,7 @@ export function buildLedger(
       timestamp: s.date,
       description: `POS Bill #${s.bill_number} (${itemNames || 'Dairy Items'})`,
       debit: Number(s.total) || 0,
-      // What was actually collected on the bill; the unpaid part stays on khata (the matching
+      // What was actually collected on the bill; the unpaid part stays on credit (the matching
       // ctx_ charge row is skipped below, so it must not be counted as paid here).
       credit: salePaidAmount(s),
       type: isReturned ? 'Return' : 'Sale',
@@ -253,7 +253,7 @@ export function buildLedger(
     const isCharge = rawType === 'Charge' || rawType === 'Debit';
     const isReturn = rawType === 'Return';
 
-    // Skip the khata charge of a credit bill: the bill row above already carries it.
+    // Skip the ledger charge of a credit bill: the bill row above already carries it.
     const isDuplicateSaleCharge = isCharge && (
       (tx.id.startsWith('ctx_') && posSaleIds.has(tx.id.slice(4))) ||
       ownSales.some(s => mentionsBill(note, s.bill_number))
@@ -268,9 +268,9 @@ export function buildLedger(
 
     const isOpeningBalance = details.mode === 'Opening Balance' || tx.mode === 'Opening Balance' || tx.id.startsWith('ctx_op_');
     const noteText = note || (details.mode === 'Balance Adjustment' ? 'Unrecorded Delivery Sales Adjustment' : '');
-    let description = `Khata Charge: ${noteText || 'Manual Debit'}`;
+    let description = `Ledger Charge: ${noteText || 'Manual Debit'}`;
     if (isOpeningBalance) {
-      description = `Sabqa Baqaya (Opening Balance)${noteText && !noteText.toLowerCase().includes('opening balance') ? `: ${noteText}` : ''}`;
+      description = `Opening Balance${noteText && !noteText.toLowerCase().includes('opening balance') ? `: ${noteText}` : ''}`;
     } else if (isPayment) {
       description = `Payment Received (${tx.mode || details.mode || 'Cash'})`;
     } else if (isReturn) {
@@ -285,14 +285,14 @@ export function buildLedger(
       description,
       debit: isCharge ? amount : 0,
       credit: isPayment || isReturn ? amount : 0,
-      // "Debit" is an older spelling of a khata charge; it now filters with the charges.
+      // "Debit" is an older spelling of a ledger charge; it now filters with the charges.
       type: (isCharge ? 'Charge' : rawType) as LedgerType,
       mode: tx.mode || details.mode,
       note: tx.note,
       status: isReturn ? 'Returned' : undefined,
       isReturned: isReturn,
       // Returns are undone from Sales History; an order advance is refunded, not deleted.
-      // Deleting an entry moves khata and account money back, so it needs the delete right.
+      // Deleting an entry moves ledger and account money back, so it needs the delete right.
       canDelete: canDelete && !isReturn && details.source !== 'customer_order_advance' && !String(tx.id).startsWith('ctx_adv_'),
       sale: matchedSale || undefined,
       rawTx: tx,
@@ -315,7 +315,7 @@ export function buildLedger(
     return { ...entry, dateLabel: formatDay(entry.date), runningBalance: roundCurrency(running) };
   });
 
-  // Value returned, once per bill. The khata Return row of a bill is the same goods as the bill's
+  // Value returned, once per bill. The ledger Return row of a bill is the same goods as the bill's
   // refund, so adding both (or a returned bill's full debit) counted the return twice.
   const returnedAmount = roundCurrency(withBalance
     .filter(e => e.sale && !e.rawTx && (e.isReturned || e.isPartiallyReturned))
@@ -400,16 +400,16 @@ export const formatDay = (day: string) => {
  */
 export const parseAmount = (raw: string): { value: number; error?: string } => {
   const text = String(raw ?? '').trim().replace(/,/g, '');
-  if (!text) return { value: 0, error: 'Amount likhein' };
-  if (!/^\d*\.?\d*$/.test(text) || text === '.') return { value: 0, error: 'Sirf number likhein, jaise 1250 ya 1250.50' };
-  if (/\.\d{3,}$/.test(text)) return { value: 0, error: 'Paisay 2 decimal tak hi likhein' };
+  if (!text) return { value: 0, error: 'Enter an amount' };
+  if (!/^\d*\.?\d*$/.test(text) || text === '.') return { value: 0, error: 'Numbers only, like 1250 or 1250.50' };
+  if (/\.\d{3,}$/.test(text)) return { value: 0, error: 'Use at most 2 decimal places' };
   const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) return { value: 0, error: 'Amount 0 se zyada honi chahiye' };
-  if (value > 100_000_000) return { value: 0, error: 'Amount bohat bari hai, dobara check karein' };
+  if (!Number.isFinite(value) || value <= 0) return { value: 0, error: 'Amount must be more than 0' };
+  if (value > 100_000_000) return { value: 0, error: 'Amount is too large, please check it' };
   return { value: roundCurrency(value) };
 };
 
-/** Plain-text label of a khata balance for WhatsApp and print: "Rs 1,200 (Due)". */
+/** Plain-text label of a ledger balance for WhatsApp and print: "Rs 1,200 (Due)". */
 export const balanceWords = (balance: number, format: (n: number) => string) => {
   const state = balanceState(balance);
   if (state === 'settled') return `${format(0)} (Settled)`;

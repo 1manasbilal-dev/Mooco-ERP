@@ -73,7 +73,7 @@ const RsPrefix: React.FC<{ size?: 'sm' | 'lg' }> = ({ size = 'lg' }) => (
 const LockedBanner: React.FC<{ date?: string; what: string }> = ({ date, what }) => (
   <div className="mb-4 flex items-start gap-2.5 rounded-control border border-warning/30 bg-warning-soft p-3 text-xs font-semibold text-warning-fg" role="alert">
     <Lock size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-    <span><strong>{date} band ho chuka hai.</strong> Lock din par {what} record nahi ho sakta — date badlein.</span>
+    <span><strong>{date} is closed.</strong> A {what} can&apos;t be recorded on a locked day — change the date.</span>
   </div>
 );
 
@@ -177,7 +177,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
             value={categorySearch}
             onChange={setCategorySearch}
             placeholder="Search categories or sub-categories…"
-            aria-label="Category search karein"
+            aria-label="Search categories"
             className="flex-1"
           />
           <SegmentedControl
@@ -205,7 +205,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
           >
             <Input
               placeholder="Category name, e.g. Animal Feed, Veterinary"
-              aria-label="Nayi category ka naam"
+              aria-label="New category name"
               value={modalNewCategoryName}
               onChange={e => setModalNewCategoryName(e.target.value)}
               autoFocus
@@ -231,7 +231,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
               <div className="flex items-center gap-2.5 px-3 py-2.5">
                 <IconButton
                   size="sm"
-                  aria-label={isExpanded ? 'Band karein' : 'Kholein'}
+                  aria-label={isExpanded ? 'Collapse' : 'Expand'}
                   aria-expanded={isExpanded}
                   icon={isExpanded ? <ChevronDown /> : <ChevronRight />}
                   onClick={toggleExpanded}
@@ -243,7 +243,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
                     <Input
                       inputSize="sm"
-                      aria-label="Category ka naya naam"
+                      aria-label="New category name"
                       value={editCatInput}
                       onChange={e => setEditCatInput(e.target.value)}
                       onKeyDown={e => {
@@ -252,7 +252,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                       }}
                       autoFocus
                     />
-                    <IconButton size="sm" variant="primary" aria-label="Naam save karein" icon={<Check />} onClick={() => handleSaveEditCategory(cat)} className="shrink-0" />
+                    <IconButton size="sm" variant="primary" aria-label="Save name" icon={<Check />} onClick={() => handleSaveEditCategory(cat)} className="shrink-0" />
                     <IconButton size="sm" aria-label="Cancel" icon={<X />} onClick={() => setEditingCatName(null)} className="shrink-0" />
                   </div>
                 ) : (
@@ -269,12 +269,12 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                     </span>
                   )}
                   {!isEditing && (
-                    <IconButton size="sm" aria-label="Naam badlein" title="Rename" icon={<Edit />} onClick={() => handleStartEditCategory(cat)} />
+                    <IconButton size="sm" aria-label="Rename" title="Rename" icon={<Edit />} onClick={() => handleStartEditCategory(cat)} />
                   )}
-                  <Switch checked={cat.isActive} onChange={() => handleToggleCategoryActive(cat)} label={cat.isActive ? 'Category band karein' : 'Category chalu karein'} />
+                  <Switch checked={cat.isActive} onChange={() => handleToggleCategoryActive(cat)} label={cat.isActive ? 'Switch category off' : 'Switch category on'} />
                   <IconButton
                     size="sm"
-                    aria-label={isLocked ? 'Entries wali category delete nahi ho sakti' : 'Category delete karein'}
+                    aria-label={isLocked ? "A category with entries can't be deleted" : 'Delete category'}
                     title={isLocked ? 'Has entries — cannot delete' : 'Delete'}
                     icon={<Trash2 />}
                     onClick={() => handleDeleteCategory(cat)}
@@ -297,7 +297,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                           <div className="flex min-w-0 flex-1 items-center gap-1">
                             <Input
                               inputSize="sm"
-                              aria-label="Sub-category ka naya naam"
+                              aria-label="New sub-category name"
                               value={editSubcatInput}
                               onChange={e => setEditSubcatInput(e.target.value)}
                               onKeyDown={e => {
@@ -316,12 +316,12 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                           <span className="flex items-center gap-0.5 rounded bg-warning-soft px-1.5 py-0.5 text-[9px] font-bold text-warning-fg"><Lock size={8} aria-hidden="true" />{subUsage}</span>
                         )}
                         {!isSubEditing && (
-                          <IconButton size="sm" aria-label="Naam badlein" title="Rename" icon={<Edit />} onClick={() => handleStartEditSubcategory(cat.name, sub)} className="size-7" />
+                          <IconButton size="sm" aria-label="Rename" title="Rename" icon={<Edit />} onClick={() => handleStartEditSubcategory(cat.name, sub)} className="size-7" />
                         )}
-                        <Switch size="sm" checked={sub.isActive} onChange={() => handleToggleSubcategoryActive(cat.name, sub)} label={sub.isActive ? 'Band karein' : 'Chalu karein'} />
+                        <Switch size="sm" checked={sub.isActive} onChange={() => handleToggleSubcategoryActive(cat.name, sub)} label={sub.isActive ? 'Switch off' : 'Switch on'} />
                         <IconButton
                           size="sm"
-                          aria-label={isSubLocked ? 'Entries wali sub-category delete nahi ho sakti' : 'Sub-category delete karein'}
+                          aria-label={isSubLocked ? "A sub-category with entries can't be deleted" : 'Delete sub-category'}
                           icon={<Trash2 />}
                           onClick={() => handleDeleteSubcategory(cat.name, sub)}
                           disabled={isSubLocked}
@@ -334,7 +334,7 @@ export const ExpenseCategoryModal: React.FC<ExpenseCategoryModalProps> = ({
                     <Input
                       inputSize="sm"
                       placeholder={`Add sub-category under ${cat.name}…`}
-                      aria-label={`${cat.name} mein sub-category add karein`}
+                      aria-label={`Add sub-category to ${cat.name}`}
                       value={newSubcatInputs[cat.name] || ''}
                       onChange={e => setNewSubcatInputs({ ...newSubcatInputs, [cat.name]: e.target.value })}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleModalAddSubcat(cat.name); } }}
@@ -410,8 +410,8 @@ interface ExpenseFormModalProps {
 
 const STATUS_CARDS: { value: 'Paid' | 'Partial' | 'Unpaid'; label: string; hint: string; icon: React.ElementType; tone: 'success' | 'warning' | 'danger' }[] = [
   { value: 'Paid', label: 'Paid now', hint: 'Full amount paid', icon: CheckCircle2, tone: 'success' },
-  { value: 'Partial', label: 'Partial', hint: 'Some now, rest khata', icon: CircleDashed, tone: 'warning' },
-  { value: 'Unpaid', label: 'On credit', hint: 'Add to vendor khata', icon: Clock3, tone: 'danger' },
+  { value: 'Partial', label: 'Partial', hint: 'Some now, rest on credit', icon: CircleDashed, tone: 'warning' },
+  { value: 'Unpaid', label: 'On credit', hint: 'Add to vendor ledger', icon: Clock3, tone: 'danger' },
 ];
 
 export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
@@ -520,7 +520,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
     }
   };
 
-  const submitLabel = isEditing ? 'Save changes' : status === 'Unpaid' ? 'Save bill to khata' : `Record ${amount > 0 ? formatCurrency(amount) : 'expense'}`;
+  const submitLabel = isEditing ? 'Save changes' : status === 'Unpaid' ? 'Save bill on credit' : `Record ${amount > 0 ? formatCurrency(amount) : 'expense'}`;
 
   return (
     <Sheet
@@ -529,11 +529,11 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
       dismissible={!isSubmitting}
       icon={<SheetIcon icon={Receipt} tone="expense" />}
       title={isEditing ? 'Edit expense' : 'Record expense'}
-      subtitle={isEditing ? 'Changes adjust the account and vendor khata automatically.' : 'Cash, bank or on-credit vendor bill · Ctrl+Enter to save'}
+      subtitle={isEditing ? 'Changes adjust the account and vendor ledger automatically.' : 'Cash, bank or on-credit vendor bill · Ctrl+Enter to save'}
     >
       <form onSubmit={handleSubmitExpense} onKeyDown={submitOnCtrlEnter} className="flex min-h-0 flex-1 flex-col">
         <SheetBody className="flex flex-col gap-5">
-          {isDateLocked && <LockedBanner date={formData.date} what="kharcha" />}
+          {isDateLocked && <LockedBanner date={formData.date} what="expense" />}
 
           <section className="flex flex-col gap-3">
             <div>
@@ -577,7 +577,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
 
             {status === 'Partial' && (
               <div className="rounded-control border border-warning/30 bg-warning-soft/60 p-3 animate-in fade-in">
-                <FieldLabel htmlFor="expense-paid-now" aside={<span className="text-[11px] font-bold tabular-nums text-danger-fg">Khata: {formatCurrency(due)}</span>}>Paid now</FieldLabel>
+                <FieldLabel htmlFor="expense-paid-now" aside={<span className="text-[11px] font-bold tabular-nums text-danger-fg">On credit: {formatCurrency(due)}</span>}>Paid now</FieldLabel>
                 <SmartNumberInput
                   id="expense-paid-now"
                   max={amount}
@@ -592,7 +592,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             {status === 'Unpaid' && amount > 0 && (
               <p className="flex items-start gap-2 rounded-control border border-danger/20 bg-danger-soft px-3 py-2 text-[11px] text-danger-fg animate-in fade-in">
                 <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
-                No cash leaves today. {formatCurrency(amount)} goes on the vendor&apos;s khata.
+                No cash leaves today. {formatCurrency(amount)} goes on the vendor&apos;s ledger.
               </p>
             )}
           </section>
@@ -716,8 +716,8 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             {isModalCreatingVendor ? (
               <div className="flex flex-col gap-2 rounded-control border border-brand/25 bg-brand-soft/50 p-2.5 animate-in fade-in">
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Input placeholder="Vendor name" aria-label="Vendor ka naam" value={quickVendorName} onChange={e => setQuickVendorName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} autoFocus />
-                  <Input type="tel" placeholder="Phone (optional)" aria-label="Vendor ka phone" value={quickVendorPhone} onChange={e => setQuickVendorPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} />
+                  <Input placeholder="Vendor name" aria-label="Vendor name" value={quickVendorName} onChange={e => setQuickVendorName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} autoFocus />
+                  <Input type="tel" placeholder="Phone (optional)" aria-label="Vendor phone" value={quickVendorPhone} onChange={e => setQuickVendorPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleQuickCreateVendor(); } }} />
                 </div>
                 <div className="flex justify-end gap-1.5">
                   <Button variant="ghost" size="sm" onClick={() => setIsModalCreatingVendor(false)} disabled={isCreatingQuickVendor}>Cancel</Button>
@@ -729,18 +729,18 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                 options={[{ value: '', label: needsVendor ? 'Select vendor…' : 'No vendor (spot cash)' }, ...withChosenVendor(vendorRichOptions, expenseVendors, formData.vendor_id)]}
                 value={formData.vendor_id || ''}
                 onChange={id => setFormData(prev => ({ ...prev, vendor_id: id }))}
-                placeholder={needsVendor ? 'Select vendor for khata…' : 'No vendor (spot cash)'}
+                placeholder={needsVendor ? 'Select vendor for credit…' : 'No vendor (spot cash)'}
                 searchPlaceholder="Search vendor…"
               />
             )}
             {vendor && !isEditing && (
               <p className="mt-1.5 text-[11px] text-fg-subtle animate-in fade-in">
-                Khata now <span className={cn('font-bold tabular-nums', vendorBalance > 0 ? 'text-danger-fg' : 'text-fg-muted')}>{formatCurrency(Math.abs(vendorBalance))} {vendorBalance > 0 ? 'to pay' : vendorBalance < 0 ? 'advance' : ''}</span>
+                Balance now <span className={cn('font-bold tabular-nums', vendorBalance > 0 ? 'text-danger-fg' : 'text-fg-muted')}>{formatCurrency(Math.abs(vendorBalance))} {vendorBalance > 0 ? 'to pay' : vendorBalance < 0 ? 'advance' : ''}</span>
                 {due > 0 && <> → after this <span className="font-bold tabular-nums text-danger-fg">{formatCurrency(Math.abs(vendorBalance + due))} {vendorBalance + due > 0 ? 'to pay' : 'advance'}</span></>}
               </p>
             )}
             {needsVendor && !formData.vendor_id && !isModalCreatingVendor && (
-              <p className="mt-1.5 text-[11px] font-semibold text-danger-fg">Baqi raqam ke liye vendor zaroori hai.</p>
+              <p className="mt-1.5 text-[11px] font-semibold text-danger-fg">A vendor is required for the remaining amount.</p>
             )}
           </section>
 
@@ -780,7 +780,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                 </div>
               )}
               {!isEditing && paidNow > 0 && accountAfter < 0 && (
-                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-danger-fg"><AlertCircle size={12} aria-hidden="true" /> Account minus mein chala jayega.</p>
+                <p className="flex items-center gap-1.5 text-[11px] font-semibold text-danger-fg"><AlertCircle size={12} aria-hidden="true" /> The account will go into minus.</p>
               )}
             </section>
           )}
@@ -808,7 +808,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
                   <Input
                     inputSize="sm"
                     className="mt-2"
-                    aria-label="Shortcut ka naam"
+                    aria-label="Shortcut name"
                     placeholder={formData.description || 'Shortcut name, e.g. Generator diesel'}
                     value={rememberName}
                     onChange={e => setRememberName(e.target.value)}
@@ -824,7 +824,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             {amount > 0 ? (
               <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-semibold tabular-nums">
                 <span className="flex items-center gap-1 text-success-fg"><span className="size-1.5 rounded-full bg-success" />Paid {formatCurrency(paidNow)}</span>
-                {due > 0 && <span className="flex items-center gap-1 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" />Khata {formatCurrency(due)}</span>}
+                {due > 0 && <span className="flex items-center gap-1 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" />On credit {formatCurrency(due)}</span>}
               </span>
             ) : <span className="text-fg-subtle">Enter an amount to continue</span>}
           </div>
@@ -834,7 +834,7 @@ export const ExpenseFormModal: React.FC<ExpenseFormModalProps> = ({
             disabled={isDateLocked}
             loading={isSubmitting}
             leftIcon={<Check />}
-            title={isDateLocked ? `${formData.date} lock hai` : 'Ctrl+Enter'}
+            title={isDateLocked ? `${formData.date} is locked` : 'Ctrl+Enter'}
             className="flex-1 sm:flex-initial"
           >
             {isSubmitting ? 'Saving…' : submitLabel}
@@ -884,7 +884,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({ isOpen, 
           value={query}
           onChange={setQuery}
           placeholder="Search name, category or vendor"
-          aria-label="Saved kharche search karein"
+          aria-label="Search saved expenses"
           data-autofocus
         />
       </div>
@@ -927,7 +927,7 @@ export const SavedExpensesModal: React.FC<SavedExpensesModalProps> = ({ isOpen, 
                 </button>
                 <button
                   type="button"
-                  aria-label="Saved shortcut hatayen"
+                  aria-label="Remove saved shortcut"
                   title="Remove"
                   onClick={() => onDelete(preset.id)}
                   className="shrink-0 cursor-pointer border-l border-line px-3 text-fg-faint transition-colors hover:bg-danger-soft hover:text-danger-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -1036,7 +1036,7 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
               />
             </div>
             <p className="mt-1.5 text-[11px] text-fg-subtle">
-              {isAdvance ? 'Vendor ke paas aap ka advance hai (aap ne lena hai).' : 'Purana baqi jo aap ne vendor ko dena hai.'}
+              {isAdvance ? 'The vendor holds your advance (they owe you).' : 'Old balance you owe the vendor.'}
             </p>
           </section>
 
@@ -1058,7 +1058,7 @@ export const ExpenseVendorModal: React.FC<ExpenseVendorModalProps> = ({
           <div className="flex items-center justify-between gap-3 rounded-control border border-line px-3 py-2.5">
             <button type="button" onClick={() => set({ isActive: vendorFormData.isActive === false })} className="min-w-0 flex-1 cursor-pointer text-left">
               <span className="block text-xs font-bold text-fg">Active</span>
-              <span className="block text-[11px] text-fg-subtle">Inactive vendors are hidden from new expenses but keep their khata.</span>
+              <span className="block text-[11px] text-fg-subtle">Inactive vendors are hidden from new expenses but keep their ledger.</span>
             </button>
             <Switch checked={vendorFormData.isActive !== false} onChange={value => set({ isActive: value })} label="Active vendor" />
           </div>
@@ -1167,7 +1167,7 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
             {vendor && (
               <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-control border border-line bg-line text-[11px] animate-in fade-in">
                 <div className="bg-surface px-3 py-2">
-                  <p className="font-semibold text-fg-subtle">Khata now</p>
+                  <p className="font-semibold text-fg-subtle">Balance now</p>
                   <p className={cn('text-xs font-bold tabular-nums', balanceTone(bal))}>{describe(bal)}</p>
                 </div>
                 <div className="bg-surface px-3 py-2">
@@ -1253,7 +1253,7 @@ export const VendorPaymentModal: React.FC<VendorPaymentModalProps> = ({
             disabled={isLocked}
             loading={isSubmittingPayment}
             leftIcon={isRefund ? <ArrowDownLeft /> : <ArrowUpRight />}
-            title={isLocked ? `${paymentFormData.date} lock hai` : 'Ctrl+Enter'}
+            title={isLocked ? `${paymentFormData.date} is locked` : 'Ctrl+Enter'}
             className="flex-1 sm:flex-initial"
           >
             {isSubmittingPayment ? 'Saving…' : `${isRefund ? 'Receive' : 'Pay'} ${amount > 0 ? formatCurrency(amount) : ''}`.trim()}

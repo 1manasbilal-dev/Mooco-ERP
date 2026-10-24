@@ -273,7 +273,7 @@ export const CollectionsCard = memo(function CollectionsCard({ sales, periodText
   const parts = [
     { key: 'cash', label: 'Cash', amount: sales.cash, swatch: 'bg-brand-accent' },
     { key: 'online', label: 'Online', amount: sales.online, swatch: 'bg-info' },
-    { key: 'credit', label: 'Credit / khata', amount: sales.credit, swatch: 'bg-danger' },
+    { key: 'credit', label: 'Credit', amount: sales.credit, swatch: 'bg-danger' },
   ];
   return (
     <Card aria-label="Sales payment breakdown">
@@ -417,7 +417,7 @@ export const DebtorsCard = memo(function DebtorsCard({ debtors, receivables, acc
           <EmptyState size="compact" icon={<CheckCircle2 />} title="No customer dues" description="Looking good." />
         )}
       </CardBody>
-      <CardLink onClick={() => go('customers')} disabled={!access.customers}>Open customer khata</CardLink>
+      <CardLink onClick={() => go('customers')} disabled={!access.customers}>Open customer ledger</CardLink>
     </Card>
   );
 });

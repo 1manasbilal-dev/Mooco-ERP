@@ -46,17 +46,17 @@ const maxReturnQty = (item: ReturnItemSelection) => (item.remainingQty !== undef
 
 type StockMode = 'restock' | 'scrap' | 'replace';
 
-/** "Wapas: +24 pcs loose stock mein" — which pile this line moves, in the words the cashier reads. */
+/** "Back: +24 pcs to loose stock" — which pile this line moves, in the words the cashier reads. */
 function pileText(item: ReturnItemSelection, mode: StockMode): string {
-  if (mode === 'scrap') return 'Stock mein wapas nahi jayega (spoilage)';
+  if (mode === 'scrap') return 'Not going back to stock (spoilage)';
   const qty = item.isSelected ? item.returnQty : 0;
   const pile = returnLinePile(item, qty);
   // "2 × 500 g tub" for packs, "24 pcs" for loose (a dozen line counted in pieces).
   const amount = qty <= 0 || pile.amount === null ? ''
     : pile.kind === 'pack' ? `${formatQty(pile.amount, 3)} × ${pile.unit}` : `${formatQty(pile.amount, 3)} ${pile.unit}`.trim();
   const where = amount && pile.kind === 'pack' ? 'pack stock' : pile.name;
-  if (mode === 'replace') return amount ? `Naya maal: ${amount} ${where} se niklega` : `Naya maal ${where} se niklega`;
-  return amount ? `Wapas: +${amount} ${where} mein` : `${where} mein wapas jayega`;
+  if (mode === 'replace') return amount ? `New stock: ${amount} taken from ${where}` : `New stock taken from ${where}`;
+  return amount ? `Back: +${amount} to ${where}` : `Goes back to ${where}`;
 }
 
 const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQtyChange }: {
@@ -90,11 +90,11 @@ const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQty
             Sold: {formatQty(item.soldQty, 3)} {unit} • {formatCurrency(item.price)}/{unit}
           </span>
           {exhausted ? (
-            <Badge className="mt-1">Pura wapas ho chuka</Badge>
+            <Badge className="mt-1">Fully returned</Badge>
           ) : (
             <>
               <span className={cn('block text-xs font-medium tabular-nums', returnedBefore > 0 ? 'text-warning-fg' : 'text-fg-subtle')}>
-                Wapas ho sakta hai: {formatQty(max, 3)} {unit}{returnedBefore > 0 ? ` (pehle ${formatQty(returnedBefore, 3)} ${unit} wapas)` : ''}
+                Can return: {formatQty(max, 3)} {unit}{returnedBefore > 0 ? ` (${formatQty(returnedBefore, 3)} ${unit} returned before)` : ''}
               </span>
               <span className={cn('mt-0.5 block text-xs font-medium tabular-nums', mode === 'scrap' ? 'text-fg-faint' : 'text-brand-fg')}>
                 {pileText(item, mode)}
@@ -109,7 +109,7 @@ const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQty
           <div className="flex items-center gap-1.5">
             <IconButton
               variant="secondary"
-              aria-label={`${item.name}: ek kam`}
+              aria-label={`${item.name}: one less`}
               icon={<Minus />}
               disabled={!item.isSelected || item.returnQty <= 0}
               onClick={() => step(-1)}
@@ -129,7 +129,7 @@ const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQty
             />
             <IconButton
               variant="secondary"
-              aria-label={`${item.name}: ek zyada`}
+              aria-label={`${item.name}: one more`}
               icon={<Plus />}
               disabled={!item.isSelected || item.returnQty >= max}
               onClick={() => step(1)}
@@ -138,7 +138,7 @@ const ReturnLine = memo(function ReturnLine({ item, index, mode, onToggle, onQty
           </div>
           <Money
             amount={lineValue}
-            title="Qty x rate (bill discount se pehle)"
+            title="Qty x rate (before bill discount)"
             className={cn('w-20 text-right text-sm font-semibold', item.isSelected ? 'text-fg' : 'text-fg-faint')}
           />
         </div>
@@ -297,7 +297,7 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
               </div>
               {reasonForcesScrap && (
                 <p role="status" className="mt-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
-                  Reason "{finalReason}" kharab maal batata hai, is liye stock wapas nahi jayega (spoilage). Maal theek hai to reason badlein.
+                  Reason "{finalReason}" means spoiled goods, so the stock won't go back (spoilage). If the goods are fine, change the reason.
                 </p>
               )}
             </div>
@@ -306,7 +306,7 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
           {showRefundPayment && (
             <div className="space-y-3">
               <div role="group" aria-labelledby={`${FORM_ID}-refund-mode`}>
-                <p id={`${FORM_ID}-refund-mode`} className="mb-2 text-xs font-semibold text-fg-muted">Refund Kis Tarah Dena Hy? (Payment Mode)</p>
+                <p id={`${FORM_ID}-refund-mode`} className="mb-2 text-xs font-semibold text-fg-muted">How to Pay the Refund (Payment Mode)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <ChoiceCard selected={refundPaymentMode === 'Cash'} onSelect={() => onRefundModeChange('Cash')} icon={<Banknote />} title="Cash (Drawer)" />
                   <ChoiceCard selected={refundPaymentMode === 'Online'} onSelect={() => onRefundModeChange('Online')} icon={<Wallet />} title="Online / Bank Transfer" />
@@ -323,10 +323,10 @@ export default function SaleReturnDialog(props: SaleReturnDialogProps) {
                   />
                   <span className="text-left">
                     <span className="block text-sm font-semibold text-warning-fg">
-                      Ghalati se Cash select hua tha? Original sale ko "Online" mark karein
+                      Was Cash selected by mistake? Mark the original sale as "Online"
                     </span>
                     <span className="mt-0.5 block text-xs leading-snug text-warning-fg/90">
-                      Customer ne online pay kiya tha lekin sale Cash par cut gayi thi? Is option ko tick karein taake sale "Online" me convert ho jaye aur Cash Drawer ka balance theek rahe.
+                      Did the customer pay online but the sale was rung up as Cash? Tick this so the sale becomes "Online" and the cash drawer balance stays right.
                     </span>
                   </span>
                 </label>

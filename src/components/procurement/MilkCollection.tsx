@@ -197,11 +197,11 @@ const MilkCollection: React.FC = () => {
   const isBackDated = form.date !== today;
   const shiftTotal = daySummary.byShift.find(item => item.name === form.shift);
 
-  const qtyError = triedSave && !qtyOk ? (Number.isFinite(qty) && qty <= 0 ? 'Liter 0 se zyada hone chahiye' : 'Liter likhein') : undefined;
-  const rateError = triedSave && !rateOk ? (Number.isFinite(rate) && rate <= 0 ? 'Rate 0 se zyada hona chahiye' : 'Rate likhein') : undefined;
-  const supplierError = triedSave && !form.supplier_id ? 'Farmer chunein' : undefined;
+  const qtyError = triedSave && !qtyOk ? (Number.isFinite(qty) && qty <= 0 ? 'Liters must be more than 0' : 'Enter liters') : undefined;
+  const rateError = triedSave && !rateOk ? (Number.isFinite(rate) && rate <= 0 ? 'Rate must be more than 0' : 'Enter a rate') : undefined;
+  const supplierError = triedSave && !form.supplier_id ? 'Choose a farmer' : undefined;
 
-  const status = total <= 0 ? null : paid >= total ? { label: 'Fully paid', tone: 'success' as const } : paid > 0 ? { label: 'Partly paid', tone: 'warning' as const } : { label: 'On khata', tone: 'danger' as const };
+  const status = total <= 0 ? null : paid >= total ? { label: 'Fully paid', tone: 'success' as const } : paid > 0 ? { label: 'Partly paid', tone: 'warning' as const } : { label: 'On credit', tone: 'danger' as const };
 
   // The fields are always mounted, so focus moves at once (a frame callback never runs in a background tab).
   const focusField = (ref: React.RefObject<HTMLDivElement | null>) => {
@@ -255,14 +255,14 @@ const MilkCollection: React.FC = () => {
       return;
     }
     if (!qtyOk) { showToast('Please enter a valid volume (Liters) greater than 0', 'warning'); focusLiters(); return; }
-    if (!rateOk) { showToast('Rate per liter 0 se zyada likhein', 'warning'); focusRate(); return; }
-    if (isLocked) { showToast(`${form.date} band (locked) hai. Is din ki milk entry save nahi ho sakti.`, 'warning'); return; }
+    if (!rateOk) { showToast('Enter a rate per liter greater than 0', 'warning'); focusRate(); return; }
+    if (isLocked) { showToast(`${form.date} is locked. Milk entries can't be saved for this day.`, 'warning'); return; }
     if (overPaid) {
-      showToast('Paid amount bill se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.', 'warning');
+      showToast('Paid amount is more than the bill. Give the extra amount to the supplier as a separate Advance payment.', 'warning');
       return;
     }
     if (paid > 0 && availableAccounts.length === 0) {
-      showToast("Aapka koi Payment / Cash Drawer account mojood nahi hy! Pehle 'Bank & Cash' module men account banayein ya Paid Amount ko 0 rakh ker entry ko Khata per save karein.", 'warning');
+      showToast("You have no Payment / Cash Drawer account! First create one in the 'Bank & Cash' module, or keep Paid Amount at 0 to save the entry on credit.", 'warning');
       return;
     }
 
@@ -271,17 +271,17 @@ const MilkCollection: React.FC = () => {
     if (duplicates.length > 0) {
       const ok = await confirmAction({
         tone: 'warning',
-        title: 'Yeh entry pehle se hai',
-        message: `${supplierName} ki ${shortDay(form.date)} ${form.shift} (${form.milk_type}) slip pehle hi save hai.`,
+        title: 'This entry already exists',
+        message: `${supplierName}'s ${shortDay(form.date)} ${form.shift} (${form.milk_type}) slip is already saved.`,
         consequences: [
           ...duplicates.slice(0, 3).map((entry: any) => {
             const time = pkTime(entry.date);
             return `${formatQty(entry.quantity)} L @ Rs ${formatRate(entry.rate)} = Rs ${formatQty(entry.total_amount, 2)}${time ? ` · ${time}` : ''}`;
           }),
-          'Dobara save karne se farmer ke khaate mein doosri slip judegi.',
+          "Saving again adds a second slip to the farmer's ledger.",
         ],
-        confirmLabel: 'Haan, nayi slip save karein',
-        cancelLabel: 'Nahi, wapas',
+        confirmLabel: 'Yes, save new slip',
+        cancelLabel: 'No, go back',
       });
       if (!ok) { savingRef.current = false; return; }
     }
@@ -360,7 +360,7 @@ const MilkCollection: React.FC = () => {
     }
     const fullyFree = available >= (Number(entry.quantity) || 0) - 0.0005;
     if (correct && !fullyFree) {
-      showToast(`Is slip ka ${formatQty((Number(entry.quantity) || 0) - available)} L production mein ja chuka hai. Sirf bacha hua ${formatQty(available)} L return ho sakta hai.`, 'warning');
+      showToast(`${formatQty((Number(entry.quantity) || 0) - available)} L of this slip has already gone to production. Only the remaining ${formatQty(available)} L can be returned.`, 'warning');
     }
     setReturnRequest({
       entry,
@@ -392,7 +392,7 @@ const MilkCollection: React.FC = () => {
   };
 
   const varietyPills: PillOption<string>[] = milkTypes.map(option => ({ value: option.value, label: option.label, dot: varietyDot(option.value) }));
-  const dayLabel = isBackDated ? shortDay(form.date) : 'Aaj';
+  const dayLabel = isBackDated ? shortDay(form.date) : 'Today';
   const shiftShare = daySummary.liters > 0 && shiftTotal ? Math.round((shiftTotal.liters / daySummary.liters) * 100) : 0;
 
   return (
@@ -400,10 +400,10 @@ const MilkCollection: React.FC = () => {
       <ProcurementHeader
         active="purchase"
         title="Milk Collection"
-        subtitle={<>Farmer chunein, liter aur rate likhein, <b className="font-semibold text-fg-muted">Enter</b> dabayein.</>}
+        subtitle={<>Choose a farmer, enter liters and rate, press <b className="font-semibold text-fg-muted">Enter</b>.</>}
         actions={
           <Button variant="secondary" leftIcon={<History />} onClick={() => setLogOpen(true)}>
-            Poora log
+            Full log
           </Button>
         }
       />
@@ -421,7 +421,7 @@ const MilkCollection: React.FC = () => {
           value={`${formatQty(shiftTotal?.liters || 0)} L`}
           icon={<ShiftIcon name={form.shift} className="text-current" />}
           tone="info"
-          hint={daySummary.liters > 0 ? `${countOf(shiftTotal?.slips || 0, 'slip')} · ${shiftShare}% of day` : 'Abhi koi entry nahi'}
+          hint={daySummary.liters > 0 ? `${countOf(shiftTotal?.slips || 0, 'slip')} · ${shiftShare}% of day` : 'No entries yet'}
         />
         <StatCard
           label="Milk bill"
@@ -430,7 +430,7 @@ const MilkCollection: React.FC = () => {
           hint={daySummary.liters > 0 ? `Avg Rs ${formatRate(daySummary.amount / daySummary.liters)}/L` : '—'}
         />
         <StatCard
-          label="On khata"
+          label="On credit"
           value={<Money amount={daySummary.due} compact />}
           icon={<BookOpen />}
           tone={daySummary.due > 0.5 ? 'danger' : 'neutral'}
@@ -461,11 +461,11 @@ const MilkCollection: React.FC = () => {
                   />
                 </div>
                 {isBackDated ? (
-                  <button type="button" onClick={() => setForm(current => ({ ...current, date: today }))} className="cursor-pointer" title="Aaj ki date par wapas">
+                  <button type="button" onClick={() => setForm(current => ({ ...current, date: today }))} className="cursor-pointer" title="Back to today's date">
                     <Badge tone="warning" dot>Back-date</Badge>
                   </button>
                 ) : (
-                  <Badge tone="brand" dot>Aaj</Badge>
+                  <Badge tone="brand" dot>Today</Badge>
                 )}
               </div>
               <ShiftPicker
@@ -480,7 +480,7 @@ const MilkCollection: React.FC = () => {
                   onClick={() => { setShiftPinned(false); setForm(current => ({ ...current, shift: autoShift })); }}
                   className="cursor-pointer self-start xl:self-auto"
                 >
-                  <Badge tone="info" icon={<ShiftIcon name={autoShift} size={12} className="text-current" />}>Ab {autoShift} ka waqt hai — badlein</Badge>
+                  <Badge tone="info" icon={<ShiftIcon name={autoShift} size={12} className="text-current" />}>It's {autoShift} time now — switch</Badge>
                 </button>
               )}
               {varietyPills.length > 0 ? (
@@ -492,7 +492,7 @@ const MilkCollection: React.FC = () => {
                   className="xl:ml-auto"
                 />
               ) : (
-                <Badge tone="warning" className="h-auto whitespace-normal py-1 xl:ml-auto">Catalog mein sab milk varieties inactive hain.</Badge>
+                <Badge tone="warning" className="h-auto whitespace-normal py-1 xl:ml-auto">All milk varieties are inactive in the catalog.</Badge>
               )}
             </div>
 
@@ -500,7 +500,7 @@ const MilkCollection: React.FC = () => {
               {isLocked && (
                 <div className="flex items-center gap-2.5 rounded-control bg-warning-soft p-3 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25" role="alert">
                   <Lock size={15} className="shrink-0" aria-hidden="true" />
-                  <span><strong>{prettyDate(form.date)} band (locked) hai.</strong> Is din ki milk entry save nahi ho sakti.</span>
+                  <span><strong>{prettyDate(form.date)} is locked.</strong> Milk entries can't be saved for this day.</span>
                 </div>
               )}
 
@@ -514,7 +514,7 @@ const MilkCollection: React.FC = () => {
                     </Badge>
                   )}
                 >
-                  Farmer / Gwala
+                  Farmer / Milkman
                 </SectionLabel>
                 <SupplierPicker
                   id="milk-supplier"
@@ -522,7 +522,7 @@ const MilkCollection: React.FC = () => {
                   onChange={pickSupplier}
                   onPicked={focusLiters}
                   suppliers={milkSuppliers}
-                  placeholder="Naam, gaon ya phone se dhoondein…  ( / )"
+                  placeholder="Search by name, village or phone…  ( / )"
                   focusToken={focusToken}
                   aria-invalid={supplierError ? true : undefined}
                 />
@@ -531,7 +531,7 @@ const MilkCollection: React.FC = () => {
                   <p className="mt-2 flex items-start gap-1.5 rounded-control bg-warning-soft px-2.5 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25" role="status">
                     <AlertTriangle size={14} className="mt-px shrink-0" aria-hidden="true" />
                     <span>
-                      Is farmer ki {form.shift} ({form.milk_type}) slip {dayLabel === 'Aaj' ? 'aaj' : dayLabel} pehle se hai:{' '}
+                      This farmer already has a {form.shift} ({form.milk_type}) slip {dayLabel === 'Today' ? 'today' : `for ${dayLabel}`}:{' '}
                       {duplicates.slice(0, 2).map((entry: any) => `${formatQty(entry.quantity)} L @ Rs ${formatRate(entry.rate)}${pkTime(entry.date) ? ` (${pkTime(entry.date)})` : ''}`).join(', ')}
                     </span>
                   </p>
@@ -539,7 +539,7 @@ const MilkCollection: React.FC = () => {
                 {supplierRecent[0] && (
                   <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-fg-subtle lg:hidden">
                     <History size={11} aria-hidden="true" />
-                    Pichli: <b className="tabular-nums text-fg-muted">{formatQty(supplierRecent[0].quantity)} L @ Rs {formatRate(supplierRecent[0].rate)}</b>
+                    Last: <b className="tabular-nums text-fg-muted">{formatQty(supplierRecent[0].quantity)} L @ Rs {formatRate(supplierRecent[0].rate)}</b>
                     · {shortDay(dayOf(supplierRecent[0]))} {supplierRecent[0].shift}
                   </p>
                 )}
@@ -569,15 +569,15 @@ const MilkCollection: React.FC = () => {
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
                   <span className="text-fg-subtle">
-                    {rateSource === 'default' && 'Farmer ka default rate laga hai.'}
-                    {rateSource === 'last' && 'Pichli slip ka rate laga hai.'}
+                    {rateSource === 'default' && "Using the farmer's default rate."}
+                    {rateSource === 'last' && "Using the last slip's rate."}
                     {!rateSource && Number(selectedSupplier?.default_rate) > 0 && Number(form.rate) !== Number(selectedSupplier.default_rate) && (
                       <button
                         type="button"
                         onClick={() => { setRateSource('default'); setForm(current => ({ ...current, rate: String(selectedSupplier.default_rate) })); }}
                         className="cursor-pointer font-semibold text-brand-fg hover:underline"
                       >
-                        Farmer ka default rate Rs {formatRate(selectedSupplier.default_rate)} lagayein
+                        Use the farmer's default rate Rs {formatRate(selectedSupplier.default_rate)}
                       </button>
                     )}
                   </span>
@@ -591,7 +591,7 @@ const MilkCollection: React.FC = () => {
 
               <section>
                 <SectionLabel step={3} htmlFor="milk-paid" aside={status && <Badge tone={status.tone} dot>{status.label}</Badge>}>
-                  Payment <span className="font-normal text-fg-subtle">(khali = khata)</span>
+                  Payment <span className="font-normal text-fg-subtle">(blank = on credit)</span>
                 </SectionLabel>
                 <div className="flex flex-col gap-3 rounded-control bg-surface-2/60 p-3 ring-1 ring-inset ring-line sm:p-4">
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -606,7 +606,7 @@ const MilkCollection: React.FC = () => {
                         invalid={overPaid}
                         describedBy={overPaid ? 'milk-paid-error' : undefined}
                       />
-                      {overPaid && <p id="milk-paid-error" className="mt-1.5 text-xs font-semibold text-danger-fg">Paid bill (<Money amount={total} />) se zyada hai.</p>}
+                      {overPaid && <p id="milk-paid-error" className="mt-1.5 text-xs font-semibold text-danger-fg">Paid is more than the bill (<Money amount={total} />).</p>}
                     </div>
                     <PayModeControl value={payMode} onChange={setPayMode} disabled={paid <= 0} />
                   </div>
@@ -634,7 +634,7 @@ const MilkCollection: React.FC = () => {
                   disabled={isLocked || milkTypes.length === 0}
                   leftIcon={<Save />}
                   className="flex-1 sm:flex-initial"
-                  title={isLocked ? `Selected date (${form.date}) is closed & locked` : 'Enter se bhi save hota hai'}
+                  title={isLocked ? `Selected date (${form.date}) is closed & locked` : 'Enter also saves'}
                 >
                   {isSaving ? 'Saving…' : 'Save slip'}
                   {!isSaving && <Kbd className="hidden bg-brand-on/15 text-brand-on ring-brand-on/20 sm:inline-flex">Enter</Kbd>}
@@ -651,7 +651,7 @@ const MilkCollection: React.FC = () => {
               </span>
               <Money amount={lastSaved.total} className="font-bold text-fg" />
               <Badge tone={lastSaved.paid >= lastSaved.total ? 'success' : lastSaved.paid > 0 ? 'warning' : 'danger'}>
-                {lastSaved.paid >= lastSaved.total ? 'Paid' : lastSaved.paid > 0 ? 'Partial' : 'Khata'}
+                {lastSaved.paid >= lastSaved.total ? 'Paid' : lastSaved.paid > 0 ? 'Partial' : 'Unpaid'}
               </Badge>
             </div>
           )}
@@ -677,7 +677,7 @@ const MilkCollection: React.FC = () => {
                     window.dispatchEvent(new CustomEvent('mooco-select-supplier', { detail: { supplierId: selectedSupplier.id } }));
                   }}
                 >
-                  Khata
+                  Ledger
                 </Button>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -686,7 +686,7 @@ const MilkCollection: React.FC = () => {
               </div>
               <p className="mb-1.5 mt-4 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Recent deliveries</p>
               {supplierRecent.length === 0 ? (
-                <p className="rounded-control border border-dashed border-line py-3 text-center text-xs text-fg-subtle">Pehli delivery</p>
+                <p className="rounded-control border border-dashed border-line py-3 text-center text-xs text-fg-subtle">First delivery</p>
               ) : (
                 <ul className="flex flex-col gap-1.5">
                   {supplierRecent.map((entry: any) => (
@@ -710,7 +710,7 @@ const MilkCollection: React.FC = () => {
             <div className="flex items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-[15px] font-bold text-fg">
                 <span className="size-2 rounded-full bg-brand-accent" aria-hidden="true" />
-                {isBackDated ? prettyDate(form.date) : 'Aaj ki collection'}
+                {isBackDated ? prettyDate(form.date) : "Today's collection"}
               </h3>
               <span className="text-xs font-bold tabular-nums text-fg-muted">{formatQty(daySummary.liters)} L</span>
             </div>
@@ -723,7 +723,7 @@ const MilkCollection: React.FC = () => {
         entries={dayEntries}
         shifts={shifts}
         suppliersById={suppliersById}
-        dayLabel={isBackDated ? prettyDate(form.date) : 'Aaj'}
+        dayLabel={isBackDated ? prettyDate(form.date) : 'Today'}
         onReturn={openReturn}
         onOpenLog={() => setLogOpen(true)}
       />
@@ -853,7 +853,7 @@ function ShiftBars({ rows, active, otherLiters }: { rows: { name: string; liters
         </div>
       ))}
       {otherLiters > 0 && (
-        <p className="text-[11px] text-fg-subtle">Purane shift naam: <b className="tabular-nums text-fg-muted">{formatQty(otherLiters)} L</b></p>
+        <p className="text-[11px] text-fg-subtle">Old shift names: <b className="tabular-nums text-fg-muted">{formatQty(otherLiters)} L</b></p>
       )}
     </div>
   );

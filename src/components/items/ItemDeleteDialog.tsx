@@ -67,7 +67,7 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
   const minusPiles = reading.piles.filter(p => (p.kind === 'loose' || p.kind === 'packed') && p.count < 0);
   const pileRow = (p: StockPile): [string, React.ReactNode] => {
     if (p.kind === 'loose') return ['Loose', formatBaseQty(p.count, reading.unit)];
-    if (p.kind === 'orphan') return [`Purana count: ${p.name}`, formatQty(p.count, 3)];
+    if (p.kind === 'orphan') return [`Old count: ${p.name}`, formatQty(p.count, 3)];
     return [`${p.name}${p.isActive ? '' : ' (hidden)'}`, `${formatQty(p.count, 3)} × ${formatBaseQty(p.contains, reading.unit)} = ${formatBaseQty(p.baseQty, reading.unit)}`];
   };
 
@@ -87,7 +87,7 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
     }
   };
 
-  const cancel = (label = 'Wapas jayen') => (
+  const cancel = (label = 'Go back') => (
     <Button variant="secondary" onClick={onClose} disabled={Boolean(busy)}>{label}</Button>
   );
   const common = { open: true, onClose, size: 'sm' as const, dismissible: !busy, role: 'alertdialog' as const };
@@ -98,13 +98,13 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
         {...common}
         icon={<DialogIcon tone="info"><ShieldAlert /></DialogIcon>}
         title="System product protected"
-        description={<><strong className="text-fg">{item.name}</strong> core milk variety hai, isko delete nahi kar sakte. Inactive karne se yeh catalog mein rahega lekin bechne aur khareedne mein nahi aayega.</>}
+        description={<><strong className="text-fg">{item.name}</strong> is a core milk variety, so it can't be deleted. If made inactive it stays in the catalog, but won't show for selling or buying.</>}
         footer={<>
-          {cancel('Band karein')}
+          {cancel('Close')}
           {item.isActive ? (
-            <Button variant="danger-soft" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Inactive karein</Button>
+            <Button variant="danger-soft" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Make inactive</Button>
           ) : (
-            <Button leftIcon={<RotateCcw />} loading={busy === 'reactivate'} onClick={() => run('reactivate')}>Reactivate karein</Button>
+            <Button leftIcon={<RotateCcw />} loading={busy === 'reactivate'} onClick={() => run('reactivate')}>Reactivate</Button>
           )}
         </>}
       />
@@ -116,9 +116,9 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
       <Modal
         {...common}
         icon={<DialogIcon tone="warning"><ShieldAlert /></DialogIcon>}
-        title="Pehle recipes se hatayen"
-        description={<><strong className="text-fg">{item.name}</strong> in products ki recipe mein istemal ho raha hai. Recipe badle baghair isko delete ya inactive nahi kar sakte.</>}
-        footer={cancel('Theek hai')}
+        title="Remove from recipes first"
+        description={<><strong className="text-fg">{item.name}</strong> is used in the recipes of these products. It can't be deleted or made inactive until those recipes change.</>}
+        footer={cancel('OK')}
       >
         <ul className="max-h-48 divide-y divide-line/70 overflow-y-auto rounded-control border border-line bg-surface-2 text-sm">
           {recipesUsing.map(name => (
@@ -136,17 +136,17 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
       <Modal
         {...common}
         icon={<DialogIcon tone="warning"><AlertTriangle /></DialogIcon>}
-        title="Stock abhi baqi hai"
-        description="Stock wala product seedha delete karne se stock value ka hisaab bigar jata hai. Write off karne se neeche ka har stock 0 ho kar spoilage mein jayega aur product inactive ho jayega. Agar stock bechna hai to wapas jayen."
+        title="Stock still on hand"
+        description="Deleting a product that still has stock throws off the stock value. Writing off sets every stock below to 0, moves it to spoilage and makes the product inactive. To sell the stock instead, go back."
         footer={<>
           {cancel()}
           <Button variant="danger" leftIcon={<PackageX />} loading={busy === 'write_off_spoilage'} onClick={() => run('write_off_spoilage')}>
-            Write off karein
+            Write off
           </Button>
         </>}
       >
         <div className="space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Yeh stock 0 hoga</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">This stock goes to 0</p>
           <Facts rows={[
             ...toClear.map(pileRow),
             ['Value at cost', <Money key="v" amount={reading.costValue} />],
@@ -154,7 +154,7 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
           {minusPiles.length > 0 && (
             <p className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-medium text-warning-fg">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              Minus stock ({minusPiles.map(p => pileRow(p).join(' ')).join(', ')}) write off se theek nahi hota. Usko Inventory mein stock count se 0 karein.
+              Minus stock ({minusPiles.map(p => pileRow(p).join(' ')).join(', ')}) isn't fixed by a write-off. Set it to 0 with a stock count in Inventory.
             </p>
           )}
         </div>
@@ -167,14 +167,14 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
       <Modal
         {...common}
         icon={<DialogIcon tone="warning"><Archive /></DialogIcon>}
-        title={item.isActive ? 'Product inactive karein' : 'Product pehle se inactive hai'}
-        description="Is product ki purani sales ya stock history hai, is liye yeh delete nahi hoga. Inactive product POS se hat jata hai, purane bills aur reports wese hi rehte hain."
+        title={item.isActive ? 'Make product inactive' : 'Product is already inactive'}
+        description="This product has past sales or stock history, so it won't be deleted. An inactive product leaves the POS; old bills and reports stay as they are."
         footer={<>
           {cancel()}
           {item.isActive ? (
-            <Button variant="danger-soft" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Inactive karein</Button>
+            <Button variant="danger-soft" leftIcon={<Archive />} loading={busy === 'deactivate'} onClick={() => run('deactivate')}>Make inactive</Button>
           ) : (
-            <Button leftIcon={<RotateCcw />} loading={busy === 'reactivate'} onClick={() => run('reactivate')}>Reactivate karein</Button>
+            <Button leftIcon={<RotateCcw />} loading={busy === 'reactivate'} onClick={() => run('reactivate')}>Reactivate</Button>
           )}
         </>}
       >
@@ -191,16 +191,16 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
     <Modal
       {...common}
       icon={<DialogIcon tone="danger"><Trash2 /></DialogIcon>}
-      title={`${item.name} delete karein?`}
-      description="Is product ka koi stock, bill ya purchase nahi hai."
+      title={`Delete ${item.name}?`}
+      description="This product has no stock, bills or purchases."
       footer={<>
         {cancel()}
-        <Button variant="danger" leftIcon={<Trash2 />} loading={busy === 'hard_delete'} onClick={() => run('hard_delete')}>Haan, delete karein</Button>
+        <Button variant="danger" leftIcon={<Trash2 />} loading={busy === 'hard_delete'} onClick={() => run('hard_delete')}>Yes, delete</Button>
       </>}
     >
       <ul className="space-y-1.5 text-sm text-fg-muted">
-        <li className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />Product catalog aur POS se hamesha ke liye hat jayega.</li>
-        <li className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />Yeh kaam wapas nahi ho sakta.</li>
+        <li className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />The product is removed from the catalog and POS for good.</li>
+        <li className="flex gap-2"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />This can't be undone.</li>
       </ul>
     </Modal>
   );

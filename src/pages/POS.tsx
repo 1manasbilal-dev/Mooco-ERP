@@ -574,10 +574,10 @@ const POS: React.FC = () => {
     if (!option) {
       const variant = (product.variants || []).find(v => v.id === optionId);
       unitProblem = optionId === 'base'
-        ? `${name}: loose sale band hai. Pack ya unit chunein.`
+        ? `${name}: loose sale is off. Choose a pack or unit.`
         : variant
-          ? `${name}: ${variant.name || 'ye pack'} hidden hai, is liye bik nahi sakta. Unit badlein ya line hata dein.`
-          : `${name}: ye pack ab catalog mein nahi hai. Unit badlein ya line hata dein.`;
+          ? `${name}: ${variant.name || 'this pack'} is hidden, so it can't be sold. Change the unit or remove the line.`
+          : `${name}: this pack is no longer in the catalog. Change the unit or remove the line.`;
     }
     return { product, option, name, unitProblem };
   };
@@ -600,7 +600,7 @@ const POS: React.FC = () => {
     });
     if (short.length === 0) return null;
     const lines = short.map(row => shortageText(row, (items || []).find(i => i.id === row.itemId)));
-    return `Stock kam hai — ${lines.join('; ')}. Qty kam karein ya stock theek karein.`;
+    return `Not enough stock — ${lines.join('; ')}. Lower the qty or correct the stock.`;
   };
 
   const subtotal = useMemo(() => {
@@ -861,7 +861,7 @@ const POS: React.FC = () => {
 
   const swipeRemoveLine = useLatestCallback((item: any) => {
     removeLine(item.cartItemId);
-    showToast(`${item.name} cart se hata diya`, 'info');
+    showToast(`${item.name} removed from cart`, 'info');
   });
 
   // Quick entry keeps its draft local so changing amounts does not rerender the catalog.
@@ -1089,10 +1089,10 @@ const POS: React.FC = () => {
     if (cart.length > 0) {
       const confirmReplace = await confirmAction({
         tone: 'warning',
-        title: 'Cart mein pehle se items hain',
-        message: 'Parked order wapas laane se abhi wali cart hat jayegi.',
-        consequences: [`Cart ke ${cart.length} item(s) hat jayenge.`, 'Parked order ke items, customer aur payment wapas aa jayenge.'],
-        confirmLabel: 'Haan, replace karein',
+        title: 'The cart already has items',
+        message: 'Bringing back the parked order will replace the current cart.',
+        consequences: [`The ${cart.length} item(s) in the cart will be removed.`, "The parked order's items, customer and payment will come back."],
+        confirmLabel: 'Yes, replace',
       });
       if (!confirmReplace) return;
     }
@@ -1119,7 +1119,7 @@ const POS: React.FC = () => {
     if (cart.length === 0) return false;
     if (bookingId && (!booking || !hasPermission('customer_orders') || !canPerform('pos', 'create'))) return false;
     if (cart.some(line => !(Number(line.qty) > 0))) {
-      showToast('Qty 0 wali line hata dein ya qty likhein', 'warning');
+      showToast('Remove the qty 0 line or enter a qty', 'warning');
       return false;
     }
     const brokenPack = !bookingId && cart.find(line => !cartLineUsesMainStock(line) && !packedQtyIsWhole(Number(line.qty) || 0));
@@ -1146,15 +1146,15 @@ const POS: React.FC = () => {
     }
 
     // A deleted customer (restored draft or parked bill) would save as a walk-in Credit bill with the
-    // unpaid amount on no khata.
+    // unpaid amount on no ledger.
     if (!bookingId && selectedCustomerId && !(customers || []).some(c => c.id === selectedCustomerId)) {
-      showToast('Ye customer ab list mein nahi hai. Customer dobara select karein ya Walk-in karein.', 'warning');
+      showToast('This customer is no longer in the list. Select the customer again or switch to Walk-in.', 'warning');
       return false;
     }
 
     const discountInput = parseFloat(discountValue) || 0;
     if (discountInput < 0 || (discountType === 'percent' && discountInput > 100) || discountAmount > subtotal) {
-      showToast('Discount bill ki raqam se zyada nahi ho sakta.', 'warning');
+      showToast("The discount can't be more than the bill amount.", 'warning');
       return false;
     }
 
@@ -1171,23 +1171,23 @@ const POS: React.FC = () => {
         const summary = `Discount ${formatCurrency(billDiscount)} (${percent.toFixed(1)}%)`;
         const approvedBy = await requestApproval({
           permission: 'approvals:discount',
-          title: 'Discount ke liye manager approval',
-          reason: mayDiscount ? `${summary} — aap ki limit ${limit}% hai.` : `${summary} — aap ko discount dene ki ijazat nahi.`,
+          title: 'Manager approval for discount',
+          reason: mayDiscount ? `${summary} — your limit is ${limit}%.` : `${summary} — you don't have permission to give discounts.`,
         });
         if (!approvedBy) return false;
-        showToast(`Discount ${approvedBy} ne approve kiya.`, 'success');
+        showToast(`Discount approved by ${approvedBy}.`, 'success');
       }
     }
 
-    // A walk-in has no khata, so a short cash payment would leave the unpaid part recorded nowhere.
+    // A walk-in has no ledger, so a short cash payment would leave the unpaid part recorded nowhere.
     if (!selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal) {
-      showToast(`${formatCurrency(roundCurrency(grandTotal - cashGiven))} kam hain. Poori raqam lein ya customer select karein taake baqi khaate mein jaye.`, 'warning');
+      showToast(`${formatCurrency(roundCurrency(grandTotal - cashGiven))} short. Take the full amount, or select a customer so the rest goes on their ledger.`, 'warning');
       return false;
     }
 
     // Only cash can be over-tendered (the excess is change). Online/credit money above the bill has nowhere to go.
     if (selectedCustomerId && paymentMode !== 'Cash' && customerPaidAmount !== '' && (parseFloat(customerPaidAmount) || 0) > roundCurrency(grandTotal - bookingAdvance)) {
-      showToast('Received amount bill ki baqi raqam se zyada hai. Zyada raqam customer payment (khata) mein alag se lein.', 'warning');
+      showToast('The received amount is more than the balance due on the bill. Take the extra as a separate customer payment (ledger).', 'warning');
       return false;
     }
 
@@ -1234,7 +1234,7 @@ const POS: React.FC = () => {
           shift_session_id: activeShiftSession.id, cash_given: actualPaid + finalChangeReturn, change_return: finalChangeReturn
         });
         invoiceNo = bookingSale.bill_number;
-        // The booking RPC committed sale, stock, cash and khata together. Never queue it again.
+        // The booking RPC committed sale, stock, cash and ledger together. Never queue it again.
         void retryLoading().catch(() => {});
       }
       const savedBillNumber = bookingSale ? bookingSale.bill_number : await addSale(
@@ -1502,7 +1502,7 @@ const POS: React.FC = () => {
             </Card>
             {booking.status === 'Completed' ? (
               <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-card bg-success-soft p-5 text-sm font-semibold text-success-fg ring-1 ring-inset ring-success/20">
-                <span>Order billed successfully. Invoice, stock, cash and khata are saved.</span>
+                <span>Order billed successfully. Invoice, stock, cash and ledger are saved.</span>
                 <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={() => setCompletedSaleModalOpen(true)}>Print receipt</Button>
               </div>
             ) : (
@@ -1546,8 +1546,8 @@ const POS: React.FC = () => {
           <span className="flex items-center gap-2 font-semibold">
             {isTodayLocked ? <Lock className="size-4 shrink-0" aria-hidden="true" /> : <Clock className="size-4 shrink-0" aria-hidden="true" />}
             {isTodayLocked
-              ? `Business day ${getBusinessDate()} band ho chuka hai — sale nahi ho sakti. Owner se day reopen karwayein.`
-              : 'Shift start nahi hui. Sale se pehle drawer ki cash gin kar shift start karein.'}
+              ? `Business day ${getBusinessDate()} is closed — no sales can be made. Ask the owner to reopen the day.`
+              : 'No shift started. Count the drawer cash and start a shift before selling.'}
           </span>
           {!isTodayLocked && (
             <button

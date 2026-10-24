@@ -22,7 +22,7 @@ interface SettingsProps {
 type TabId = 'business' | 'sales' | 'payments' | 'operations' | 'users' | 'security' | 'data';
 
 const TABS: { id: TabId; label: string; hint: string; icon: React.ElementType; group: string }[] = [
-  { id: 'business', label: 'Business Profile', hint: 'Naam, address, NTN', icon: Building2, group: 'Business' },
+  { id: 'business', label: 'Business Profile', hint: 'Name, address, NTN', icon: Building2, group: 'Business' },
   { id: 'sales', label: 'Sales & Receipts', hint: 'Bill number, receipt, POS', icon: Receipt, group: 'Business' },
   { id: 'payments', label: 'Payments & Accounts', hint: 'Default cash / bank', icon: Wallet, group: 'Business' },
   { id: 'operations', label: 'Inventory & Milk', hint: 'Stock rule, shifts', icon: Package, group: 'Business' },
@@ -118,13 +118,13 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
       const newLock = draft.security.lockDate;
       if (isOwner && newLock && newLock !== saved.security.lockDate && !(await confirmAction({
         tone: 'warning',
-        title: `Books ${newLock} tak band karein?`,
+        title: `Close the books up to ${newLock}?`,
         consequences: [
-          `${newLock} aur us se pehle ki koi entry add, edit ya delete nahi ho sakegi.`,
-          'Bills, purchases, kharche, payments aur journal sab par lagu hoga.',
-          'Baad mein Owner lock date peeche kar sakta hai.',
+          `No entry on or before ${newLock} can be added, edited or deleted.`,
+          'This applies to bills, purchases, expenses, payments and journal.',
+          'The Owner can move the lock date back later.',
         ],
-        confirmLabel: 'Haan, band karein',
+        confirmLabel: 'Yes, close books',
       }))) return;
       setSaving(true);
       const changes = draftToSettings(draft);
@@ -132,7 +132,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
       // that could undo the Owner's newer lock date / discount limit.
       if (!isOwner) delete changes.security;
       const ok = await updateSettings(changes);
-      if (ok) { setTriedSave(false); showToast('Settings save ho gayin.', 'success'); }
+      if (ok) { setTriedSave(false); showToast('Settings saved.', 'success'); }
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -161,10 +161,10 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
     <div className="min-h-full bg-canvas">
       <header className="sticky top-0 z-30 border-b border-line bg-surface">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
-          <IconButton variant="secondary" icon={<ArrowLeft />} aria-label="Wapas" onClick={onBack} />
+          <IconButton variant="secondary" icon={<ArrowLeft />} aria-label="Back" onClick={onBack} />
           <div className="min-w-0">
             <h1 className="text-lg font-bold tracking-tight text-fg">Settings</h1>
-            <p className="hidden text-xs text-fg-subtle sm:block">Business, staff ki ijazat aur data ki hifazat</p>
+            <p className="hidden text-xs text-fg-subtle sm:block">Business, staff access and data safety</p>
           </div>
         </div>
       </header>
@@ -217,7 +217,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
 
         <main className="min-w-0 flex-1">
           {FORM_TABS.includes(active.id) && readOnlyFor(active.id) && active.id !== 'security' && (
-            <div className="mb-4"><Notice icon={<Eye />}>Aap ye settings dekh sakte hain, badal nahi sakte.</Notice></div>
+            <div className="mb-4"><Notice icon={<Eye />}>You can view these settings but not change them.</Notice></div>
           )}
           {active.id === 'business' && <BusinessTab draft={draft} patch={patch} readOnly={readOnlyFor('business')} errors={shownErrors} />}
           {active.id === 'sales' && <SalesTab draft={draft} patch={patch} readOnly={readOnlyFor('sales')} errors={shownErrors} />}

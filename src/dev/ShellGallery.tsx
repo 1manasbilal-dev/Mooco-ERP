@@ -40,12 +40,12 @@ const CUSTOMER_OPTIONS: RichSelectOption[] = [
 const PAGE_TITLES: Record<string, [string, string | undefined]> = {
   dashboard: ['Dashboard', undefined],
   pos: ['POS Terminal', 'Counter & Sales'],
-  customers: ['Customers Khata', 'Parties & Ledgers'],
+  customers: ['Customer Ledgers', 'Parties & Ledgers'],
   settings: ['Settings', 'System'],
 };
 
 const notReal = () => new Promise<{ success: boolean; message?: string }>(resolve =>
-  window.setTimeout(() => resolve({ success: false, message: 'Gallery demo: PIN check yahan band hai.' }), 500));
+  window.setTimeout(() => resolve({ success: false, message: 'Gallery demo: PIN check is turned off here.' }), 500));
 
 function Crash(): React.ReactNode {
   throw new Error('Sample crash from the gallery');
@@ -124,7 +124,7 @@ function ShellDemo({ themeMode, toggleTheme }: { themeMode: ThemeMode; toggleThe
           <CardHeader title="Toasts" description="Success, error, info, warning" icon={<Bell />} />
           <CardBody className="flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" leftIcon={<CheckCircle2 />} onClick={() => showToast('Sale #1042 saved. Rs 2,500 cash.', 'success')}>Success</Button>
-            <Button variant="secondary" size="sm" onClick={() => showToast('Stock kam hai: Doodh 12 L baqi.', 'warning')}>Warning</Button>
+            <Button variant="secondary" size="sm" onClick={() => showToast('Low stock: 12 L milk left.', 'warning')}>Warning</Button>
             <Button variant="secondary" size="sm" onClick={() => showToast('Sync failed: network unreachable.', 'error')}>Error</Button>
             <Button variant="secondary" size="sm" onClick={() => showToast('Starting background sync...', 'info')}>Info</Button>
           </CardBody>
@@ -136,22 +136,22 @@ function ShellDemo({ themeMode, toggleTheme }: { themeMode: ThemeMode; toggleThe
             <Button
               variant="danger-soft"
               onClick={() => void confirmAction({
-                title: 'Customer delete karein?',
-                message: 'Al Rehman Sweets ka khata hamesha ke liye hat jayega.',
-                consequences: ['48,500 ka due balance bhi hat jayega', 'Purani sales history mein naam rahega'],
+                title: 'Delete customer?',
+                message: "Al Rehman Sweets' ledger will be removed for good.",
+                consequences: ['The 48,500 due balance is removed too', 'The name stays in old sales history'],
               })}
             >
               Danger confirm
             </Button>
-            <Button variant="secondary" onClick={() => void confirmAction({ title: 'Shift band karein?', message: 'Drawer count save ho jayega.', tone: 'warning' })}>Warning</Button>
-            <Button variant="secondary" onClick={() => void confirmAction({ title: 'Backup ready', message: 'File download ho gayi.', tone: 'info', cancelLabel: null })}>Notice</Button>
+            <Button variant="secondary" onClick={() => void confirmAction({ title: 'Close shift?', message: 'The drawer count will be saved.', tone: 'warning' })}>Warning</Button>
+            <Button variant="secondary" onClick={() => void confirmAction({ title: 'Backup ready', message: 'File downloaded.', tone: 'info', cancelLabel: null })}>Notice</Button>
           </CardBody>
         </Card>
 
         <Card>
           <CardHeader title="RichSelect" description="Searchable select used across forms" />
           <CardBody className="space-y-3">
-            <RichSelect options={CUSTOMER_OPTIONS} value={customer} onChange={setCustomer} placeholder="Customer chunein" />
+            <RichSelect options={CUSTOMER_OPTIONS} value={customer} onChange={setCustomer} placeholder="Select customer" />
             <RichSelect compact options={CUSTOMER_OPTIONS.slice(0, 3)} value="" onChange={() => {}} placeholder="Compact, no search" />
             <RichSelect options={CUSTOMER_OPTIONS} value="" onChange={() => {}} placeholder="Disabled" disabled />
           </CardBody>
@@ -226,7 +226,7 @@ function ShellDemo({ themeMode, toggleTheme }: { themeMode: ThemeMode; toggleThe
         description="Wide form; header and footer stay put while the body scrolls."
         footer={<>
           <Button variant="secondary" onClick={() => setWideOpen(false)}>Cancel</Button>
-          <Button onClick={() => void confirmAction({ title: 'Return save karein?', message: 'Confirm should sit above this modal.', tone: 'warning' })}>Save return</Button>
+          <Button onClick={() => void confirmAction({ title: 'Save return?', message: 'Confirm should sit above this modal.', tone: 'warning' })}>Save return</Button>
         </>}
       >
         <div className="space-y-2">

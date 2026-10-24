@@ -26,20 +26,20 @@ export const DataTab: React.FC = () => {
   });
 
   const modules = useMemo(() => [
-    { id: 'transactions', label: 'Sab transactions (test data saaf)', desc: 'Bills, purchases, batches, kharche, payments aur journal. Customers, suppliers, products aur accounts rehte hain; balance 0 ho jate hain.', count: sales.length + purchases.length + expenses.length + bankTransactions.length, unit: 'entries' },
-    { id: 'sales', label: 'POS bills & daily supply', desc: 'Tamam bills aur supply slips.', count: sales.length + dailySupplyEntries.length, unit: 'bills' },
-    { id: 'purchases', label: 'Milk & material purchases', desc: 'Doodh ki intake aur material ke bills.', count: purchases.length + materialPurchases.length, unit: 'bills' },
-    { id: 'production', label: 'Production batches', desc: 'Tamam batch history.', count: productionBatches.length, unit: 'batches' },
-    { id: 'customer_ledger', label: 'Customer khata', desc: 'Balance 0; customer profiles rehte hain.', count: customerTransactions.length, unit: 'entries' },
-    { id: 'supplier_ledger', label: 'Supplier khata', desc: 'Balance 0; supplier profiles rehte hain.', count: supplierTransactions.length, unit: 'entries' },
-    { id: 'expenses', label: 'Expenses & vendors', desc: 'Kharche ke vouchers aur vendor payments.', count: expenses.length + expenseVendors.length, unit: 'records' },
-    { id: 'bank_cash', label: 'Bank & cash transactions', desc: 'Transactions mit jati hain, account balance 0.', count: bankTransactions.length, unit: 'entries' },
+    { id: 'transactions', label: 'All transactions (clear test data)', desc: 'Bills, purchases, batches, expenses, payments and journal. Customers, suppliers, products and accounts stay; balances go to 0.', count: sales.length + purchases.length + expenses.length + bankTransactions.length, unit: 'entries' },
+    { id: 'sales', label: 'POS bills & daily supply', desc: 'All bills and supply slips.', count: sales.length + dailySupplyEntries.length, unit: 'bills' },
+    { id: 'purchases', label: 'Milk & material purchases', desc: 'Milk intake and material bills.', count: purchases.length + materialPurchases.length, unit: 'bills' },
+    { id: 'production', label: 'Production batches', desc: 'All batch history.', count: productionBatches.length, unit: 'batches' },
+    { id: 'customer_ledger', label: 'Customer ledgers', desc: 'Balances go to 0; customer profiles stay.', count: customerTransactions.length, unit: 'entries' },
+    { id: 'supplier_ledger', label: 'Supplier ledgers', desc: 'Balances go to 0; supplier profiles stay.', count: supplierTransactions.length, unit: 'entries' },
+    { id: 'expenses', label: 'Expenses & vendors', desc: 'Expense vouchers and vendor payments.', count: expenses.length + expenseVendors.length, unit: 'records' },
+    { id: 'bank_cash', label: 'Bank & cash transactions', desc: 'Transactions are wiped; account balances go to 0.', count: bankTransactions.length, unit: 'entries' },
     { id: 'accounts_journal', label: 'Journal entries', desc: 'Manual journal vouchers.', count: journalEntries.length, unit: 'entries' },
-    { id: 'retail_closings', label: 'Shift closings', desc: 'Counter ki closing records.', count: retailClosings.length, unit: 'closings' },
-    { id: 'stock', label: 'Stock 0 karein', desc: 'Har product ka stock 0 aur stock logs saaf.', count: Math.round(items.reduce((sum, i) => sum + (Number(i.stock) || 0), 0)), unit: 'units' },
-    { id: 'customers', label: 'Customers (poori list)', desc: 'Customer profiles hamesha ke liye delete.', count: customers.length, unit: 'customers' },
-    { id: 'suppliers', label: 'Suppliers (poori list)', desc: 'Supplier profiles hamesha ke liye delete.', count: suppliers.length, unit: 'suppliers' },
-    { id: 'items', label: 'Custom products', desc: 'Apne banaye products aur variants.', count: items.filter(i => !i.isSystem).length, unit: 'products' },
+    { id: 'retail_closings', label: 'Shift closings', desc: 'Counter closing records.', count: retailClosings.length, unit: 'closings' },
+    { id: 'stock', label: 'Reset stock to 0', desc: 'Every product goes to 0 stock and stock logs are cleared.', count: Math.round(items.reduce((sum, i) => sum + (Number(i.stock) || 0), 0)), unit: 'units' },
+    { id: 'customers', label: 'Customers (whole list)', desc: 'Customer profiles deleted for good.', count: customers.length, unit: 'customers' },
+    { id: 'suppliers', label: 'Suppliers (whole list)', desc: 'Supplier profiles deleted for good.', count: suppliers.length, unit: 'suppliers' },
+    { id: 'items', label: 'Custom products', desc: 'Products and variants you created.', count: items.filter(i => !i.isSystem).length, unit: 'products' },
   ], [items, sales, dailySupplyEntries, purchases, materialPurchases, productionBatches, suppliers, customers, expenses, expenseVendors, bankTransactions, journalEntries, retailClosings, customerTransactions, supplierTransactions]);
 
   const downloadBackup = () => {
@@ -63,10 +63,10 @@ export const DataTab: React.FC = () => {
         const at = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Karachi', dateStyle: 'medium', timeStyle: 'short' });
         setLastBackup(at);
         try { localStorage.setItem('mooco_last_backup_at', at); } catch { /* storage blocked */ }
-        showToast('Backup download ho gaya.', 'success');
+        showToast('Backup downloaded.', 'success');
       } catch (error) {
         console.error('[Settings] backup failed', error);
-        showToast('Backup nahi ban saka. Dobara koshish karein.', 'error');
+        showToast("Couldn't make the backup. Please try again.", 'error');
       } finally {
         setBackingUp(false);
       }
@@ -102,24 +102,24 @@ export const DataTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <TabHeader title="Backup & Data" description="Apna data mehfooz karein. Delete ke option sirf Owner ke liye hain." />
+      <TabHeader title="Backup & Data" description="Keep your data safe. Only the Owner can use the delete options." />
 
-      <Section title="Backup" description="Tamam customers, suppliers, products, bills, khata aur accounts ki ek file (.json) jo is device par mojood hai." icon={<HardDriveDownload />}>
+      <Section title="Backup" description="One file (.json) with all customers, suppliers, products, bills, ledgers and accounts on this device." icon={<HardDriveDownload />}>
         <div className="flex flex-col gap-3 rounded-control bg-surface-2 p-4 ring-1 ring-inset ring-line sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-bold text-fg">Poore data ki backup file</p>
-            <p className="text-xs text-fg-subtle">{lastBackup ? `Pichla backup is device se: ${lastBackup}` : 'Is device se abhi koi backup nahi liya.'}</p>
+            <p className="text-sm font-bold text-fg">Backup file of all data</p>
+            <p className="text-xs text-fg-subtle">{lastBackup ? `Last backup from this device: ${lastBackup}` : 'No backup taken from this device yet.'}</p>
           </div>
-          <Button leftIcon={<Download />} loading={backingUp} onClick={downloadBackup}>{backingUp ? 'Ban raha hai…' : 'Download backup'}</Button>
+          <Button leftIcon={<Download />} loading={backingUp} onClick={downloadBackup}>{backingUp ? 'Preparing…' : 'Download backup'}</Button>
         </div>
-        <p className="text-xs text-fg-subtle">Hafte mein kam az kam ek dafa, aur data delete karne se pehle hamesha backup lein. File ko kisi mehfooz jagah (USB / Google Drive) rakhein.</p>
+        <p className="text-xs text-fg-subtle">Take a backup at least once a week, and always before deleting data. Keep the file somewhere safe (USB / Google Drive).</p>
       </Section>
 
-      <Section tone="danger" title="Danger zone" description="Ye data hamesha ke liye mit jata hai aur wapas nahi aata." icon={<AlertTriangle />} bodyClassName="space-y-3">
-        <Notice tone="danger">Sirf test data saaf karne ya naye saal ki shuruat ke liye. Pehle backup zaroor download karein.</Notice>
+      <Section tone="danger" title="Danger zone" description="This data is wiped for good and can't be brought back." icon={<AlertTriangle />} bodyClassName="space-y-3">
+        <Notice tone="danger">Only for clearing test data or starting a new year. Download a backup first.</Notice>
         <div className="overflow-hidden rounded-control ring-1 ring-inset ring-line">
           <div className="flex items-center justify-between gap-2 bg-danger-soft/60 px-3 py-2">
-            <span className="text-xs font-bold text-danger-fg" aria-live="polite">{selected.size ? `${selected.size} chune gaye` : 'Kya delete karna hai, chunein'}</span>
+            <span className="text-xs font-bold text-danger-fg" aria-live="polite">{selected.size ? `${selected.size} selected` : 'Choose what to delete'}</span>
             <Button variant="danger" size="sm" leftIcon={<Trash2 />} disabled={selected.size === 0} onClick={() => ask([...selected])}>Delete selected</Button>
           </div>
           <ul className="divide-y divide-line">
@@ -149,11 +149,11 @@ export const DataTab: React.FC = () => {
           size="sm"
           dismissible={!busy}
           onClose={close}
-          title="Data hamesha ke liye delete karein?"
-          description="Ye kaam wapas nahi ho sakta."
+          title="Delete data for good?"
+          description="This can't be undone."
           icon={<div className="flex size-10 items-center justify-center rounded-xl bg-danger-soft text-danger-fg"><Trash2 size={20} /></div>}
           footer={<>
-            <Button variant="secondary" onClick={close} disabled={busy}>Wapas jayen</Button>
+            <Button variant="secondary" onClick={close} disabled={busy}>Go back</Button>
             <Button variant="danger" onClick={run} loading={busy} disabled={typed !== CONFIRM_WORD}>{busy ? 'Deleting…' : 'Delete permanently'}</Button>
           </>}
         >
@@ -162,10 +162,10 @@ export const DataTab: React.FC = () => {
             <ul className="space-y-1 rounded-control bg-danger-soft/60 p-3 text-xs text-danger-fg ring-1 ring-inset ring-danger/20">
               {pending.labels.map(label => <li key={label} className="flex gap-1.5"><span aria-hidden="true">•</span>{label}</li>)}
             </ul>
-            <Field label={<>Tasdeeq ke liye <strong className="font-mono">{CONFIRM_WORD}</strong> likhein</>}>
+            <Field label={<>Type <strong className="font-mono">{CONFIRM_WORD}</strong> to confirm</>}>
               {c => <Input {...c} value={typed} onChange={e => setTyped(e.target.value.toUpperCase())} className="font-mono" placeholder={CONFIRM_WORD} autoComplete="off" disabled={busy} />}
             </Field>
-            <Button variant="ghost" size="sm" leftIcon={<Download />} onClick={downloadBackup} loading={backingUp} disabled={busy} className="-ml-2">Pehle backup download karein</Button>
+            <Button variant="ghost" size="sm" leftIcon={<Download />} onClick={downloadBackup} loading={backingUp} disabled={busy} className="-ml-2">Download a backup first</Button>
           </form>
         </Modal>
       )}

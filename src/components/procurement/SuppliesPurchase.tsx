@@ -65,7 +65,7 @@ export interface ItemLanding {
 const UNIT_KINDS: PurchaseUnitKind[] = ['base', 'pack', 'multi', 'convert'];
 const STATUS_TONE: Record<StockStatus, Tone> = { minus: 'danger', out: 'danger', low: 'warning', ok: 'neutral' };
 
-/** Supplies & Materials: a multi-line, multi-unit purchase bill paid now or on the vendor's khata. */
+/** Supplies & Materials: a multi-line, multi-unit purchase bill paid now or on credit to the vendor's ledger. */
 const SuppliesPurchase: React.FC = () => {
   const {
     suppliers, materialPurchases, inventory = [], items, addBulkMaterialPurchase, isDayLocked, settings,
@@ -278,21 +278,21 @@ const SuppliesPurchase: React.FC = () => {
 
   const submit = async () => {
     // The state flag only blocks after a re-render; a fast double click saved the bill twice
-    // (addBulkMaterialPurchase has no lock), doubling stock and the supplier khata.
+    // (addBulkMaterialPurchase has no lock), doubling stock and the supplier ledger.
     if (savingRef.current || isSaving) return;
     if (lines.length === 0) { showToast('Please add products to the invoice first.', 'warning'); return; }
     if (badLine) {
-      showToast(lineProblems.get(badLine.tempId) || 'Bill ki ek line theek karein.', 'warning');
+      showToast(lineProblems.get(badLine.tempId) || 'Fix a line on the bill.', 'warning');
       focusLineQty(badLine.tempId);
       return;
     }
-    if (unpaid > 0.01 && !vendorId) { showToast('Please select a Supplier for credit / khata purchases.', 'warning'); return; }
+    if (unpaid > 0.01 && !vendorId) { showToast('Please select a Supplier for purchases on credit.', 'warning'); return; }
     if (paid > 0 && availableAccounts.length === 0) {
       showToast("No active Payment or Cash Drawer account found. Please create one in 'Bank & Cash' or save on credit.", 'warning');
       return;
     }
     if (paid > billTotal + 0.01) {
-      showToast(`Paid (${formatCurrency(paid)}) bill (${formatCurrency(billTotal)}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`, 'warning');
+      showToast(`Paid (${formatCurrency(paid)}) is more than the bill (${formatCurrency(billTotal)}). Give the extra amount to the supplier as a separate Advance payment.`, 'warning');
       return;
     }
 
@@ -342,9 +342,9 @@ const SuppliesPurchase: React.FC = () => {
   const clearBill = async () => {
     if (await confirmAction({
       tone: 'warning',
-      title: 'Yeh invoice saaf karein?',
-      consequences: ['Invoice ke sab items, supplier aur paid amount hat jayenge.', 'Abhi tak kuch save nahi hua, is liye kisi khaate par asar nahi hoga.'],
-      confirmLabel: 'Haan, saaf karein',
+      title: 'Clear this invoice?',
+      consequences: ['All items, the supplier and the paid amount will be removed from the invoice.', 'Nothing was saved yet, so no ledger is affected.'],
+      confirmLabel: 'Yes, clear',
     })) {
       setLines([]);
       setVendorId('');
@@ -378,7 +378,7 @@ const SuppliesPurchase: React.FC = () => {
       <ProcurementHeader
         active="purchase-supplies"
         title="Supplies & Materials"
-        subtitle="Packaging, feed aur doosra saman — multi-unit bill ke sath."
+        subtitle="Packaging, feed and other goods — with a multi-unit bill."
         actions={<Button variant="secondary" leftIcon={<History />} onClick={() => setLogOpen(true)}>Log</Button>}
       />
 
@@ -400,12 +400,12 @@ const SuppliesPurchase: React.FC = () => {
             {isLocked && (
               <div className="flex items-center gap-2.5 rounded-control bg-warning-soft p-3 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25" role="alert">
                 <Lock size={15} className="shrink-0" aria-hidden="true" />
-                <span><strong>{prettyDate(billDate)} band (locked) hai.</strong> Is din ka supplies bill save nahi ho sakta.</span>
+                <span><strong>{prettyDate(billDate)} is locked.</strong> A supplies bill can't be saved for this day.</span>
               </div>
             )}
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
               <div>
-                <SectionLabel step={1} htmlFor="supplies-vendor" aside={!vendorId && <span className="text-[11px] text-fg-subtle">Cash buy ke liye optional</span>}>
+                <SectionLabel step={1} htmlFor="supplies-vendor" aside={!vendorId && <span className="text-[11px] text-fg-subtle">Optional for a cash buy</span>}>
                   Vendor / Supplier
                 </SectionLabel>
                 <SupplierPicker
@@ -413,7 +413,7 @@ const SuppliesPurchase: React.FC = () => {
                   value={vendorId}
                   onChange={setVendorId}
                   suppliers={vendorSuppliers}
-                  placeholder={isCashPaidFull ? 'Cash / walk-in (optional)' : 'Vendor dhoondein…'}
+                  placeholder={isCashPaidFull ? 'Cash / walk-in (optional)' : 'Search vendor…'}
                 />
               </div>
               <div>
@@ -431,11 +431,11 @@ const SuppliesPurchase: React.FC = () => {
               </div>
             </div>
             <div>
-              <SectionLabel step={2} aside={<span className="hidden text-[11px] text-fg-subtle sm:inline">↑ ↓ chunein · Enter add · Enter: qty → rate → agla item</span>}>Add products</SectionLabel>
+              <SectionLabel step={2} aside={<span className="hidden text-[11px] text-fg-subtle sm:inline">↑ ↓ choose · Enter add · Enter: qty → rate → next item</span>}>Add products</SectionLabel>
               <ProductSearch items={purchasableItems} readings={readingById} inBill={inBill} onAdd={addItem} inputRef={searchRef} />
               {quickAddItems.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                  <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"><Sparkles size={11} aria-hidden="true" /> Aksar</span>
+                  <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"><Sparkles size={11} aria-hidden="true" /> Frequent</span>
                   {quickAddItems.map((item: any) => {
                     const reading = readingById.get(item.id);
                     return (
@@ -444,7 +444,7 @@ const SuppliesPurchase: React.FC = () => {
                         type="button"
                         onClick={() => addItem(item.id)}
                         title={reading ? `Stock: ${stockText(reading)}` : undefined}
-                        aria-label={`${item.name} add karein${reading ? ` (stock: ${stockText(reading)}${reading.status !== 'ok' ? `, ${STOCK_STATUS_LABEL[reading.status]}` : ''})` : ''}`}
+                        aria-label={`Add ${item.name}${reading ? ` (stock: ${stockText(reading)}${reading.status !== 'ok' ? `, ${STOCK_STATUS_LABEL[reading.status]}` : ''})` : ''}`}
                         className="flex h-7 cursor-pointer items-center gap-1 rounded-full bg-surface px-2.5 text-[11px] font-semibold text-fg-muted ring-1 ring-inset ring-line transition-colors hover:text-brand-fg hover:ring-brand/40"
                       >
                         <Plus size={11} aria-hidden="true" /> {item.name}
@@ -459,7 +459,7 @@ const SuppliesPurchase: React.FC = () => {
 
           <div ref={billRef}>
             {lines.length === 0 ? (
-              <EmptyState icon={<ShoppingCart />} title="Bill khaali hai" description="Material, packaging ya feed upar search kar ke bill mein add karein." />
+              <EmptyState icon={<ShoppingCart />} title="The bill is empty" description="Search above for material, packaging or feed and add it to the bill." />
             ) : (
               <>
                 <div className="flex items-center justify-between px-4 pt-3 sm:px-5">
@@ -579,7 +579,7 @@ const SuppliesPurchase: React.FC = () => {
                                   onCommit={value => setLineTotal(line.tempId, value)}
                                   onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); toSearch(); } }}
                                   className="ds-control w-28 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-right text-sm font-bold tabular-nums text-fg outline-none transition-colors hover:border-line focus:border-brand-accent focus:bg-surface"
-                                  title="Total badlein (rate khud adjust hoga, quantity wahi rahegi)"
+                                  title="Change the total (the rate adjusts itself, the quantity stays the same)"
                                 />
                               </TD>
                               <TD className="text-center">
@@ -607,14 +607,14 @@ const SuppliesPurchase: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-fg">{vendor.name}</p>
                   <p className={cn('text-xs font-semibold', vendorBalance > 0 ? 'text-danger-fg' : vendorBalance < 0 ? 'text-success-fg' : 'text-fg-subtle')}>
-                    {vendorBalance === 0 ? 'Khata clear' : <><Money amount={Math.abs(vendorBalance)} /> {vendorBalance > 0 ? 'due' : 'advance'}</>}
+                    {vendorBalance === 0 ? 'Ledger clear' : <><Money amount={Math.abs(vendorBalance)} /> {vendorBalance > 0 ? 'due' : 'advance'}</>}
                   </p>
                 </div>
               </div>
             ) : (
               <div className="flex items-center gap-3 rounded-control border border-dashed border-line p-2.5">
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-surface-2 text-fg-faint"><User size={16} aria-hidden="true" /></span>
-                <p className="text-[11px] leading-snug text-fg-subtle"><b className="text-fg-muted">Cash / walk-in buy.</b> Vendor ke baghair bill poora ada hona chahiye.</p>
+                <p className="text-[11px] leading-snug text-fg-subtle"><b className="text-fg-muted">Cash / walk-in buy.</b> Without a vendor the bill must be paid in full.</p>
               </div>
             )}
           </div>
@@ -625,7 +625,7 @@ const SuppliesPurchase: React.FC = () => {
               <Money amount={billTotal} className="text-2xl font-bold tracking-tight text-fg" />
             </div>
             <div>
-              <label htmlFor="supplies-paid" className="mb-1.5 block text-xs font-semibold text-fg-muted">Abhi ada (paid now)</label>
+              <label htmlFor="supplies-paid" className="mb-1.5 block text-xs font-semibold text-fg-muted">Paid now</label>
               <PaidInput id="supplies-paid" value={paidText} onChange={setPaidText} total={billTotal} paid={paid} invalid={paid > billTotal + 0.01} />
             </div>
             <div>
@@ -636,26 +636,26 @@ const SuppliesPurchase: React.FC = () => {
             <SettlementBar total={billTotal} paid={paid} />
             {vendor && unpaid > 0 && (
               <p className="flex items-center justify-between rounded-control bg-surface-2 px-3 py-2 text-[11px] text-fg-subtle">
-                <span className="flex items-center gap-1">Vendor khata after bill <ArrowRight size={11} aria-hidden="true" /></span>
+                <span className="flex items-center gap-1">Vendor ledger after bill <ArrowRight size={11} aria-hidden="true" /></span>
                 <Money amount={Math.abs(vendorBalance + unpaid)} className={cn('font-bold', vendorBalance + unpaid > 0 ? 'text-danger-fg' : 'text-success-fg')} />
               </p>
             )}
             {!vendorId && lines.length > 0 && !isCashPaidFull && (
               <p className="flex items-start gap-1.5 text-[11px] font-semibold text-warning-fg">
-                <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" /> Udhaar bill ke liye vendor chunein, ya Full paid karein.
+                <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" /> Choose a vendor for a bill on credit, or pay it in full.
               </p>
             )}
             {lineProblems.size > 0 && (
               <p className="flex items-start gap-1.5 text-[11px] font-semibold text-danger-fg" role="status">
                 <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />
-                {lineProblems.size === 1 ? '1 line theek karni hai' : `${lineProblems.size} lines theek karni hain`} (laal nishaan wali).
+                {lineProblems.size === 1 ? '1 line needs fixing' : `${lineProblems.size} lines need fixing`} (marked in red).
               </p>
             )}
           </div>
 
           <div className="flex gap-2 rounded-b-card border-t border-line bg-surface-2/60 p-4">
             {lines.length > 0 && (
-              <IconButton variant="secondary" size="lg" aria-label="Bill saaf karein" icon={<RotateCcw />} onClick={clearBill} />
+              <IconButton variant="secondary" size="lg" aria-label="Clear bill" icon={<RotateCcw />} onClick={clearBill} />
             )}
             <Button
               size="lg"
@@ -666,7 +666,7 @@ const SuppliesPurchase: React.FC = () => {
               onClick={submit}
               title={isLocked ? `Selected date (${billDate}) is closed & locked` : undefined}
             >
-              {isSaving ? 'Saving…' : lines.length === 0 ? 'Items add karein' : !vendorId ? (isCashPaidFull ? 'Save cash buy' : 'Vendor chunein') : 'Save purchase bill'}
+              {isSaving ? 'Saving…' : lines.length === 0 ? 'Add items' : !vendorId ? (isCashPaidFull ? 'Save cash buy' : 'Choose vendor') : 'Save purchase bill'}
             </Button>
           </div>
         </Card>
@@ -749,9 +749,9 @@ function UnitSelect({ line, units, found, onChange }: { line: BillLine; units: P
         if (chosen) onChange(chosen);
       }}
       className={cn(controlClass, 'ds-select h-8 w-full max-w-[11rem] cursor-pointer appearance-none px-2 text-xs font-bold', !found && 'border-danger')}
-      title="Kis unit mein khareeda? Pack apne alag stock mein jata hai, baqi loose mein."
+      title="Which unit was it bought in? A pack goes into its own stock, the rest into loose."
     >
-      {!found && <option value="__missing" disabled>{line.unit} (ab nahi)</option>}
+      {!found && <option value="__missing" disabled>{line.unit} (no longer available)</option>}
       {UNIT_KINDS.map(kind => {
         const group = units.filter(u => u.kind === kind);
         if (group.length === 0) return null;
@@ -784,7 +784,7 @@ const StockLandingPanel = memo(function StockLandingPanel({ landings }: { landin
                 </span>
               ))}
             </div>
-            <p className="mt-1 text-[11px] text-fg-subtle">Kul stock: <span className="tabular-nums text-fg-muted">{landing.afterText}</span></p>
+            <p className="mt-1 text-[11px] text-fg-subtle">Total stock: <span className="tabular-nums text-fg-muted">{landing.afterText}</span></p>
             {landing.notes.map(note => (
               <p key={note} className="mt-1 flex items-start gap-1 text-[11px] font-semibold text-warning-fg">
                 <AlertTriangle size={12} className="mt-px shrink-0" aria-hidden="true" /> {note}
@@ -815,7 +815,7 @@ function Stepper({ label, lineId, value, step, invalid, onChange, onEnter, compa
     )}>
       <button
         type="button"
-        aria-label={`${label} kam karein`}
+        aria-label={`Decrease ${label}`}
         disabled={!(value > step)}
         onClick={() => onChange(cleanQty(value - step))}
         className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted hover:bg-surface active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -831,7 +831,7 @@ function Stepper({ label, lineId, value, step, invalid, onChange, onEnter, compa
         onKeyDown={event => { if (event.key === 'Enter' && onEnter) { event.preventDefault(); onEnter(); } }}
         className="ds-control w-full min-w-0 border-0 bg-transparent p-0 text-center text-xs font-bold tabular-nums text-fg outline-none"
       />
-      <button type="button" aria-label={`${label} zyada karein`} onClick={() => onChange(cleanQty((value || 0) + step))} className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted hover:bg-surface active:scale-90">
+      <button type="button" aria-label={`Increase ${label}`} onClick={() => onChange(cleanQty((value || 0) + step))} className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted hover:bg-surface active:scale-90">
         <Plus size={12} />
       </button>
     </div>
@@ -908,7 +908,7 @@ const ProductSearch = memo(function ProductSearch({ items, readings, inBill, onA
           }}
         />
         {query && (
-          <button aria-label="Search saaf karein" type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-fg-faint hover:bg-surface-2 hover:text-fg">
+          <button aria-label="Clear search" type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-fg-faint hover:bg-surface-2 hover:text-fg">
             <X size={14} />
           </button>
         )}
@@ -918,8 +918,8 @@ const ProductSearch = memo(function ProductSearch({ items, readings, inBill, onA
           {results.length === 0 ? (
             <div className="px-4 py-6 text-center">
               <Package className="mx-auto mb-1.5 text-fg-faint" size={20} aria-hidden="true" />
-              <p className="text-xs font-semibold text-fg-muted">&ldquo;{query}&rdquo; nahi mila</p>
-              <p className="mt-0.5 text-[11px] text-fg-subtle">Pehle Products &amp; Catalog mein item banayein (source: Supplier).</p>
+              <p className="text-xs font-semibold text-fg-muted">&ldquo;{query}&rdquo; not found</p>
+              <p className="mt-0.5 text-[11px] text-fg-subtle">First create the item in Products &amp; Catalog (source: Supplier).</p>
             </div>
           ) : results.map((item, index) => {
             const reading = readings.get(item.id);

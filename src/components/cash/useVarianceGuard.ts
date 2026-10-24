@@ -21,8 +21,8 @@ export function useVarianceGuard() {
     if (!ownDifference || currentUser?.role_id === 'role_super_admin') return note;
     const approver = await requestApproval({
       permission: 'cash_control:approve',
-      title: 'Apna farq khud approve nahi ho sakta',
-      reason: `${variance.variance_type}: ${formatCurrency(variance.variance)} — kisi aur manager ya Owner ka PIN chahiye.`,
+      title: "You can't approve your own difference",
+      reason: `${variance.variance_type}: ${formatCurrency(variance.variance)} — another manager's or the Owner's PIN is needed.`,
     });
     return approver ? `${note} (approved by ${approver} via PIN)` : null;
   }, [currentUser, shiftOwner, requestApproval]);

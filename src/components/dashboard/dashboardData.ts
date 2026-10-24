@@ -147,7 +147,7 @@ export function summariseSales(sales: POSBill[], supplies: any[], index: ItemInd
   const soldByUnit: Record<string, number> = {};
   const addSold = (unit: string, qty: number) => { soldByUnit[unit] = cleanNumber((soldByUnit[unit] || 0) + qty, 3); };
   for (const sale of sales) {
-    // Net of returns: a refund first reverses khata, then the cash/online that was paid back.
+    // Net of returns: a refund first reverses the credit, then the cash/online that was paid back.
     const kept = saleNetCollection(sale);
     total += kept.net;
     cash += kept.cash;
@@ -442,7 +442,7 @@ export function summarisePartyFlows(input: {
   const { sales, purchases, expenses, customerTransactions, supplierTransactions, materialPurchases, expenseVendorTransactions, period } = input;
   const inRange = (value: string | undefined) => { const day = dayKey(value); return day !== '' && day >= period.start && day <= period.end; };
 
-  // Received from customers (wasooli).
+  // Received from customers (collections).
   let customersReceived = 0;
   const posSaleIds = new Set<string>();
   for (const sale of sales) {
@@ -461,7 +461,7 @@ export function summarisePartyFlows(input: {
     }
   }
 
-  // Paid to milk suppliers (doodh adaigi).
+  // Paid to milk suppliers.
   let suppliersPaid = 0;
   for (const p of purchases) {
     const paid = cleanNumber(p.paid_amount ?? (p.status === 'Paid' ? p.total_amount : 0));

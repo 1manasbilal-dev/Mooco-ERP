@@ -126,10 +126,10 @@ export const ItemDetailView: React.FC<Props> = ({
     ? { value: <Money amount={looseRate} />, sub: `per ${item.unit}` }
     : packPrices.length
       ? { value: <>{<Money amount={minPack} />}{minPack !== maxPack ? '+' : ''}</>, sub: activeVariants.length === 1 ? `per ${activeVariants[0].name}` : 'per pack' }
-      : { value: <span className="text-fg-faint">—</span>, sub: 'Rate set nahi' };
+      : { value: <span className="text-fg-faint">—</span>, sub: 'No rate set' };
 
   const canSell = canOpenPos && item.isActive && isSale && (rate > 0 || packPrices.length > 0);
-  const sellLabel = !isSale ? 'Sale product nahi' : !item.isActive ? 'Inactive' : !canOpenPos ? 'POS ki ijazat nahi' : !(rate > 0 || packPrices.length > 0) ? 'Pehle rate set karein' : 'POS mein bechein';
+  const sellLabel = !isSale ? 'Not a sale product' : !item.isActive ? 'Inactive' : !canOpenPos ? 'No POS permission' : !(rate > 0 || packPrices.length > 0) ? 'Set a rate first' : 'Sell in POS';
 
   const quickButton = 'flex flex-col items-center justify-center rounded-control border border-line bg-surface p-2.5 text-center transition-[border-color,background-color,transform] duration-150 enabled:cursor-pointer enabled:hover:border-brand-accent enabled:hover:bg-brand-soft/60 enabled:active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -147,7 +147,7 @@ export const ItemDetailView: React.FC<Props> = ({
               {(item.category.length ? item.category : ['Uncategorized']).map(c => <Badge key={c} tone="neutral">{c}</Badge>)}
             </div>
           </div>
-          <IconButton aria-label="Product details band karein" icon={<X />} onClick={onClose} className="-mr-1 -mt-1" />
+          <IconButton aria-label="Close product details" icon={<X />} onClick={onClose} className="-mr-1 -mt-1" />
         </div>
 
         <div className="mt-4 flex items-center gap-2">
@@ -162,7 +162,7 @@ export const ItemDetailView: React.FC<Props> = ({
             <Button variant="secondary" leftIcon={<Archive />} onClick={onDeactivate} aria-label="Deactivate product"><span className="hidden sm:inline">Deactivate</span></Button>
           )}
           {canDelete && !item.isSystem && (
-            <IconButton variant="secondary" aria-label="Product delete karein" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={onDelete} />
+            <IconButton variant="secondary" aria-label="Delete product" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={onDelete} />
           )}
         </div>
       </div>
@@ -173,9 +173,9 @@ export const ItemDetailView: React.FC<Props> = ({
             label="Stock"
             value={<>{formatQty(reading.totalBase, 3)} <span className="text-xs font-semibold text-fg-subtle">{item.unit}</span></>}
             sub={<>
-              {hasPacks && <span className="block">Loose + packs (neeche har pile)</span>}
-              {sellableDiffers && <span className="block">{formatBaseQty(reading.sellableBase, item.unit)} bik sakta hai</span>}
-              <span className="block">{reorder > 0 ? `Alert ${formatBaseQty(reorder, item.unit)} par` : 'Low-stock alert band'}</span>
+              {hasPacks && <span className="block">Loose + packs (each pile below)</span>}
+              {sellableDiffers && <span className="block">{formatBaseQty(reading.sellableBase, item.unit)} can be sold</span>}
+              <span className="block">{reorder > 0 ? `Alert at ${formatBaseQty(reorder, item.unit)}` : 'Low-stock alert off'}</span>
             </>}
           >
             <div className="mt-2 flex items-center gap-2">
@@ -194,7 +194,7 @@ export const ItemDetailView: React.FC<Props> = ({
               : <span className="text-fg-faint">—</span>}
             sub={profitBasis
               ? <>{marginPct !== null ? `${marginPct.toFixed(1)}% margin` : ''}{markupPct !== null ? ` · ${markupPct.toFixed(0)}% markup` : ''} / {profitBasis.per}</>
-              : 'Selling price chahiye'}
+              : 'Needs a selling price'}
           />
         </div>
 
@@ -207,10 +207,10 @@ export const ItemDetailView: React.FC<Props> = ({
                     {pile.kind === 'loose' ? `Loose (${item.unit})` : `${pile.name} · ${formatBaseQty(pile.contains, item.unit)}`}
                   </span>
                   <span className="text-[11px] text-fg-subtle">
-                    {pile.kind === 'loose' && (looseAllowed ? 'Base stock' : 'Base stock · loose sale band')}
-                    {pile.kind === 'multi' && `Multi-unit · loose se katta hai, apna count nahi`}
-                    {pile.kind === 'packed' && (pile.isActive ? 'Ready-made pack · apna count' : 'Ready-made pack · hidden: POS mein nahi, stock yahin hai')}
-                    {pile.kind === 'orphan' && 'Purana count: kisi pack ka nahi. Inventory stock count mein 0 karein.'}
+                    {pile.kind === 'loose' && (looseAllowed ? 'Base stock' : 'Base stock · loose sale off')}
+                    {pile.kind === 'multi' && `Multi-unit · taken from loose, no count of its own`}
+                    {pile.kind === 'packed' && (pile.isActive ? 'Ready-made pack · own count' : 'Ready-made pack · hidden: not in POS, stock is still here')}
+                    {pile.kind === 'orphan' && 'Old count: belongs to no pack. Set it to 0 in Inventory stock count.'}
                   </span>
                 </div>
                 <div className="shrink-0 text-right">
@@ -224,13 +224,13 @@ export const ItemDetailView: React.FC<Props> = ({
               </div>
             ))}
             <div className="flex items-center justify-between bg-surface-2 px-3 py-2.5 text-xs font-bold text-fg-muted">
-              <span>Total on hand{reading.hiddenPacks.length > 0 ? ' (hidden packs bhi)' : ''}</span>
+              <span>Total on hand{reading.hiddenPacks.length > 0 ? ' (incl. hidden packs)' : ''}</span>
               <span className="tabular-nums">{formatBaseQty(reading.totalBase, item.unit)}</span>
             </div>
           </div>
           {canSetOpeningStock && onOpeningStock && (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-dashed border-line-strong px-3 py-2.5">
-              <p className="min-w-0 flex-1 text-xs text-fg-muted">Abhi koi stock aur stock record nahi. Dukaan mein pehle se maal hai to opening stock likhein.</p>
+              <p className="min-w-0 flex-1 text-xs text-fg-muted">No stock or stock record yet. If the shop already has stock, enter the opening stock.</p>
               <Button size="sm" variant="secondary" leftIcon={<PackagePlus />} onClick={onOpeningStock}>Opening stock</Button>
             </div>
           )}
@@ -251,12 +251,12 @@ export const ItemDetailView: React.FC<Props> = ({
             title="Quick sell in POS"
             aside={
               <div className="flex items-center gap-1.5">
-                <Badge tone="brand" className="font-mono" title="POS grid mein position">#{item.sort_order ?? 999}</Badge>
-                <Badge tone="neutral" title="POS dialog is mode mein khulta hai">{looseAllowed ? (qtyFirst ? 'Quantity pehle' : 'Cash pehle') : 'Packs'}</Badge>
+                <Badge tone="brand" className="font-mono" title="Position in the POS grid">#{item.sort_order ?? 999}</Badge>
+                <Badge tone="neutral" title="The POS dialog opens in this mode">{looseAllowed ? (qtyFirst ? 'Quantity first' : 'Cash first') : 'Packs'}</Badge>
               </div>
             }
           >
-            <p className="-mt-1 mb-3 text-xs text-fg-subtle">Wahi buttons jo cashier dekhta hai. Dabane par POS isi entry ke saath khulta hai.</p>
+            <p className="-mt-1 mb-3 text-xs text-fg-subtle">The same buttons the cashier sees. Tap one to open the POS with that entry.</p>
 
             {looseAllowed && rate > 0 && (
               <div className="space-y-3">
@@ -276,14 +276,14 @@ export const ItemDetailView: React.FC<Props> = ({
                   {tab === 'amount'
                     ? preview.cash.map(c => (
                       <button key={c.amount} type="button" disabled={!canSell} onClick={() => onSellInPos({ mode: 'amount', value: String(c.amount) })}
-                        title={`${item.name}: ${c.label} POS mein`} className={quickButton}>
+                        title={`${item.name}: ${c.label} in POS`} className={quickButton}>
                         <span className="text-[13px] font-bold tabular-nums text-fg">{c.label}</span>
                         <span className="mt-0.5 text-[11px] text-fg-subtle">≈ {c.converted}</span>
                       </button>
                     ))
                     : preview.qty.map(q => (
                       <button key={q.qty} type="button" disabled={!canSell} onClick={() => onSellInPos({ mode: 'qty', value: String(q.qty) })}
-                        title={`${item.name}: ${q.title} POS mein`} className={quickButton}>
+                        title={`${item.name}: ${q.title} in POS`} className={quickButton}>
                         <span className="text-[13px] font-bold tabular-nums text-fg">{q.title}</span>
                         <span className="mt-0.5 text-[11px] text-fg-subtle">{q.converted}</span>
                         {q.hint && <span className="text-[10px] font-semibold text-brand-fg">{q.hint}</span>}
@@ -291,20 +291,20 @@ export const ItemDetailView: React.FC<Props> = ({
                     ))}
                 </div>
                 {tab === 'amount' && preview.usingDefaultCash && (
-                  <p className="text-[11px] text-fg-subtle">Rate ke hisaab se auto raqam. Apni raqam ke liye Edit → POS setup → Quick cash buttons.</p>
+                  <p className="text-[11px] text-fg-subtle">Auto amounts from the rate. For your own amounts: Edit → POS setup → Quick cash buttons.</p>
                 )}
               </div>
             )}
 
             {looseAllowed && rate <= 0 && (
               <p className="flex items-center gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg">
-                <AlertTriangle className="size-3.5 shrink-0" />Cash aur quantity buttons ke liye loose selling rate set karein.
+                <AlertTriangle className="size-3.5 shrink-0" />Set a loose selling rate to get cash and quantity buttons.
               </p>
             )}
 
             {!looseAllowed && (
               <p className="flex items-center gap-2 rounded-control border border-dashed border-line-strong px-3 py-2 text-xs font-medium text-fg-muted">
-                <Boxes className="size-3.5 shrink-0" />Sirf packs mein bikta hai. Neeche pack buttons use karein.
+                <Boxes className="size-3.5 shrink-0" />Sold in packs only. Use the pack buttons below.
               </p>
             )}
 
@@ -338,18 +338,18 @@ export const ItemDetailView: React.FC<Props> = ({
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-sm font-semibold text-fg">{oneUnitLabel(v.name, contains, item.unit)}</span>
-                            {fromBase ? <Badge tone="info">Loose se</Badge> : <Badge tone="warning">Ready-made pack</Badge>}
+                            {fromBase ? <Badge tone="info">From loose</Badge> : <Badge tone="warning">Ready-made pack</Badge>}
                           </div>
                           <span className="mt-0.5 block text-xs text-fg-subtle">
                             {formatCurrency(each)}/{item.unit}
                             {differs ? ` · loose ${formatCurrency(rate)}/${item.unit}` : ''}
-                            {fromBase ? ' · loose stock se katta hai' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · apna count')}
+                            {fromBase ? ' · taken from loose stock' : (v.packaging_item_name ? ` · ${formatQty(v.packaging_qty)}× ${v.packaging_item_name}` : ' · own count')}
                           </span>
                         </div>
                         <div className="shrink-0 text-right">
                           <span className="block text-sm font-bold tabular-nums text-fg">{price > 0 ? formatCurrency(price) : 'No price'}</span>
                           <span className={cn('text-[11px] font-semibold', ready <= 0 ? 'text-danger-fg' : alert === 'low' ? 'text-warning-fg' : 'text-success-fg')}>
-                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(Math.floor(ready * 10) / 10, 1)} ${v.name} ban sakte hain` : `${formatQty(ready, 3)} ${v.name} stock mein`}
+                            {ready <= 0 ? 'Out of stock' : fromBase ? `${formatQty(Math.floor(ready * 10) / 10, 1)} ${v.name} can be made` : `${formatQty(ready, 3)} ${v.name} in stock`}
                           </span>
                         </div>
                       </div>
@@ -381,13 +381,13 @@ export const ItemDetailView: React.FC<Props> = ({
           <Row label="Sourcing">
             <span className="inline-flex items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:text-fg-subtle">
               {item.source === 'Supplier' ? <Truck /> : item.source === 'Production' ? <Factory /> : <Briefcase />}
-              {item.source === 'Supplier' ? 'Vendor se purchase' : item.source === 'Production' ? 'In-house production' : 'Purchase ya production'}
+              {item.source === 'Supplier' ? 'Bought from vendor' : item.source === 'Production' ? 'In-house production' : 'Purchase or production'}
             </span>
           </Row>
           <Row label="Sale policy">
-            {looseAllowed ? <Badge tone="success">Loose aur packs</Badge> : <Badge tone="warning">Sirf packs</Badge>}
+            {looseAllowed ? <Badge tone="success">Loose and packs</Badge> : <Badge tone="warning">Packs only</Badge>}
           </Row>
-          <Row label="Low stock alert">{reorder > 0 ? `${formatBaseQty(reorder, item.unit)} (total stock)` : <span className="text-fg-subtle">Band (0)</span>}</Row>
+          <Row label="Low stock alert">{reorder > 0 ? `${formatBaseQty(reorder, item.unit)} (total stock)` : <span className="text-fg-subtle">Off (0)</span>}</Row>
         </Section>
 
         {item.recipe && item.recipe.length > 0 && (

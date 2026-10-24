@@ -92,7 +92,7 @@ const Customers: React.FC = () => {
     return () => { if (w.cancelIdleCallback) w.cancelIdleCallback(handle); else window.clearTimeout(handle); };
   }, []);
 
-  // ---- Indexes: built once per data change, so typing and opening a khata never rescan every sale ----
+  // ---- Indexes: built once per data change, so typing and opening a ledger never rescan every sale ----
   const customerList = useMemo(() => (customers || []).filter(Boolean), [customers]);
   const salesByCustomer = useMemo(() => indexByCustomer(sales || [], saleCustomerId), [sales]);
   const txByCustomer = useMemo(() => indexByCustomer<CustomerTransaction>(customerTransactions || [], tx => tx.customer_id), [customerTransactions]);
@@ -202,7 +202,7 @@ const Customers: React.FC = () => {
     setFilterActiveStatus(status);
   }, []);
 
-  // ---- Active customer and khata ----
+  // ---- Active customer and ledger ----
   const activeCustomer = useMemo(() => customerList.find(c => c.id === activeCustomerId) || null, [customerList, activeCustomerId]);
 
   const ledger = useMemo(() => {
@@ -247,13 +247,13 @@ const Customers: React.FC = () => {
   const handleSubmitCustomer = async (payload: CustomerPayload) => {
     try {
       if (editingCustomer) {
-        // Balance only changes through khata entries (payment / charge). Sending the form's copy would
-        // set the khata to the figure seen when the form opened, undoing any payment or sale posted
+        // Balance only changes through ledger entries (payment / charge). Sending the form's copy would
+        // set the balance to the figure seen when the form opened, undoing any payment or sale posted
         // since, with no ledger entry behind the change.
         const { balance: _openingOnly, ...profile } = payload;
         const ok = await updateCustomer(editingCustomer.id, profile);
         if (!ok) return false;
-        showToast('Customer ki maloomat update ho gayi', 'success');
+        showToast('Customer details updated', 'success');
       } else {
         // addCustomer shows its own success toast.
         const newId = await addCustomer(payload as any);
@@ -262,7 +262,7 @@ const Customers: React.FC = () => {
       closeForm();
       return true;
     } catch (err: any) {
-      showToast('Customer save nahi hua: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Customer couldn't be saved: " + (err?.message || 'please try again'), 'error');
       return false;
     }
   };
@@ -303,39 +303,39 @@ const Customers: React.FC = () => {
     const customer = paymentCustomer;
     if (!customer) return false;
     if (input.type === 'Payment' && !input.accountId) {
-      showToast('Baraye meherbani Deposit Account select karein ya Settings men default account set karein.', 'warning');
+      showToast('Please select a deposit account, or set a default account in Settings.', 'warning');
       return false;
     }
     try {
       const ok = await recordCustomerPayment(customer.id, input.amount, input.date, input.mode, input.note, input.type, input.accountId || undefined);
       if (!ok) return false;
       // The context's own toast says "Payment" for both kinds, so a charge gets its own line.
-      if (input.type === 'Charge') showToast('Charge record ho gaya', 'success');
+      if (input.type === 'Charge') showToast('Charge recorded', 'success');
 
       if (input.sendWhatsApp) {
         const phone = whatsAppNumber(customer.whatsapp || customer.phone);
         if (phone) {
           const newBal = roundCurrency(Number(customer.balance || 0) + (input.type === 'Payment' ? -input.amount : input.amount));
-          const msg = `*${receiptShop.companyName} - ${input.type === 'Payment' ? 'PAYMENT RECEIPT' : 'KHATA CHARGE'}*\n\n` +
-            `Assalam-o-Alaikum *${customer.name}*,\n` +
+          const msg = `*${receiptShop.companyName} - ${input.type === 'Payment' ? 'PAYMENT RECEIPT' : 'LEDGER CHARGE'}*\n\n` +
+            `Dear *${customer.name}*,\n` +
             `${input.type === 'Payment' ? 'Amount Received: ' : 'Amount Charged: '} *${formatCurrency(input.amount)}*\n` +
             `📅 Date: ${input.date}\n` +
             `💰 Current Balance: *${balanceWords(newBal, formatCurrency)}*\n\n` +
-            `Shukriya!`;
+            `Thank you!`;
           openWhatsApp(phone, msg);
         }
       }
       setPaymentCustomerId(null);
       return true;
     } catch (err: any) {
-      showToast('Entry record nahi hui: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Entry couldn't be recorded: " + (err?.message || 'please try again'), 'error');
       return false;
     }
   };
 
   // ---- Delete / archive ----
   const [deleteRequest, setDeleteRequest] = useState<{ id: string | null; name: string } | null>(null);
-  // A second click while the first is still posting would write the khata off (or forfeit the advance) twice.
+  // A second click while the first is still posting would write the balance off (or forfeit the advance) twice.
   const deleteBusyRef = useRef(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -406,8 +406,8 @@ const Customers: React.FC = () => {
       deleteBusyRef.current = false;
       setIsDeleting(false);
     }
-    if (archived > 0) showToast(`${archived} customers inactive (archived) ho gaye. Khata aur balance mehfooz hain.`, 'info');
-    if (archived < ids.length) showToast(`${ids.length - archived} customers archive nahi huay, dobara koshish karein.`, 'error');
+    if (archived > 0) showToast(`${archived} customers made inactive (archived). Their ledgers and balances are kept.`, 'info');
+    if (archived < ids.length) showToast(`${ids.length - archived} customers couldn't be archived, please try again.`, 'error');
     setSelectedIds(new Set());
     setDeleteRequest(null);
   };
@@ -417,7 +417,7 @@ const Customers: React.FC = () => {
     reactivateEntity('customer', customer.id);
   }, [canEdit, reactivateEntity]);
 
-  // ---- Khata entries ----
+  // ---- Ledger entries ----
   const [selectedInvoiceSale, setSelectedInvoiceSale] = useState<POSBill | null>(null);
   const [selectedTxEntry, setSelectedTxEntry] = useState<LedgerEntry | null>(null);
   const deletingTxRef = useRef<Set<string>>(new Set());
@@ -432,13 +432,13 @@ const Customers: React.FC = () => {
     const account = accountId ? accounts.find(a => a.id === accountId) : undefined;
     const balanceNow = Number(customer?.balance || 0);
     const balanceAfter = balanceNow + (isPayment ? amount : -amount);
-    const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(customer ne dena hai)' : value < 0 ? '(advance)' : ''}`.trim();
+    const balanceLabel = (value: number) => `${formatCurrency(Math.abs(value))} ${value > 0 ? '(customer owes)' : value < 0 ? '(advance)' : ''}`.trim();
     const ok = await confirmAction({
-      title: `${isPayment ? 'Payment' : 'Charge'} ${formatCurrency(amount)} delete karein?`,
+      title: `Delete ${isPayment ? 'payment' : 'charge'} ${formatCurrency(amount)}?`,
       consequences: [
-        `${customer?.name || 'Customer'} ka khaata: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
-        ...(isPayment && account ? [`"${account.name}" se ${formatCurrency(amount)} nikal jayenge`] : isPayment ? ['Kisi account se paisa nahi niklega (is entry ka account nahi tha)'] : []),
-        'Ye wapas nahi hoga.',
+        `${customer?.name || 'Customer'}'s ledger: ${balanceLabel(balanceNow)} → ${balanceLabel(balanceAfter)}`,
+        ...(isPayment && account ? [`${formatCurrency(amount)} will be taken out of "${account.name}"`] : isPayment ? ['No money leaves any account (this entry had no account)'] : []),
+        "This can't be undone.",
       ],
     });
     if (!ok || deletingTxRef.current.has(id)) return;
@@ -446,7 +446,7 @@ const Customers: React.FC = () => {
     deletingTxRef.current.add(id);
     try {
       const deleted = await deleteCustomerTransaction(id);
-      if (deleted) showToast('Entry delete ho gayi', 'success');
+      if (deleted) showToast('Entry deleted', 'success');
     } finally {
       deletingTxRef.current.delete(id);
     }
@@ -475,19 +475,19 @@ const Customers: React.FC = () => {
   const handleSendWhatsAppReminder = useCallback((customer: Customer) => {
     const phone = whatsAppNumber(customer.whatsapp || customer.phone);
     if (!phone) {
-      showToast('WhatsApp ke liye phone number nahi hai', 'warning');
+      showToast('No phone number for WhatsApp', 'warning');
       return;
     }
     const state = balanceState(customer.balance);
     const amount = formatCurrency(Math.abs(Number(customer.balance || 0)));
     // The reminder used to ask an advance (or settled) customer to "pay as soon as possible".
     const body = state === 'due'
-      ? `Aapka ${receiptShop.companyName} mein current khata balance *${amount}* (baqaya) hai.\n\nBaraye meherbani jald az jald adaigi farmaiye. Shukriya!`
+      ? `Your current balance at ${receiptShop.companyName} is *${amount}* (due).\n\nPlease pay at your earliest convenience. Thank you!`
       : state === 'advance'
-        ? `Aapka ${receiptShop.companyName} mein *${amount}* advance jama hai.\n\nShukriya!`
-        : `Aapka ${receiptShop.companyName} mein khata clear hai (Rs 0).\n\nShukriya!`;
-    const msg = `*${receiptShop.companyName} - KHATA STATEMENT${state === 'due' ? ' REMINDER' : ''}*\n\n` +
-      `Assalam-o-Alaikum *${customer.name}* sahib,\n` +
+        ? `You have *${amount}* in advance at ${receiptShop.companyName}.\n\nThank you!`
+        : `Your account at ${receiptShop.companyName} is clear (Rs 0).\n\nThank you!`;
+    const msg = `*${receiptShop.companyName} - LEDGER STATEMENT${state === 'due' ? ' REMINDER' : ''}*\n\n` +
+      `Dear *${customer.name}*,\n` +
       `${body}\n*${receiptShop.companyName}*`;
     openWhatsApp(phone, msg);
   }, [receiptShop.companyName, showToast]);
@@ -495,7 +495,7 @@ const Customers: React.FC = () => {
   const handleWhatsAppShareInvoice = (sale: POSBill) => {
     const phone = whatsAppNumber(activeCustomer?.whatsapp || activeCustomer?.phone);
     if (!phone) {
-      showToast('Customer ka phone number record nahi hai', 'warning');
+      showToast('No phone number on record for this customer', 'warning');
       return;
     }
     const itemLines = (sale.items || []).map((it: any) => `• ${it.name} (${it.qty} x Rs ${it.price}) = ${formatCurrency((it.total || it.qty * it.price))}`).join('\n');
@@ -512,8 +512,8 @@ const Customers: React.FC = () => {
       `--------------------------------\n` +
       `*Total Bill:* ${formatCurrency(Number(sale.total || 0))}\n` +
       (sale.discount > 0 ? `*Discount:* ${formatCurrency(sale.discount)}\n` : '') +
-      (sale.payment_mode === 'Credit' ? `*Charged to Khata Balance*\n` : `*Paid on Counter*\n`) +
-      `*Current Khata Balance:* ${formatCurrency(Math.abs(balance))} ${balanceState(balance) === 'due' ? 'Dr (Due)' : balanceState(balance) === 'advance' ? 'Cr (Advance)' : '(Settled)'}\n` +
+      (sale.payment_mode === 'Credit' ? `*Charged to Account*\n` : `*Paid on Counter*\n`) +
+      `*Current Balance:* ${formatCurrency(Math.abs(balance))} ${balanceState(balance) === 'due' ? 'Dr (Due)' : balanceState(balance) === 'advance' ? 'Cr (Advance)' : '(Settled)'}\n` +
       `--------------------------------\n` +
       `${receiptShop.footer}`;
     openWhatsApp(phone, msg);

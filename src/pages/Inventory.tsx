@@ -157,14 +157,14 @@ const Inventory: React.FC = () => {
   /** Saves each changed pile with its own `adjustStock` call; returns the piles that were saved. */
   const handleCount = async (count: StockCountSubmission): Promise<string[]> => {
     if (!canEdit) {
-      showToast('Aap ko is kaam ki ijazat nahi hai.', 'warning');
+      showToast("You don't have permission to do this.", 'warning');
       return [];
     }
     if (submittingRef.current) return [];
     const row = rowsById.get(count.itemId);
     const invRecord = inventory.find(i => i.item_id === count.itemId || (row && i.name.toLowerCase() === row.item.name.toLowerCase()));
     if (!invRecord) {
-      showToast('Is item ka stock record nahi mila. Page refresh kar ke dobara koshish karein.', 'error');
+      showToast("Couldn't find this item's stock record. Refresh the page and try again.", 'error');
       return [];
     }
     submittingRef.current = true;
@@ -184,12 +184,12 @@ const Inventory: React.FC = () => {
       submittingRef.current = false;
     }
     if (failed.length === 0) {
-      showToast(`${count.itemName}: stock count save ho gaya.`, 'success');
+      showToast(`${count.itemName}: stock count saved.`, 'success');
       closeAudit();
     } else if (saved.length > 0) {
-      showToast(`${saved.length} pile save ${saved.length > 1 ? 'hue' : 'hua'}, lekin ye nahi hua: ${failed.join(', ')}. Dobara koshish karein.`, 'warning');
+      showToast(`${saved.length} ${saved.length > 1 ? 'piles' : 'pile'} saved, but these were not: ${failed.join(', ')}. Please try again.`, 'warning');
     } else {
-      showToast(`Stock count save nahi hua (${failed.join(', ')}). System stock wahi hai.`, 'error');
+      showToast(`Stock count couldn't be saved (${failed.join(', ')}). System stock is unchanged.`, 'error');
     }
     return saved;
   };
@@ -199,7 +199,7 @@ const Inventory: React.FC = () => {
     if (!openingRow || !canEdit) return false;
     const ok = await setOpeningStock(openingRow.item.id, piles, notes || undefined);
     if (ok) {
-      showToast(`${openingRow.item.name}: opening stock save ho gaya.`, 'success');
+      showToast(`${openingRow.item.name}: opening stock saved.`, 'success');
       setOpeningItemId('');
     }
     return ok;
@@ -224,7 +224,7 @@ const Inventory: React.FC = () => {
     <div className="flex flex-col gap-4 pb-8 lg:gap-6">
       <PageHeader
         eyebrow="Dairy operations"
-        description="Live physical stock: sales, purchases aur production se khud update hota hai."
+        description="Live physical stock: updates on its own from sales, purchases and production."
         actions={
           <>
             <Button variant="secondary" leftIcon={<HistoryIcon />} onClick={() => openAudit('history')}>Audit history</Button>
@@ -234,7 +234,7 @@ const Inventory: React.FC = () => {
       />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Stock summary">
-        <StatCard label="Total items" value={stats.totalItems} icon={<Package />} hint={hasFilters ? 'Filter ke mutabiq' : undefined} />
+        <StatCard label="Total items" value={stats.totalItems} icon={<Package />} hint={hasFilters ? 'Matching filters' : undefined} />
         <StatCard
           label="Stock value (cost)"
           value={<Money amount={stats.totalValue} compact />}
@@ -247,7 +247,7 @@ const Inventory: React.FC = () => {
           value={stats.low}
           icon={<AlertTriangle />}
           tone={stats.low > 0 ? 'warning' : 'neutral'}
-          hint={statusFilter === 'low' ? 'Filter laga hai' : stats.low > 0 ? 'Reorder level tak' : undefined}
+          hint={statusFilter === 'low' ? 'Filter on' : stats.low > 0 ? 'At reorder level' : undefined}
           onClick={() => setStatusFilter(current => (current === 'low' ? 'all' : 'low'))}
         />
         <StatCard
@@ -255,7 +255,7 @@ const Inventory: React.FC = () => {
           value={stats.out}
           icon={<PackageX />}
           tone={stats.out > 0 ? 'danger' : 'neutral'}
-          hint={statusFilter === 'out' ? 'Filter laga hai' : stats.out > 0 ? 'Dekhein' : undefined}
+          hint={statusFilter === 'out' ? 'Filter on' : stats.out > 0 ? 'View' : undefined}
           onClick={() => setStatusFilter(current => (current === 'out' ? 'all' : 'out'))}
         />
       </section>
@@ -263,14 +263,14 @@ const Inventory: React.FC = () => {
       {stats.fix > 0 && statusFilter !== 'fix' && (
         <p className="flex flex-wrap items-center gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-[13px] font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
           <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1">{stats.fix} product{stats.fix > 1 ? 's' : ''} par purani ginti pari hai (multi-unit ya delete hue pack par). Stock count mein 0 karein.</span>
-          <Button size="sm" variant="secondary" onClick={() => setStatusFilter('fix')}>Dekhein</Button>
+          <span className="min-w-0 flex-1">{stats.fix} product{stats.fix > 1 ? 's have' : ' has'} an old count left on a multi-unit or deleted pack. Set it to 0 in Stock count.</span>
+          <Button size="sm" variant="secondary" onClick={() => setStatusFilter('fix')}>View</Button>
         </p>
       )}
 
       <div className="flex flex-col gap-3">
         <Toolbar>
-          <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Item ya category search karein..." className="w-full sm:w-72" aria-label="Search inventory" />
+          <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search item or category..." className="w-full sm:w-72" aria-label="Search inventory" />
           <SegmentedControl
             aria-label="Item type"
             size="sm"
@@ -285,10 +285,10 @@ const Inventory: React.FC = () => {
             value={statusFilter}
             onChange={setStatusFilter}
             options={[
-              { value: 'all', label: 'Sab' },
+              { value: 'all', label: 'All' },
               { value: 'low', label: 'Low', count: stats.low },
               { value: 'out', label: 'Out', count: stats.out },
-              ...(stats.fix > 0 || statusFilter === 'fix' ? [{ value: 'fix' as const, label: 'Theek karein', count: stats.fix }] : []),
+              ...(stats.fix > 0 || statusFilter === 'fix' ? [{ value: 'fix' as const, label: 'Fix', count: stats.fix }] : []),
             ]}
           />
         </Toolbar>
@@ -297,9 +297,9 @@ const Inventory: React.FC = () => {
           <Card>
             <EmptyState
               icon={<Package />}
-              title={allRows.length === 0 ? 'Abhi koi item nahi' : 'Is filter mein koi item nahi'}
-              description={allRows.length === 0 ? 'Items screen mein products aur materials add karein; un ka stock yahan nazar aayega.' : 'Search ya filter badal kar dekhein.'}
-              action={hasFilters ? <Button variant="secondary" size="sm" onClick={clearFilters}>Filters hatayen</Button> : undefined}
+              title={allRows.length === 0 ? 'No items yet' : 'No items match this filter'}
+              description={allRows.length === 0 ? 'Add products and materials on the Items screen; their stock will show here.' : 'Try a different search or filter.'}
+              action={hasFilters ? <Button variant="secondary" size="sm" onClick={clearFilters}>Clear filters</Button> : undefined}
             />
           </Card>
         ) : isWide ? (

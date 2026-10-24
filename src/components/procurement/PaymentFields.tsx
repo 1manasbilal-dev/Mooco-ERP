@@ -49,7 +49,7 @@ const chipClass = (active: boolean) => cn(
   active ? 'bg-brand text-brand-on' : 'bg-surface text-fg-muted ring-1 ring-inset ring-line hover:text-fg',
 );
 
-/** "Rs ___  [Khata] [Full]" — blank means nothing paid, Full copies the bill total. */
+/** "Rs ___  [Credit] [Full]" — blank means nothing paid (on credit), Full copies the bill total. */
 export function PaidInput({
   value, onChange, total, paid, id, onKeyDown, invalid, describedBy,
 }: {
@@ -70,7 +70,7 @@ export function PaidInput({
         step="any"
         min="0"
         inputMode="decimal"
-        placeholder="0 (khata)"
+        placeholder="0 (on credit)"
         aria-label={id ? undefined : 'Paid now'}
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
@@ -80,8 +80,8 @@ export function PaidInput({
         onKeyDown={onKeyDown}
       />
       <div className="absolute right-1.5 top-1/2 z-20 flex -translate-y-1/2 gap-1">
-        <button type="button" tabIndex={-1} onClick={() => onChange('')} className={chipClass(total > 0 && paid <= 0)} title="Poori raqam khata par">Khata</button>
-        <button type="button" tabIndex={-1} disabled={total <= 0} onClick={() => onChange(String(total))} className={chipClass(total > 0 && paid >= total)} title="Poori raqam abhi ada">Full</button>
+        <button type="button" tabIndex={-1} onClick={() => onChange('')} className={chipClass(total > 0 && paid <= 0)} title="Whole amount on credit">Credit</button>
+        <button type="button" tabIndex={-1} disabled={total <= 0} onClick={() => onChange(String(total))} className={chipClass(total > 0 && paid >= total)} title="Whole amount paid now">Full</button>
       </div>
     </div>
   );
@@ -114,8 +114,8 @@ export function AccountPicker({
       <div className="flex items-start gap-2 rounded-control bg-warning-soft p-2.5 text-xs text-warning-fg ring-1 ring-inset ring-warning/25" role="alert">
         <AlertTriangle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
         <div>
-          <span className="font-bold">Koi Cash Drawer ya Bank Account nahi hai</span>
-          <p className="mt-0.5 text-[11px] leading-snug">Pehle <b>Bank &amp; Cash</b> mein account banayein, ya paid amount <b>0</b> rakh kar khata par save karein.</p>
+          <span className="font-bold">There is no Cash Drawer or Bank Account</span>
+          <p className="mt-0.5 text-[11px] leading-snug">First create an account in <b>Bank &amp; Cash</b>, or keep the paid amount at <b>0</b> and save on credit.</p>
         </div>
       </div>
     );

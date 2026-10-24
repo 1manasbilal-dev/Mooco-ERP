@@ -62,15 +62,15 @@ export function useManagerApproval() {
     event.preventDefault();
     if (!pending || busy) return;
     const chosen = approverId || (approvers.length === 1 ? approvers[0].id : '');
-    if (!chosen) return setError('Manager chunein.');
-    if (!/^\d{4}$/.test(pin)) return setError('4 digit PIN likhein.');
+    if (!chosen) return setError('Pick a manager.');
+    if (!/^\d{4}$/.test(pin)) return setError('Enter a 4-digit PIN.');
     setBusy(true);
     setError('');
     const result = await requestManagerApproval(chosen, pin, pending.permission);
     setBusy(false);
     if (!result.approved) {
       setPin('');
-      setError(result.message || 'Ghalat PIN code!');
+      setError(result.message || 'Wrong PIN code!');
       pinRef.current?.focus();
       return;
     }
@@ -91,16 +91,16 @@ export function useManagerApproval() {
       icon={<div className="flex size-10 items-center justify-center rounded-xl bg-warning-soft text-warning-fg ring-1 ring-inset ring-warning/25"><ShieldCheck size={20} /></div>}
       footer={<>
         <Button variant="secondary" onClick={() => close(null)} disabled={busy}>
-          Wapas jayen
+          Go back
         </Button>
         <Button type="submit" form="manager-approval-form" loading={busy} disabled={approvers.length === 0}>
-          {busy ? 'Check ho raha hai…' : 'Approve karein'}
+          {busy ? 'Checking…' : 'Approve'}
         </Button>
       </>}
     >
       {approvers.length === 0 ? (
         <p className="rounded-control bg-warning-soft p-3 text-sm text-warning-fg ring-1 ring-inset ring-warning/25">
-          Koi manager mojood nahi jo ye approval de sake. Owner Settings → Users & Access mein kisi role ko "Manager Approvals" ki ijazat de.
+          No manager is available who can give this approval. The Owner can give a role the "Manager Approvals" permission in Settings → Users & Access.
         </p>
       ) : (
         <form id="manager-approval-form" onSubmit={submit} className="space-y-3">

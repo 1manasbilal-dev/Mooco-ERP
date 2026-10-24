@@ -37,14 +37,14 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
   const validAmount = Number.isFinite(value) && value > 0;
 
   const errors = {
-    from: !from ? 'Jis account se bhejna hai, woh chunein' : undefined,
-    to: !to ? 'Jis account mein bhejna hai, woh chunein' : to.id === fromId ? 'Dono accounts alag hone chahiyen' : undefined,
+    from: !from ? 'Choose the account to send from' : undefined,
+    to: !to ? 'Choose the account to send to' : to.id === fromId ? 'The two accounts must be different' : undefined,
     amount: !validAmount
-      ? 'Amount 0 se zyada likhein'
+      ? 'Enter an amount above 0'
       : from && !canOverdraw(from) && value > from.balance
-        ? `${from.name} mein sirf ${formatCurrency(from.balance)} hain. ${from.type} account minus mein nahi ja sakta.`
+        ? `${from.name} has only ${formatCurrency(from.balance)}. A ${from.type} account can't go into minus.`
         : undefined,
-    date: !date ? 'Tareekh chunein' : isPeriodLocked(date) ? `Books ${settings.security?.lockDate} tak band hain. Baad ki tareekh chunein.` : undefined,
+    date: !date ? 'Choose a date' : isPeriodLocked(date) ? `Books are closed up to ${settings.security?.lockDate}. Choose a later date.` : undefined,
   };
   const hasErrors = Object.values(errors).some(Boolean);
   const show = (message?: string) => (submitted ? message : undefined);
@@ -64,23 +64,23 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
         // Only bank accounts get here: they can be overdrawn, after a clear warning.
         const confirmed = await confirmAction({
           tone: 'warning',
-          title: 'Account mein itna balance nahi',
-          message: `"${from.name}" mein ${formatCurrency(from.balance)} hain, aur transfer ${formatCurrency(value)} ka hai.`,
+          title: 'Not enough balance in the account',
+          message: `"${from.name}" has ${formatCurrency(from.balance)}, and the transfer is ${formatCurrency(value)}.`,
           consequences: [
-            `Transfer ke baad "${from.name}" ka balance ${formatCurrency(from.balance - value)} (minus) ho jayega.`,
-            'Baad mein yeh farq bank statement se milana hoga.',
+            `After the transfer, the balance of "${from.name}" will be ${formatCurrency(from.balance - value)} (minus).`,
+            'You will need to match this difference with the bank statement later.',
           ],
-          confirmLabel: 'Phir bhi transfer karein',
+          confirmLabel: 'Transfer anyway',
         });
         if (!confirmed) return;
       }
       setSaving(true);
       const ok = await transferFunds(from.id, to.id, value, date, note.trim());
       if (!ok) return;
-      showToast('Raqam transfer ho gayi', 'success');
+      showToast('Amount transferred', 'success');
       onClose();
     } catch (err: any) {
-      showToast('Transfer nahi hua: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Transfer couldn't be made: " + (err?.message || 'please try again'), 'error');
     } finally {
       busyRef.current = false;
       setSaving(false);
@@ -93,13 +93,13 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
       onClose={onClose}
       dismissible={!saving}
       title="Transfer between accounts"
-      description="Ek account se doosre account mein raqam bhejein, jaise cash counter se bank."
+      description="Move an amount from one account to another, e.g. from the cash counter to the bank."
       icon={<DialogIcon tone="info"><ArrowRightLeft /></DialogIcon>}
       initialFocusRef={from ? amountRef : fromRef}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button type="submit" form="bank-transfer-form" loading={saving} leftIcon={<ArrowRightLeft />}>Transfer karein</Button>
+          <Button type="submit" form="bank-transfer-form" loading={saving} leftIcon={<ArrowRightLeft />}>Transfer</Button>
         </>
       }
     >
@@ -108,18 +108,18 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
           <Field label="From (source)" required error={show(errors.from)}>
             {control => (
               <Select {...control} ref={fromRef} value={fromId} onChange={event => setFromId(event.target.value)}>
-                <option value="">Account chunein...</option>
+                <option value="">Choose account...</option>
                 {activeAccounts.map(a => <option key={a.id} value={a.id}>{accountOptionLabel(a)}</option>)}
               </Select>
             )}
           </Field>
           <div className="flex justify-center">
-            <IconButton aria-label="From aur To badlein" icon={<ArrowUpDown />} size="sm" variant="secondary" onClick={swap} />
+            <IconButton aria-label="Swap From and To" icon={<ArrowUpDown />} size="sm" variant="secondary" onClick={swap} />
           </div>
           <Field label="To (destination)" required error={show(errors.to)}>
             {control => (
               <Select {...control} value={toId} onChange={event => setToId(event.target.value)}>
-                <option value="">Account chunein...</option>
+                <option value="">Choose account...</option>
                 {activeAccounts.filter(a => a.id !== fromId).map(a => <option key={a.id} value={a.id}>{accountOptionLabel(a)}</option>)}
               </Select>
             )}
@@ -152,7 +152,7 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
         {from && from.balance > 0 && (
           <div className="-mt-2">
             <Button variant="ghost" size="sm" onClick={() => setAmount(String(from.balance))}>
-              Poora balance: <Money amount={from.balance} />
+              Full balance: <Money amount={from.balance} />
             </Button>
           </div>
         )}
@@ -171,11 +171,11 @@ export default function TransferDialog({ onClose, defaultFromId }: TransferDialo
         {from && to && validAmount && !errors.to && (
           <dl className="grid grid-cols-2 gap-3 rounded-card border border-line/70 bg-surface-2 p-3 text-xs">
             <div className="min-w-0">
-              <dt className="truncate text-fg-subtle">{from.name} baad mein</dt>
+              <dt className="truncate text-fg-subtle">{from.name} after</dt>
               <dd className={from.balance - value < 0 ? 'font-bold text-danger-fg' : 'font-bold text-fg'}><Money amount={from.balance - value} /></dd>
             </div>
             <div className="min-w-0">
-              <dt className="truncate text-fg-subtle">{to.name} baad mein</dt>
+              <dt className="truncate text-fg-subtle">{to.name} after</dt>
               <dd className="font-bold text-fg"><Money amount={to.balance + value} /></dd>
             </div>
           </dl>

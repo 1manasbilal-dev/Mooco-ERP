@@ -50,12 +50,12 @@ export function sellUnitDraftIssues(draft: SellUnitDraft, kind: SellUnitKind, ba
   const issues: string[] = [];
   const name = draft.name.trim();
   const contains = Number(draft.productQty);
-  if (name && name.toLowerCase() === baseUnit.trim().toLowerCase()) issues.push(`Naam base unit (${baseUnit}) jaisa hai. Koi aur naam rakhein, e.g. "1 ${baseUnit} pack".`);
-  if (name && variants.some((v, i) => i !== editingIndex && (v.name || '').trim().toLowerCase() === name.toLowerCase())) issues.push(`"${name}" naam ka unit pehle se hai.`);
-  if (draft.productQty !== '' && !(contains > 0)) issues.push(`Size 0 se zyada likhein (${baseUnit} mein).`);
-  if (kind === 'multi_unit' && contains === 1 && name) issues.push(`Size 1 ${baseUnit} hai, yeh loose sale hi hai. Multi-unit 1 ${baseUnit} se bara ya chhota ho.`);
-  if (draft.price !== '' && !(Number(draft.price) > 0)) issues.push('Price khali chhoren (auto) ya 0 se zyada likhein.');
-  if (kind === 'packaging' && draft.packId && draft.packQty !== '' && !(Number(draft.packQty) > 0)) issues.push('Har pack mein packaging 0 se zyada ho.');
+  if (name && name.toLowerCase() === baseUnit.trim().toLowerCase()) issues.push(`The name matches the base unit (${baseUnit}). Use another name, e.g. "1 ${baseUnit} pack".`);
+  if (name && variants.some((v, i) => i !== editingIndex && (v.name || '').trim().toLowerCase() === name.toLowerCase())) issues.push(`A unit named "${name}" already exists.`);
+  if (draft.productQty !== '' && !(contains > 0)) issues.push(`Enter a size above 0 (in ${baseUnit}).`);
+  if (kind === 'multi_unit' && contains === 1 && name) issues.push(`A size of 1 ${baseUnit} is just loose sale. A multi-unit must be bigger or smaller than 1 ${baseUnit}.`);
+  if (draft.price !== '' && !(Number(draft.price) > 0)) issues.push('Leave the price empty (auto) or enter more than 0.');
+  if (kind === 'packaging' && draft.packId && draft.packQty !== '' && !(Number(draft.packQty) > 0)) issues.push('Packaging per pack must be more than 0.');
   return issues;
 }
 
@@ -71,8 +71,8 @@ function kindExamples(baseUnit: string): { multi: { name: string; contains: numb
 }
 
 const KINDS = [
-  { id: 'multi_unit' as const, icon: Layers, title: 'Multi-unit (loose se)', sub: 'Dozen, tray, pao: loose stock se katta hai' },
-  { id: 'packaging' as const, icon: Package, title: 'Ready-made pack', sub: 'Pouch, cup, bottle: apna alag count' },
+  { id: 'multi_unit' as const, icon: Layers, title: 'Multi-unit (from loose)', sub: 'Dozen, tray, pao: taken from loose stock' },
+  { id: 'packaging' as const, icon: Package, title: 'Ready-made pack', sub: 'Pouch, cup, bottle: its own count' },
 ];
 
 function KindExplainer({ kind, baseUnit }: { kind: SellUnitKind; baseUnit: string }) {
@@ -83,8 +83,8 @@ function KindExplainer({ kind, baseUnit }: { kind: SellUnitKind; baseUnit: strin
       <p className="flex items-start gap-2 rounded-control bg-info-soft px-3.5 py-2.5 text-xs leading-relaxed text-info-fg">
         <Info className="mt-0.5 size-3.5 shrink-0" />
         <span>
-          <strong className="font-bold">Multi-unit</strong> sirf bechne ka tareeqa hai, is ka apna stock nahi hota.
-          Misal: 1 {ex.multi.name} = {formatBaseQty(ex.multi.contains, baseUnit)}. 2 {ex.multi.name} bikne par loose stock se {two} {baseUnit} kat jata hai.
+          <strong className="font-bold">Multi-unit</strong> is only a way of selling; it has no stock of its own.
+          Example: 1 {ex.multi.name} = {formatBaseQty(ex.multi.contains, baseUnit)}. Selling 2 {ex.multi.name} takes {two} {baseUnit} from loose stock.
         </span>
       </p>
     );
@@ -93,9 +93,9 @@ function KindExplainer({ kind, baseUnit }: { kind: SellUnitKind; baseUnit: strin
     <p className="flex items-start gap-2 rounded-control bg-warning-soft px-3.5 py-2.5 text-xs leading-relaxed text-warning-fg">
       <Info className="mt-0.5 size-3.5 shrink-0" />
       <span>
-        <strong className="font-bold">Ready-made pack</strong> pehle se bhara hua pack hai, jis ka apna count hota hai.
-        Misal: {ex.pack.name} = {formatBaseQty(ex.pack.contains, baseUnit)}. 40 {ex.pack.name} stock mein hon to 1 bikne par 39 reh jate hain; loose {baseUnit} nahi katta.
-        Pack ka stock purchase, production ya opening stock se aata hai.
+        <strong className="font-bold">Ready-made pack</strong> is a pre-filled pack with its own count.
+        Example: {ex.pack.name} = {formatBaseQty(ex.pack.contains, baseUnit)}. With 40 {ex.pack.name} in stock, selling 1 leaves 39; no loose {baseUnit} is taken.
+        Pack stock comes from purchases, production or opening stock.
       </span>
     </p>
   );
@@ -138,7 +138,7 @@ export const SellUnitsTab: React.FC<Props> = ({
   const looseStuck = liveLoose !== null && liveLoose > 0 && !allowLoose && !variants.some(v => v.deduct_from_base === true && v.isActive !== false);
   const examples = kindExamples(baseUnit);
 
-  // Starting or leaving an edit (or "Naya pack add karein") brings the editor into view with the cursor in Naam.
+  // Starting or leaving an edit (or "Add new pack") brings the editor into view with the cursor in Name.
   const editorRef = useRef<HTMLElement>(null);
   const lastEditing = useRef(editingIndex);
   useEffect(() => {
@@ -164,14 +164,14 @@ export const SellUnitsTab: React.FC<Props> = ({
               label={<span className="flex items-center gap-2">1 {baseUnit} <Badge tone="success">Loose</Badge></span>}
               description={<>
                 {looseRate > 0 ? `${formatCurrency(looseRate)}/${baseUnit}` : 'No price'}
-                {liveLoose !== null ? ` · ${formatBaseQty(liveLoose, baseUnit)} loose stock mein` : ''}
-                {allowLoose ? '' : ' · loose nahi bikta'}
+                {liveLoose !== null ? ` · ${formatBaseQty(liveLoose, baseUnit)} loose in stock` : ''}
+                {allowLoose ? '' : ' · not sold loose'}
               </>}
             />
             {looseStuck && (
               <p className="mt-1.5 flex items-start gap-1.5 text-xs font-semibold text-warning-fg">
                 <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-                {formatBaseQty(liveLoose || 0, baseUnit)} loose stock POS mein nahi bikega: loose sale band hai aur koi multi-unit nahi.
+                {formatBaseQty(liveLoose || 0, baseUnit)} loose stock won't sell in POS: loose sale is off and there is no multi-unit.
               </p>
             )}
           </li>
@@ -186,9 +186,9 @@ export const SellUnitsTab: React.FC<Props> = ({
             const own = countOnUnit(liveVariantStocks, v.id);
             const active = v.isActive !== false;
             const problem = costRate > 0 && price > 0 && price < costEach - 0.005
-              ? `Cost se kam (${formatCurrency(costEach)})`
-              : !fromBase && own < 0 ? 'Pack stock minus mein hai'
-              : fromBase && own !== 0 ? `Purana count ${formatQty(own, 3)} para hai: Inventory stock count mein 0 karein`
+              ? `Below cost (${formatCurrency(costEach)})`
+              : !fromBase && own < 0 ? 'Pack stock is below 0'
+              : fromBase && own !== 0 ? `Old count ${formatQty(own, 3)} left over: set it to 0 in Inventory stock count`
               : '';
             const perBase = perBaseLine(each, looseRate, baseUnit);
             return (
@@ -196,33 +196,33 @@ export const SellUnitsTab: React.FC<Props> = ({
                 <div className={cn('min-w-0', !active && 'opacity-60')}>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold text-fg">{v.name}</span>
-                    {fromBase ? <Badge tone="info">Loose se</Badge> : <Badge tone="warning">Ready-made pack</Badge>}
+                    {fromBase ? <Badge tone="info">From loose</Badge> : <Badge tone="warning">Ready-made pack</Badge>}
                     {!active && <Badge tone="neutral">Hidden</Badge>}
                   </div>
                   <p className="mt-0.5 text-xs tabular-nums text-fg-muted">
-                    1 {v.name} = {formatBaseQty(vContains, baseUnit)}{fromBase ? ' loose se' : ', apna count'}
+                    1 {v.name} = {formatBaseQty(vContains, baseUnit)}{fromBase ? ' from loose' : ', own count'}
                   </p>
                   <p className="mt-0.5 text-xs text-fg-subtle">
                     {price > 0 ? <Money amount={price} className="font-semibold text-fg-muted" /> : 'No price'}
                     {perBase ? ` · ${perBase}` : ''}
-                    {liveLoose !== null && !fromBase ? ` · ${formatQty(own, 3)} stock mein` : ''}
+                    {liveLoose !== null && !fromBase ? ` · ${formatQty(own, 3)} in stock` : ''}
                   </p>
                   {!active && !fromBase && own !== 0 && (
-                    <p className="mt-0.5 text-xs text-fg-subtle">POS mein nahi bikta; yeh stock Inventory mein "(hidden)" dikhta hai.</p>
+                    <p className="mt-0.5 text-xs text-fg-subtle">Not sold in POS; this stock shows in Inventory as "(hidden)".</p>
                   )}
                   {problem && <p className="mt-0.5 flex items-start gap-1 text-xs font-semibold text-danger-fg"><AlertTriangle className="mt-0.5 size-3 shrink-0" />{problem}</p>}
                 </div>
                 <div className="flex shrink-0 items-center">
                   <IconButton size="sm" aria-label={`Edit ${v.name}`} icon={<Pencil />} onClick={() => onEdit(index)} />
-                  <IconButton size="sm" aria-label={active ? `${v.name} POS mein chhupayen` : `${v.name} POS mein dikhayen`} title={active ? 'POS mein chhupayen' : 'POS mein dikhayen'} icon={active ? <Eye /> : <EyeOff />} onClick={() => onToggleActive(index)} />
-                  <IconButton size="sm" aria-label={`${v.name} hatayen`} icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onRemove(index)} />
+                  <IconButton size="sm" aria-label={active ? `Hide ${v.name} in POS` : `Show ${v.name} in POS`} title={active ? 'Hide in POS' : 'Show in POS'} icon={active ? <Eye /> : <EyeOff />} onClick={() => onToggleActive(index)} />
+                  <IconButton size="sm" aria-label={`Remove ${v.name}`} icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onRemove(index)} />
                 </div>
               </li>
             );
           })}
         </ul>
         {variants.length === 0 && (
-          <p className="border-t border-line/70 px-4 py-3 text-xs text-fg-subtle">Abhi koi pack ya unit nahi. Neeche se dozen, pao jaisa multi-unit ya pouch, cup jaisa ready-made pack add karein.</p>
+          <p className="border-t border-line/70 px-4 py-3 text-xs text-fg-subtle">No packs or units yet. Below, add a multi-unit like dozen or pao, or a ready-made pack like a pouch or cup.</p>
         )}
       </section>
 
@@ -237,11 +237,11 @@ export const SellUnitsTab: React.FC<Props> = ({
         }}
       >
         <div className="flex items-center justify-between">
-          <h4 className="text-[15px] font-bold tracking-tight text-fg">{editing ? `Edit: ${editingUnit?.name || 'unit'}` : 'Naya unit add karein'}</h4>
+          <h4 className="text-[15px] font-bold tracking-tight text-fg">{editing ? `Edit: ${editingUnit?.name || 'unit'}` : 'Add new unit'}</h4>
           {editing && <Button size="sm" variant="ghost" onClick={onCancelEdit}>Cancel</Button>}
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Unit ki qisam">
+        <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Unit kind">
           {KINDS.map(option => {
             const selected = kind === option.id;
             const Icon = option.icon;
@@ -253,7 +253,7 @@ export const SellUnitsTab: React.FC<Props> = ({
                 role="radio"
                 aria-checked={selected}
                 disabled={locked}
-                title={locked ? 'Is unit par stock count hai, is liye qisam nahi badal sakti' : undefined}
+                title={locked ? "This unit has a stock count, so its kind can't change" : undefined}
                 onClick={() => onKindChange(option.id)}
                 className={cn(
                   'flex items-center gap-3 rounded-control border bg-surface p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
@@ -276,7 +276,7 @@ export const SellUnitsTab: React.FC<Props> = ({
         <KindExplainer kind={kind} baseUnit={baseUnit} />
 
         {isMulti && baseUnit && !sizeLocked && (
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Aam units">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Common units">
             {sellUnitPresets(baseUnit).map(preset => (
               <Button key={preset.name} size="sm" variant="secondary" onClick={() => setDraft({ ...draft, name: preset.name, productQty: String(preset.contains), price: '' })}>
                 {preset.name}
@@ -289,10 +289,10 @@ export const SellUnitsTab: React.FC<Props> = ({
         )}
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <Field label="Naam" className="col-span-2 sm:col-span-1">
+          <Field label="Name" className="col-span-2 sm:col-span-1">
             {control => <Input {...control} placeholder={isMulti ? examples.multi.name : examples.pack.name} value={draft.name} maxLength={40} onChange={e => setDraft({ ...draft, name: e.target.value })} />}
           </Field>
-          <Field label={`Size (kitne ${baseUnit})`}>
+          <Field label={`Size (how many ${baseUnit})`}>
             {control => (
               <Input {...control} type="number" inputMode="decimal" min="0.001" step="any" className="tabular-nums" placeholder={String(isMulti ? examples.multi.contains : examples.pack.contains)}
                 suffix={baseUnit} disabled={sizeLocked} value={draft.productQty} onWheel={blurOnWheel} onChange={e => setDraft({ ...draft, productQty: e.target.value })} />
@@ -313,28 +313,28 @@ export const SellUnitsTab: React.FC<Props> = ({
               <Lock className="mt-0.5 size-3.5 shrink-0 text-fg-subtle" />
               {sizeLocked ? (
                 <span>
-                  <strong className="font-semibold text-fg">{formatQty(editingCount, 3)} × {editingUnit.name}</strong> abhi stock mein hain, is liye size ({formatBaseQty(sellUnitContains(editingUnit), baseUnit)}) aur qisam lock hain.
-                  Size badalne se shelf par para stock naye size se gina jata aur hisaab ghalat ho jata. Naam aur price badal sakte hain.
-                  Size badalna hai to pehle Inventory mein is pack ka count 0 karein, ya naya pack add karein.
+                  <strong className="font-semibold text-fg">{formatQty(editingCount, 3)} × {editingUnit.name}</strong> in stock, so the size ({formatBaseQty(sellUnitContains(editingUnit), baseUnit)}) and kind are locked.
+                  Changing the size would count the stock on the shelf at the new size and throw the figures off. You can change the name and price.
+                  To change the size, first count this pack to 0 in Inventory, or add a new pack.
                 </span>
               ) : (
                 <span>
-                  Is multi-unit par purana count ({formatQty(editingCount, 3)}) para hai, is liye qisam lock hai. Inventory stock count mein isko 0 karein.
+                  This multi-unit has an old count ({formatQty(editingCount, 3)}) left over, so its kind is locked. Set it to 0 in Inventory stock count.
                 </span>
               )}
             </p>
             {sizeLocked && (
-              <Button size="sm" variant="secondary" leftIcon={<PackagePlus />} onClick={() => onStartNewPack(editingUnit)}>Naya pack add karein</Button>
+              <Button size="sm" variant="secondary" leftIcon={<PackagePlus />} onClick={() => onStartNewPack(editingUnit)}>Add new pack</Button>
             )}
           </div>
         )}
 
         {!isMulti && (
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Packaging material" className="col-span-2" hint={packagingMaterials.length === 0 ? 'Koi packaging material nahi (optional).' : undefined}>
+            <Field label="Packaging material" className="col-span-2" hint={packagingMaterials.length === 0 ? 'No packaging materials (optional).' : undefined}>
               {control => (
                 <Select {...control} value={draft.packId} onChange={e => setDraft({ ...draft, packId: e.target.value })}>
-                  <option value="">Koi nahi</option>
+                  <option value="">None</option>
                   {packagingMaterials.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </Select>
               )}
@@ -352,7 +352,7 @@ export const SellUnitsTab: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-3 rounded-control border border-line bg-surface px-3.5 py-2.5 text-sm">
             <span className="min-w-0">
               <span className="block font-semibold text-fg">
-                1 {draft.name.trim() || 'unit'} = {formatBaseQty(contains, baseUnit)}{isMulti ? ' loose se' : ', apna count'}
+                1 {draft.name.trim() || 'unit'} = {formatBaseQty(contains, baseUnit)}{isMulti ? ' from loose' : ', own count'}
               </span>
               {draftEach > 0 && <span className="block text-xs text-fg-subtle">{perBaseLine(draftEach, looseRate, baseUnit)}</span>}
             </span>
@@ -360,7 +360,7 @@ export const SellUnitsTab: React.FC<Props> = ({
               {draftPrice > 0 ? <Money amount={draftPrice} className="font-bold text-fg" /> : <span className="text-fg-faint">—</span>}
               {costRate > 0 && draftPrice > 0 && (
                 <span className={cn('block text-[11px] font-semibold', draftProfit < 0 ? 'text-danger-fg' : 'text-success-fg')}>
-                  {draftProfit < 0 ? 'Nuqsan' : 'Profit'} {formatCurrency(Math.abs(draftProfit))}
+                  {draftProfit < 0 ? 'Loss' : 'Profit'} {formatCurrency(Math.abs(draftProfit))}
                 </span>
               )}
             </span>

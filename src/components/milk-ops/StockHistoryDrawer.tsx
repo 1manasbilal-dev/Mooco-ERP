@@ -70,7 +70,7 @@ export default function StockHistoryDrawer({ row, logs, canEdit, canOpen, onCoun
             <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-fg-subtle">Stock history</p>
             <h2 id={titleId} className="truncate text-xl font-bold tracking-tight text-fg">{row.item.name}</h2>
           </div>
-          <IconButton aria-label="Band karein" icon={<X />} onClick={onClose} />
+          <IconButton aria-label="Close" icon={<X />} onClick={onClose} />
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2.5">
           <div className="min-w-0">
@@ -92,8 +92,8 @@ export default function StockHistoryDrawer({ row, logs, canEdit, canOpen, onCoun
         {history.length === 0 ? (
           <EmptyState
             icon={<HistoryIcon />}
-            title="Abhi koi movement nahi"
-            description={canOpen ? 'Is product ka stock abhi tak kabhi nahi hila. Shuru ka stock "Opening stock" se daalein.' : 'Is product ki koi stock entry load nahi hui.'}
+            title="No movements yet"
+            description={canOpen ? 'This product\'s stock has never moved. Add the starting stock with "Opening stock".' : 'No stock entries loaded for this product.'}
             action={canEdit && canOpen ? <Button size="sm" leftIcon={<PackagePlus />} onClick={onOpening}>Opening stock</Button> : undefined}
           />
         ) : (
@@ -104,30 +104,30 @@ export default function StockHistoryDrawer({ row, logs, canEdit, canOpen, onCoun
               value={range}
               onChange={chooseRange}
               options={[
-                { value: '7', label: '7 din' },
-                { value: '30', label: '30 din' },
-                { value: 'all', label: 'Sab' },
-                { value: 'custom', label: 'Tareekh' },
+                { value: '7', label: '7 days' },
+                { value: '30', label: '30 days' },
+                { value: 'all', label: 'All' },
+                { value: 'custom', label: 'Dates' },
               ]}
             />
             <div className="grid grid-cols-2 gap-2">
               <label className="text-[11px] font-semibold text-fg-subtle">
-                Se
+                From
                 <Input type="date" inputSize="sm" value={from} max={to || today} onChange={event => editDate('from', event.target.value)} className="mt-1" />
               </label>
               <label className="text-[11px] font-semibold text-fg-subtle">
-                Tak
+                To
                 <Input type="date" inputSize="sm" value={to} min={from || undefined} max={today} onChange={event => editDate('to', event.target.value)} className="mt-1" />
               </label>
             </div>
 
             <dl className="grid grid-cols-3 gap-2 text-center text-xs">
               <div className="rounded-control bg-success-soft/70 px-2 py-2">
-                <dt className="text-fg-subtle">Aaya</dt>
+                <dt className="text-fg-subtle">In</dt>
                 <dd className="mt-0.5 font-bold tabular-nums text-success-fg">{signedQty(totals.stockIn)} {unit}</dd>
               </div>
               <div className="rounded-control bg-danger-soft/70 px-2 py-2">
-                <dt className="text-fg-subtle">Gaya</dt>
+                <dt className="text-fg-subtle">Out</dt>
                 <dd className="mt-0.5 font-bold tabular-nums text-danger-fg">{signedQty(-totals.stockOut)} {unit}</dd>
               </div>
               <div className="rounded-control bg-surface-2 px-2 py-2">
@@ -137,7 +137,7 @@ export default function StockHistoryDrawer({ row, logs, canEdit, canOpen, onCoun
             </dl>
 
             {shown.length === 0 ? (
-              <EmptyState size="compact" icon={<HistoryIcon />} title="Is muddat mein koi movement nahi" description="Tareekh badal kar dekhein." />
+              <EmptyState size="compact" icon={<HistoryIcon />} title="No movements in this period" description="Try different dates." />
             ) : (
               <>
                 <ol className="divide-y divide-line overflow-hidden rounded-control border border-line" aria-label={`${shown.length} entries`}>
@@ -147,7 +147,7 @@ export default function StockHistoryDrawer({ row, logs, canEdit, canOpen, onCoun
               </>
             )}
             <p className="text-[11px] text-fg-subtle">
-              Balance = us entry ke baad ka kul stock ({unit}). Loose hissa entry mein likha hua hai; packs aaj ki ginti se peeche hisaab kiye gaye hain.
+              Balance = total stock after that entry ({unit}). The loose part is recorded on the entry; packs are worked back from today's count.
             </p>
           </div>
         )}

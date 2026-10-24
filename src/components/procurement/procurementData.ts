@@ -55,18 +55,26 @@ export const formatRate = (rate: unknown) => formatQty(Number(rate) || 0, 2);
 
 export const balanceOf = (party: any) => Number(party?.pending_balance ?? party?.balance ?? 0) || 0;
 
-/** Paid and khata parts of a purchase row, never more than the bill. */
+/** Paid and unpaid (on credit) parts of a purchase row, never more than the bill. */
 export function settlementOf(entry: any) {
   const amount = Math.max(0, Number(entry.total_amount) || 0);
   const paid = Math.min(amount, Math.max(0, Number(entry.paid_amount ?? entry.details?.paid_amount ?? 0) || 0));
   return { amount, paid, due: Math.max(0, amount - paid) };
 }
 
+/** Settlement key of a row. 'Khata' is the internal key for unpaid; show SETTLEMENT_TEXT to people. */
 export function settlementLabel(paid: number, due: number): 'Paid' | 'Khata' | 'Partial' {
   if (due <= 0.5 && paid > 0) return 'Paid';
   if (paid <= 0.5) return 'Khata';
   return 'Partial';
 }
+
+/** Text shown for each settlement key. */
+export const SETTLEMENT_TEXT: Record<ReturnType<typeof settlementLabel>, string> = {
+  Paid: 'Paid',
+  Partial: 'Partial',
+  Khata: 'Unpaid',
+};
 
 /** Shift names from Settings > Company Profile, or Morning / Evening. */
 export function useConfiguredShifts(list: unknown): string[] {

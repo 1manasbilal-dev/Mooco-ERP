@@ -113,7 +113,7 @@ export function SearchInput({ value, onChange, shortcut, className, placeholder 
           <button
             type="button"
             onClick={() => onChange('')}
-            aria-label="Search saaf karein"
+            aria-label="Clear search"
             className="flex size-6 cursor-pointer items-center justify-center rounded-md text-fg-faint hover:bg-surface-2 hover:text-fg"
           >
             <X className="size-3.5" />

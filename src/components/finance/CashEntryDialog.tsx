@@ -122,13 +122,13 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
   const value = parseAmount(amount);
   const validAmount = Number.isFinite(value) && value > 0;
   const errors = {
-    account: !account ? 'Account chunein' : undefined,
+    account: !account ? 'Choose an account' : undefined,
     amount: !validAmount
-      ? 'Amount 0 se zyada likhein'
+      ? 'Enter an amount above 0'
       : !isDeposit && account && !canOverdraw(account) && value > account.balance
-        ? `${account.name} mein sirf ${formatCurrency(account.balance)} hain. ${account.type} account minus mein nahi ja sakta.`
+        ? `${account.name} has only ${formatCurrency(account.balance)}. A ${account.type} account can't go into minus.`
         : undefined,
-    date: !date ? 'Tareekh chunein' : isPeriodLocked(date) ? `Books ${settings.security?.lockDate} tak band hain. Baad ki tareekh chunein.` : undefined,
+    date: !date ? 'Choose a date' : isPeriodLocked(date) ? `Books are closed up to ${settings.security?.lockDate}. Choose a later date.` : undefined,
   };
   const hasErrors = Object.values(errors).some(Boolean);
   const show = (message?: string) => (submitted ? message : undefined);
@@ -142,10 +142,10 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
       if (!isDeposit && value > account.balance) {
         const confirmed = await confirmAction({
           tone: 'warning',
-          title: 'Account mein itna balance nahi',
-          message: `"${account.name}" mein ${formatCurrency(account.balance)} hain, aur withdrawal ${formatCurrency(value)} ka hai.`,
-          consequences: [`Is ke baad "${account.name}" ka balance ${formatCurrency(account.balance - value)} (minus) ho jayega.`],
-          confirmLabel: 'Phir bhi nikalein',
+          title: 'Not enough balance in the account',
+          message: `"${account.name}" has ${formatCurrency(account.balance)}, and the withdrawal is ${formatCurrency(value)}.`,
+          consequences: [`After this, the balance of "${account.name}" will be ${formatCurrency(account.balance - value)} (minus).`],
+          confirmLabel: 'Withdraw anyway',
         });
         if (!confirmed) return;
       }
@@ -166,10 +166,10 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
       });
       // recordBankTransaction already said why it failed; nothing was posted.
       if (!ok) return;
-      showToast(`${mode} record ho gaya`, 'success');
+      showToast(`${mode} recorded`, 'success');
       onClose();
     } catch (err: any) {
-      showToast('Transaction record nahi hui: ' + (err?.message || 'dobara koshish karein'), 'error');
+      showToast("Transaction couldn't be recorded: " + (err?.message || 'please try again'), 'error');
     } finally {
       busyRef.current = false;
       setSaving(false);
@@ -182,14 +182,14 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
       onClose={onClose}
       dismissible={!saving}
       title={isDeposit ? 'Record deposit' : 'Record withdrawal'}
-      description={isDeposit ? 'Account mein aane wali raqam (money in).' : 'Account se nikalne wali raqam (money out).'}
+      description={isDeposit ? 'Money coming into the account (money in).' : 'Money going out of the account (money out).'}
       icon={<DialogIcon tone={isDeposit ? 'success' : 'danger'}>{isDeposit ? <ArrowDownLeft /> : <ArrowUpRight />}</DialogIcon>}
       initialFocusRef={amountRef}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button type="submit" form="bank-cash-entry-form" loading={saving}>
-            {isDeposit ? 'Deposit save karein' : 'Withdrawal save karein'}
+            {isDeposit ? 'Save deposit' : 'Save withdrawal'}
           </Button>
         </>
       }
@@ -209,7 +209,7 @@ export default function CashEntryDialog({ mode: initialMode, onClose, defaultAcc
         <Field label={isDeposit ? 'Deposit into' : 'Withdraw from'} required error={show(errors.account)}>
           {control => (
             <Select {...control} value={accountId} onChange={event => setAccountId(event.target.value)}>
-              <option value="">Account chunein...</option>
+              <option value="">Choose account...</option>
               {activeAccounts.map(a => <option key={a.id} value={a.id}>{accountOptionLabel(a)}</option>)}
             </Select>
           )}

@@ -80,7 +80,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
   const remaining = option?.available ?? 0;
   const sameUnitInCart = cart.filter(item => item.id === product.id && (item.variantId || 'base') === variantId).reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
   const stockError = !option
-    ? 'Is product ki koi unit abhi bikri ke liye nahi hai.'
+    ? 'No unit of this product is on sale right now.'
     : !entry.error ? (sellQtyProblem(product.name, option, entry.qty, allowNegativeStock, product.unit || 'unit') || '') : '';
   const error = submitError || stockError || entry.error;
   const canAdd = !error;
@@ -235,7 +235,7 @@ function QuickEntry({ product, initialEntry, onClose, cart, allowNegativeStock, 
         <div className="pos-quick-body">
           {variants.length > 0 && options.length > 0 && (
             <>
-              <div className="pos-quick-section-label"><span>Unit / packaging</span><span>Stock cart ke baad</span></div>
+              <div className="pos-quick-section-label"><span>Unit / packaging</span><span>Stock after cart</span></div>
               <div className="pos-quick-units" role="group" aria-label="Unit / packaging">
                 {options.map(o => {
                   const title = o.kind === 'loose' ? `1 ${product.unit}` : `${o.name} (${formatQty(o.contains, 3)} ${product.unit})`;

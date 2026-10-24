@@ -542,12 +542,12 @@ export function buildSupplierStatement(input: {
     const voided = Boolean(link && voidedIds.has(link)) || khataSkip.has(tx.id);
 
     if (isPaymentType(tx.type)) {
-      // A waiver / discount settles the khata but no money left any account.
+      // A waiver / discount settles the ledger balance but no money left any account.
       const isWaiver = Boolean((tx.details as any)?.waiver) || /waiver|discount/i.test(mode);
       // Only Payment / Advance rows can be deleted (delete_supplier_transaction_effects), never spot payments.
       const deletable = (tx.type === 'Payment' || tx.type === 'Advance') && !isSpotPayment(tx);
       // Money paid for a purchase that was later returned still left the account (the refund is its
-      // own cash-in line), so the cash register keeps it even though the khata hides it.
+      // own cash-in line), so the cash register keeps it even though the ledger hides it.
       if (amount > 0.5 && !isWaiver) {
         pushCash({
           id: tx.id,
@@ -617,7 +617,7 @@ export function buildSupplierStatement(input: {
         });
       } else if (voided && link && voidedIds.has(link)) {
         // A fully returned purchase is hidden with its payments; what is left is the money the
-        // supplier refunded minus what was paid for it (paid but kept on khata = an advance).
+        // supplier refunded minus what was paid for it (paid but kept on account = an advance).
         const prev = voidRefunds.get(link);
         voidRefunds.set(link, {
           refund: (prev?.refund || 0) + refund,
@@ -668,7 +668,7 @@ export function buildSupplierStatement(input: {
     khata.push({
       id: `void_${purchaseId}`,
       date: info.date,
-      description: net > 0 ? 'Cash refund on return' : 'Paid amount kept on khata after return',
+      description: net > 0 ? 'Cash refund on return' : 'Paid amount kept on account after return',
       credit: net > 0 ? net : 0,
       debit: net < 0 ? Math.abs(net) : 0,
       kind: net > 0 ? 'Refund' : 'Payment',

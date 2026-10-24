@@ -287,7 +287,7 @@ class SyncService {
           // Idempotent by PK. A customer is only queued when it is created, so a
           // row already on the server came from an earlier attempt of this same sync. It is never
           // overwritten: by now synced bills/receipts may have moved its balance, and re-sending the
-          // opening balance would wipe those khata entries out of the balance.
+          // opening balance would wipe those ledger entries out of the balance.
           const { error: custError } = await loadRead(
             supabase.from('customers').upsert([custPayload], { onConflict: 'id', ignoreDuplicates: true }),
             SYNC_TIMEOUT_MS
@@ -461,7 +461,7 @@ class SyncService {
           }), SYNC_TIMEOUT_MS);
 
           if (effectsError) {
-            const wrapped = new Error(`Side-effects (stock/khata/cash) pending: ${effectsError.message}`);
+            const wrapped = new Error(`Side-effects (stock/ledger/cash) pending: ${effectsError.message}`);
             (wrapped as any).code = effectsError.code;
             throw wrapped;
           }

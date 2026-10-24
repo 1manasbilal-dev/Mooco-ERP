@@ -17,7 +17,7 @@ const BRAND_COLORS = {
   slate100: '#f1f5f9',     // Panels & Input Insets
   slate50: '#f8fafc',      // Canvas Backgrounds & Table Headers
 
-  dueRed: '#dc2626',       // red-600 (Payables / Due Khata)
+  dueRed: '#dc2626',       // red-600 (Payables / Due Balances)
   dueRedBg: '#fef2f2',     // red-50 (Due Badges)
   advanceGreen: '#15803d', // emerald-700 (Prepaid / Advance)
   advanceGreenBg: '#f0fdf4', // emerald-50 (Advance Badges)

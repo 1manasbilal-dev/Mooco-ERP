@@ -18,7 +18,7 @@ export interface KhataBalanceProps {
 }
 
 /**
- * A khata balance as staff read it: the amount without a minus sign, coloured like `Money tone="balance"`
+ * A ledger balance as staff read it: the amount without a minus sign, coloured like `Money tone="balance"`
  * (due red, advance green), and named. "-Rs 500" read as a debt to the counter staff, not as an advance.
  */
 export const KhataBalance = memo(function KhataBalance({ balance, label = 'word', stacked, className, amountClassName }: KhataBalanceProps) {

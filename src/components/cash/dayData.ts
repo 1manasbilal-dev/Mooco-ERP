@@ -228,7 +228,7 @@ export function computeDayCash(day: BusinessDay, src: DayCashSources): DayCash {
   // Spot payments are already in the purchases above; waivers moved no cash.
   const supplierRows = src.supplierTransactions.filter(tx => tx.type === 'Payment' && isCash(tx.mode) && Number(tx.amount || 0) > 0 && onDay(tx.date) && !isSpotSupplierPayment(tx) && !tx.details?.waiver);
   const supplierTotal = roundCurrency(supplierRows.reduce((sum, tx) => sum + Number(tx.amount || 0), 0));
-  // Vendor / staff khata settled in cash (shift totals count these too).
+  // Vendor / staff ledger settled in cash (shift totals count these too).
   const vendorPaymentRows = vendorCash.filter(tx => tx.type === 'Payment');
   const vendorPayments = roundCurrency(vendorPaymentRows.reduce((sum, tx) => sum + Number(tx.amount || 0), 0));
   const refunds = roundCurrency(priorRefunds.reduce((sum, event) => sum + Number(event.amount || 0), 0));
@@ -281,7 +281,7 @@ export function computeDayCash(day: BusinessDay, src: DayCashSources): DayCash {
     cashIn: {
       lines: [
         { key: 'pos', label: 'POS cash sales', detail: `${cashSales.length} bills`, amount: posSales },
-        { key: 'ledger', label: 'Customer khata cash', detail: `${ledgerRows.length} payments`, amount: ledger },
+        { key: 'ledger', label: 'Customer ledger cash', detail: `${ledgerRows.length} payments`, amount: ledger },
         { key: 'delivery', label: 'Daily delivery cash', detail: `${deliveryRows.length} entries`, amount: delivery },
         ...(vendorRefunds > 0 ? [{ key: 'vendor-refunds', label: 'Vendor / staff refunds', detail: `${vendorRefundRows.length} refunds`, amount: vendorRefunds }] : []),
       ],

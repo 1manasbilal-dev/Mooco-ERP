@@ -32,7 +32,7 @@ function rank(supplier: any, needle: string): number {
   return other.includes(needle) ? 3 : -1;
 }
 
-/** Searchable farmer / vendor combobox: type, arrow keys, Enter. Shows each party's khata balance. */
+/** Searchable farmer / vendor combobox: type, arrow keys, Enter. Shows each party's ledger balance. */
 export const SupplierPicker: React.FC<SupplierPickerProps> = ({
   value, onChange, suppliers, placeholder, focusToken = 0, onPicked, id, size = 'lg', ...aria
 }) => {
@@ -159,8 +159,8 @@ export const SupplierPicker: React.FC<SupplierPickerProps> = ({
         {value ? (
           <button
             type="button"
-            aria-label="Chuna hua naam hatayen"
-            title="Chuna hua naam hatayen"
+            aria-label="Clear the chosen name"
+            title="Clear the chosen name"
             onClick={event => {
               event.stopPropagation();
               onChange('');
@@ -190,8 +190,8 @@ export const SupplierPicker: React.FC<SupplierPickerProps> = ({
           {results.length === 0 ? (
             <div className="px-4 py-6 text-center text-xs text-fg-subtle">
               <User className="mx-auto mb-1.5 text-fg-faint" size={20} aria-hidden="true" />
-              <p className="font-semibold text-fg-muted">Koi supplier / gwala nahi mila</p>
-              <p className="mt-0.5 text-[11px]">&ldquo;{search}&rdquo; se koi match nahi hua</p>
+              <p className="font-semibold text-fg-muted">No supplier / milkman found</p>
+              <p className="mt-0.5 text-[11px]">Nothing matches &ldquo;{search}&rdquo;</p>
             </div>
           ) : (
             <>
@@ -209,7 +209,7 @@ export const SupplierPicker: React.FC<SupplierPickerProps> = ({
               ))}
               {total > results.length && (
                 <p className="px-3 py-2 text-center text-[11px] text-fg-subtle">
-                  {total - results.length} aur. Naam likh kar talaash chhoti karein.
+                  {total - results.length} more. Type a name to narrow the search.
                 </p>
               )}
             </>

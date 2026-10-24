@@ -52,7 +52,7 @@ const CoaRow = memo(function CoaRow({ node, level, hasChildren, expanded, canMan
               type="button"
               onClick={() => onToggle(node.id)}
               aria-expanded={expanded}
-              aria-label={`${node.name} ${expanded ? 'band karein' : 'kholein'}`}
+              aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.name}`}
               className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-subtle transition-colors hover:bg-surface-3 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronRight className={cn('size-4 transition-transform duration-150', expanded && 'rotate-90')} aria-hidden="true" />
@@ -104,12 +104,12 @@ const CoaRow = memo(function CoaRow({ node, level, hasChildren, expanded, canMan
           {!isRoot && (
             <div className="flex items-center justify-end gap-0.5">
               {canAddChild(node) && (
-                <IconButton size="sm" aria-label="Sub-account add karein" icon={<PlusCircle />} onClick={() => onAddSub(node)} className="hover:text-success-fg" />
+                <IconButton size="sm" aria-label="Add sub-account" icon={<PlusCircle />} onClick={() => onAddSub(node)} className="hover:text-success-fg" />
               )}
               {!node.isSystem && (
                 <IconButton
                   size="sm"
-                  aria-label={inactive ? 'Active karein' : 'Inactive karein'}
+                  aria-label={inactive ? 'Make Active' : 'Make Inactive'}
                   icon={<Power />}
                   disabled={busy}
                   onClick={() => onToggleActive(node)}
@@ -117,13 +117,13 @@ const CoaRow = memo(function CoaRow({ node, level, hasChildren, expanded, canMan
                 />
               )}
               {node.isSystem ? (
-                <span title="System control account: app khud hisaab rakhti hai" className="flex size-8 items-center justify-center text-fg-faint">
+                <span title="System control account: the app keeps its balance itself" className="flex size-8 items-center justify-center text-fg-faint">
                   <Lock className="size-3.5" aria-label="System account" />
                 </span>
               ) : (
                 <IconButton
                   size="sm"
-                  aria-label="Account delete karein"
+                  aria-label="Delete account"
                   icon={<Trash2 />}
                   disabled={busy}
                   onClick={() => onDelete(node)}

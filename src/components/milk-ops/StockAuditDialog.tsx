@@ -95,7 +95,7 @@ export default function StockAuditDialog({
       onClose={onClose}
       dismissible={!busy}
       title="Stock count"
-      description="Shelf par har pile gin kar likhein; system usi ginti ke barabar ho jayega."
+      description="Count each pile on the shelf and enter it; the system will match your count."
       initialFocusRef={firstInputRef}
       icon={
         <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand-fg">
@@ -104,15 +104,15 @@ export default function StockAuditDialog({
       }
       footer={tab === 'adjust' ? (
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>Band karein</Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Close</Button>
           <Button
             type="submit"
             form="stock-audit-form"
             loading={busy}
             disabled={!canEdit || !row || changeCount === 0}
-            title={!canEdit ? 'Aap ko stock adjust karne ki ijazat nahi hai' : undefined}
+            title={!canEdit ? "You don't have permission to adjust stock" : undefined}
           >
-            {busy ? 'Saving...' : changeCount > 1 ? `${changeCount} piles save karein` : 'Count save karein'}
+            {busy ? 'Saving...' : changeCount > 1 ? `Save ${changeCount} piles` : 'Save count'}
           </Button>
         </>
       ) : undefined}
@@ -131,10 +131,10 @@ export default function StockAuditDialog({
 
         {tab === 'adjust' ? (
           <form id="stock-audit-form" onSubmit={submit} className="space-y-4" noValidate>
-            <Field label="Item chunein" required>
+            <Field label="Choose item" required>
               {control => (
                 <Select {...control} value={itemId} onChange={event => chooseItem(event.target.value)}>
-                  <option value="">-- Catalog se item chunein --</option>
+                  <option value="">-- Choose an item from the catalog --</option>
                   {rows.map(r => (
                     <option key={r.item.id} value={r.item.id}>{r.item.name} ({r.item.unit}){r.isActive ? '' : ' · inactive'}</option>
                   ))}
@@ -146,14 +146,14 @@ export default function StockAuditDialog({
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-control bg-surface-2 px-3 py-2.5 text-xs">
                   <span className="text-fg-subtle">
-                    System mein <span className="font-bold tabular-nums text-fg">{formatBaseQty(row.reading.totalBase, unit)}</span>
+                    In system <span className="font-bold tabular-nums text-fg">{formatBaseQty(row.reading.totalBase, unit)}</span>
                     {row.pileDetail && <span className="tabular-nums"> · {row.piles.join(' · ')}</span>}
                   </span>
                   <StatusBadge row={row} />
                 </div>
 
                 <fieldset className="space-y-2">
-                  <legend className="mb-1.5 text-xs font-semibold text-fg-muted">Har pile ki asal ginti (khali = koi tabdeeli nahi)</legend>
+                  <legend className="mb-1.5 text-xs font-semibold text-fg-muted">Actual count of each pile (blank = no change)</legend>
                   <ul className="divide-y divide-line overflow-hidden rounded-control border border-line">
                     {piles.map((pile, index) => (
                       <PileCountRow
@@ -171,7 +171,7 @@ export default function StockAuditDialog({
 
                 <CountTotals changes={changeCount} baseDiff={summary.baseDiff} unit={unit} valueDiff={costRate > 0 ? summary.baseDiff * costRate : null} />
 
-                <Field label="Wajah">
+                <Field label="Reason">
                   {control => (
                     <Select {...control} value={reason} onChange={event => setReason(event.target.value as AdjustmentReason)}>
                       {COUNT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
@@ -181,7 +181,7 @@ export default function StockAuditDialog({
 
                 <Field label="Remarks / notes">
                   {control => (
-                    <Textarea {...control} rows={2} placeholder="Farq ki wajah likhein..." value={notes} onChange={event => setNotes(event.target.value)} />
+                    <Textarea {...control} rows={2} placeholder="Write the reason for the difference..." value={notes} onChange={event => setNotes(event.target.value)} />
                   )}
                 </Field>
               </>
@@ -207,9 +207,9 @@ function AuditHistory({ logs, rows }: { logs: InventoryLog[]; rows: StockRow[] }
 
   return (
     <div className="space-y-3">
-      <SearchInput value={search} onChange={setSearch} placeholder="Item, wajah ya note search karein..." aria-label="Search audit history" />
+      <SearchInput value={search} onChange={setSearch} placeholder="Search item, reason or note..." aria-label="Search audit history" />
       {filtered.length === 0 ? (
-        <EmptyState size="compact" icon={<HistoryIcon />} title={search ? 'Kuch nahi mila' : 'Abhi koi audit entry nahi'} />
+        <EmptyState size="compact" icon={<HistoryIcon />} title={search ? 'Nothing found' : 'No audit entries yet'} />
       ) : (
         <>
           <ul className="divide-y divide-line overflow-hidden rounded-control border border-line">

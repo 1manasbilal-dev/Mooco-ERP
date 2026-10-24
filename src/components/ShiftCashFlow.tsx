@@ -152,7 +152,7 @@ export function ShiftCashFlow({ drawerName, startedAt, data: d, onDetails }: Shi
         </div>
         {row('sales', 'Cash from sales', `${d.billsCount} total bills · after sales returns`, d.netCashSales, 'in', ShoppingCart, <>
           <div className="space-y-2 text-xs text-fg-muted">
-            {([['Total sales', d.grossSales], ['Credit / khata', d.creditSales], ['Online / bank', d.onlineSales]] as const).map(([label, value]) => (
+            {([['Total sales', d.grossSales], ['Credit', d.creditSales], ['Online / bank', d.onlineSales]] as const).map(([label, value]) => (
               <div key={label} className="flex justify-between gap-3"><span>{label}</span><Money amount={value} className="font-semibold" /></div>
             ))}
             <div className="flex justify-between gap-3 border-t border-line pt-2 font-bold text-success-fg"><span>Net drawer cash</span><Money amount={d.netCashSales} /></div>
@@ -187,7 +187,7 @@ export function ShiftCashFlow({ drawerName, startedAt, data: d, onDetails }: Shi
       </div>
       <p className="flex items-start gap-1.5 px-1 text-[11px] leading-relaxed text-fg-subtle">
         <CircleHelp size={13} className="mt-0.5 shrink-0" />
-        <span>Only physical cash affects this balance. Credit / khata: <Money amount={d.creditSales} className="font-semibold text-fg-muted" /> · Online / bank: <Money amount={d.onlineSales} className="font-semibold text-fg-muted" /></span>
+        <span>Only physical cash affects this balance. Credit: <Money amount={d.creditSales} className="font-semibold text-fg-muted" /> · Online / bank: <Money amount={d.onlineSales} className="font-semibold text-fg-muted" /></span>
       </p>
     </section>
   );

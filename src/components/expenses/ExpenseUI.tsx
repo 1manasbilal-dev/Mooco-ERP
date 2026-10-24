@@ -17,7 +17,7 @@ export type ExpensesSection = 'transactions' | 'vendors';
 
 const SECTIONS: { id: ExpensesSection; label: string; short: string; Icon: React.ElementType }[] = [
   { id: 'transactions', label: 'Expenses', short: 'Expenses', Icon: Receipt },
-  { id: 'vendors', label: 'Vendors & Khata', short: 'Vendors', Icon: Users },
+  { id: 'vendors', label: 'Vendors & Ledgers', short: 'Vendors', Icon: Users },
 ];
 
 export const ExpensesHeader: React.FC<{
@@ -173,7 +173,7 @@ export const FilterChip: React.FC<{ label: string; onClear: () => void }> = ({ l
     <button
       type="button"
       onClick={onClear}
-      aria-label={`${label} filter hatayen`}
+      aria-label={`Remove ${label} filter`}
       className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-brand/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <X size={10} />
@@ -192,7 +192,7 @@ export const Avatar: React.FC<{ name: string; owed?: boolean; size?: 'sm' | 'md'
   );
 };
 
-/** Paid vs khata split of a bill, as one bar with both amounts underneath. */
+/** Paid vs on-credit split of a bill, as one bar with both amounts underneath. */
 export const SettlementBar: React.FC<{ total: number; paid: number; formatMoney: (value: number) => string }> = ({ total, paid, formatMoney }) => {
   if (total <= 0) return null;
   const paidPart = Math.min(total, Math.max(0, paid));
@@ -205,7 +205,7 @@ export const SettlementBar: React.FC<{ total: number; paid: number; formatMoney:
       </div>
       <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] font-semibold tabular-nums">
         <span className="flex items-center gap-1.5 text-success-fg"><span className="size-1.5 rounded-full bg-success" />Paid {formatMoney(paidPart)}</span>
-        <span className="flex items-center gap-1.5 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" />Khata {formatMoney(due)}</span>
+        <span className="flex items-center gap-1.5 text-danger-fg"><span className="size-1.5 rounded-full bg-danger" />On credit {formatMoney(due)}</span>
       </div>
     </div>
   );

@@ -90,7 +90,7 @@ const STANDARD_SYSTEM_UNITS: UnitDefinition[] = [
   },
   {
     id: 'u_sys_500g',
-    name: 'Aadha Kilo (500g)',
+    name: 'Half Kilo (500g)',
     symbol: '500g',
     factor: 0.5,
     isBase: false,
@@ -100,7 +100,7 @@ const STANDARD_SYSTEM_UNITS: UnitDefinition[] = [
   },
   {
     id: 'u_sys_maund',
-    name: 'Maund / Mann (40kg)',
+    name: 'Maund (40kg)',
     symbol: 'maund',
     factor: 40,
     isBase: false,
@@ -182,7 +182,7 @@ const STANDARD_SYSTEM_UNITS: UnitDefinition[] = [
   },
   {
     id: 'u_sys_box',
-    name: 'Box / Dabba',
+    name: 'Box',
     symbol: 'box',
     factor: 1,
     isBase: false,
@@ -222,7 +222,7 @@ const STANDARD_SYSTEM_UNITS: UnitDefinition[] = [
   },
   {
     id: 'u_sys_bag',
-    name: 'Bag / Bori',
+    name: 'Bag / Sack',
     symbol: 'bag',
     factor: 1,
     isBase: false,
@@ -295,7 +295,12 @@ const UNIT_ALIASES: Record<string, string> = {
   crates: 'crate',
   cups: 'cup',
   bags: 'bag',
-  rolls: 'roll'
+  rolls: 'roll',
+  // Older built-in unit names (since renamed to English), so a unit saved under its old name still resolves.
+  'aadha kilo (500g)': '500g',
+  'maund / mann (40kg)': 'maund',
+  'box / dabba': 'box',
+  'bag / bori': 'bag'
 };
 
 const normalizeUnitSymbol = (symbol: string): string => {

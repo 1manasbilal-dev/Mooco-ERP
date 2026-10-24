@@ -41,9 +41,9 @@ export interface PurchaseUnit {
 
 export const UNIT_KIND_LABEL: Record<PurchaseUnitKind, string> = {
   base: 'Base unit',
-  pack: 'Ready-made packs (apna alag stock)',
-  multi: 'Product ki units (loose stock mein)',
-  convert: 'Doosri units (convert ho kar loose mein)',
+  pack: 'Ready-made packs (own separate stock)',
+  multi: "Product's units (into loose stock)",
+  convert: 'Other units (converted into loose)',
 };
 
 type CatalogItem = StockItemLike & { id?: string; name?: string; unit?: string; cost_price?: number };
@@ -170,18 +170,18 @@ export function landingText(qty: number, unit: PurchaseUnit, baseUnit: string): 
  */
 export function billLineProblem(line: LineUnitFields, units: PurchaseUnit[]): string {
   const name = line.item_name || 'Item';
-  if (units.length === 0) return `"${name}" ab catalog mein nahi hai. Line hata dein.`;
+  if (units.length === 0) return `"${name}" is no longer in the catalog. Remove the line.`;
   const unit = findLineUnit(line, units);
   if (!unit || lower(unit.unit) !== lower(line.unit)) {
-    return `"${name}": unit "${line.unit}" ab is product mein nahi (pack hide/delete ya base unit badla). Unit dobara chunein.`;
+    return `"${name}": unit "${line.unit}" is no longer on this product (pack hidden/deleted or base unit changed). Choose the unit again.`;
   }
   if (Math.abs(unit.factor - (Number(line.conversion_factor) || 1)) > 1e-9) {
-    return `"${name}": ${unit.unit} ka size badal gaya (ab ${unit.equals}). Unit dobara chunein.`;
+    return `"${name}": the size of ${unit.unit} changed (now ${unit.equals}). Choose the unit again.`;
   }
   const qty = Number(line.quantity);
-  if (!Number.isFinite(qty) || qty <= 0) return `"${name}" ki quantity 0 se zyada likhein.`;
-  if (unit.kind === 'pack' && !isWhole(qty)) return `"${name}": ${unit.unit} poore number mein likhein (jaise 10), aadha pack stock mein nahi ginta.`;
-  if (!(Number(line.rate) >= 0)) return `"${name}" ka rate minus mein nahi ho sakta.`;
+  if (!Number.isFinite(qty) || qty <= 0) return `Enter a quantity greater than 0 for "${name}".`;
+  if (unit.kind === 'pack' && !isWhole(qty)) return `"${name}": enter ${unit.unit} as a whole number (like 10), half a pack doesn't count in stock.`;
+  if (!(Number(line.rate) >= 0)) return `The rate of "${name}" can't be minus.`;
   return '';
 }
 
@@ -300,10 +300,10 @@ export function landingPreview(item: CatalogItem, stock: PileStock, lines: Landi
   const loosePile = after.piles.find(p => p.kind === 'loose');
   const hasMulti = after.piles.some(p => p.kind === 'multi' && p.isActive);
   if (isSale && looseIn > 0 && loosePile && !loosePile.isActive && !hasMulti) {
-    notes.push(`Loose sale band hai: ${formatBaseQty(looseIn, unit)} loose POS par nahi bikega. Pack unit chunein ya catalog mein loose sale on karein.`);
+    notes.push(`Loose sale is off: ${formatBaseQty(looseIn, unit)} loose won't sell at POS. Choose a pack unit or turn on loose sale in the catalog.`);
   }
   if (before.piles.some(p => (p.kind === 'loose' || p.kind === 'packed') && p.count < 0)) {
-    notes.push('Purana stock minus mein hai; average cost sirf plus stock par banti hai.');
+    notes.push('Old stock is in minus; the average cost is worked out on plus stock only.');
   }
 
   return {
@@ -371,12 +371,12 @@ export function purchaseLinePile(entry: PurchaseRow, item: CatalogItem | null | 
     const name = String(pack.name || entry.unit || 'Pack');
     return {
       kind: 'pack', variantId: packId, name: `${name} packs`, factor, baseUnit,
-      note: pack.deduct_from_base === true ? `${name} ab multi-unit hai; return iska purana count banayega. Pehle catalog check karein.` : '',
+      note: pack.deduct_from_base === true ? `${name} is now a multi-unit; the return will write an old count for it. Check the catalog first.` : '',
     };
   }
   return {
     kind: 'loose', name: 'Loose stock', factor, baseUnit,
-    note: packId && item ? `Jis pack mein yeh aaya tha woh ab catalog mein nahi; return loose stock se kam hoga.` : '',
+    note: packId && item ? `The pack this came in is no longer in the catalog; the return will come off loose stock.` : '',
   };
 }
 
@@ -399,9 +399,9 @@ export function pileOnHandInUnit(pile: PurchasePile, stock: PileStock): number {
 
 /** Why a return quantity can't be used, or ''. */
 export function returnQtyProblem(qty: number, max: number, pile: Pick<PurchasePile, 'kind'>, unit: string): string {
-  if (!Number.isFinite(qty) || qty <= 0) return 'Return quantity 0 se zyada likhein.';
-  if (qty > max + 0.0005) return `Is purchase se sirf ${purchaseQtyText(max, unit, pile)} wapas ho sakta hai.`;
-  if (pile.kind === 'pack' && !isWhole(qty)) return `${unit} poore number mein wapas karein (aadha pack nahi).`;
+  if (!Number.isFinite(qty) || qty <= 0) return 'Enter a return quantity greater than 0.';
+  if (qty > max + 0.0005) return `Only ${purchaseQtyText(max, unit, pile)} can be returned from this purchase.`;
+  if (pile.kind === 'pack' && !isWhole(qty)) return `Return ${unit} as a whole number (no half packs).`;
   return '';
 }
 

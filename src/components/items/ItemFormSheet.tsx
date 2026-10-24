@@ -64,9 +64,9 @@ interface NumberDrafts {
 }
 
 const TYPE_LABEL: Record<ItemType, { label: string; hint: string }> = {
-  'Sale product': { label: 'Sale product', hint: 'POS mein bikta hai' },
-  'Raw material': { label: 'Raw material', hint: 'Recipe mein lagta hai' },
-  'Packaging material': { label: 'Packaging', hint: 'Cup, dabba, lifafa' },
+  'Sale product': { label: 'Sale product', hint: 'Sold in POS' },
+  'Raw material': { label: 'Raw material', hint: 'Used in recipes' },
+  'Packaging material': { label: 'Packaging', hint: 'Cup, box, bag' },
 };
 
 const SOURCES = [
@@ -268,15 +268,15 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     : undefined;
 
   const errors = {
-    name: !trimmedName ? 'Product ka naam likhein.' : duplicateOf ? `"${duplicateOf.name}" naam ka product pehle se hai.` : '',
-    item_type: types.length === 0 ? 'Kam az kam ek type chunein.' : '',
-    unit: !unit ? 'Base unit chunein.' : '',
-    cost: cost !== null && !(cost >= 0) ? 'Cost 0 ya us se zyada ho.' : '',
-    sell: sell !== null && !(sell >= 0) ? 'Rate 0 ya us se zyada ho.' : '',
-    reorder: reorder !== null && !(reorder >= 0) ? 'Alert 0 ya us se zyada likhein (0 = alert band).' : '',
-    sortOrder: isSale && (sortOrder === null || !Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > 999) ? '1 se 999 tak poora number likhein.' : '',
-    quick: isSale && quick.invalid ? 'Sirf rupay ki raqam likhein, comma se alag (e.g. 50, 100).' : '',
-    recipe: (recipeBase !== null && !(recipeBase >= 0)) || (recipeOutput !== null && !(recipeOutput >= 0)) ? 'Batch ki miqdar 0 ya us se zyada ho.' : '',
+    name: !trimmedName ? 'Enter the product name.' : duplicateOf ? `A product named "${duplicateOf.name}" already exists.` : '',
+    item_type: types.length === 0 ? 'Choose at least one type.' : '',
+    unit: !unit ? 'Choose a base unit.' : '',
+    cost: cost !== null && !(cost >= 0) ? 'Cost must be 0 or more.' : '',
+    sell: sell !== null && !(sell >= 0) ? 'Rate must be 0 or more.' : '',
+    reorder: reorder !== null && !(reorder >= 0) ? 'Enter an alert of 0 or more (0 = no alert).' : '',
+    sortOrder: isSale && (sortOrder === null || !Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > 999) ? 'Enter a whole number from 1 to 999.' : '',
+    quick: isSale && quick.invalid ? 'Enter rupee amounts only, separated by commas (e.g. 50, 100).' : '',
+    recipe: (recipeBase !== null && !(recipeBase >= 0)) || (recipeOutput !== null && !(recipeOutput >= 0)) ? 'Batch quantities must be 0 or more.' : '',
     opening: openingOpen && canAdjustStock ? opening.firstError : '',
   };
   const errorTab: Record<keyof typeof errors, FormTab> = {
@@ -294,10 +294,10 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
   const requestClose = async () => {
     if (submittingRef.current) return;
     if (isDirty && !(await confirmAction({
-      title: 'Changes save nahi hue',
-      message: 'Form band karne se yeh changes chale jayenge.',
-      confirmLabel: 'Haan, band karein',
-      cancelLabel: 'Form par wapas',
+      title: 'Unsaved changes',
+      message: 'Closing the form will discard these changes.',
+      confirmLabel: 'Yes, close',
+      cancelLabel: 'Back to form',
       tone: 'warning',
     }))) return;
     onClose();
@@ -313,9 +313,9 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
   const addIngredient = () => {
     const qty = Number(newIngredient.qty);
     const material = items.find(i => i.id === newIngredient.itemId);
-    if (!material) { showToast('Pehle raw material chunein', 'warning'); return; }
-    if (!(qty > 0)) { showToast('Miqdar 0 se zyada likhein', 'warning'); return; }
-    if ((formData.recipe || []).some(r => r.item_id === material.id)) { showToast(`${material.name} recipe mein pehle se hai`, 'warning'); return; }
+    if (!material) { showToast('Choose a raw material first', 'warning'); return; }
+    if (!(qty > 0)) { showToast('Enter a quantity above 0', 'warning'); return; }
+    if ((formData.recipe || []).some(r => r.item_id === material.id)) { showToast(`${material.name} is already in the recipe`, 'warning'); return; }
     const next: RecipeIngredient = { item_id: material.id, item_name: material.name, quantity: qty, unit: material.unit, type: 'Ingredient' } as RecipeIngredient;
     patch({ recipe: [...(formData.recipe || []), next] });
     setNewIngredient({ itemId: '', qty: '' });
@@ -331,7 +331,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
   const submitVariant = () => {
     const contains = parseFloat(variantDraft.productQty);
     if (!variantDraft.name.trim() || !(contains > 0)) {
-      showToast(`Naam aur size (${unit || 'units'} mein) likhein`, 'warning');
+      showToast(`Enter a name and size (in ${unit || 'units'})`, 'warning');
       return;
     }
     const variants = formData.variants || [];
@@ -344,9 +344,9 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     const heldCount = countOnUnit(liveVariantStocks, existing?.id);
     if (existing && heldCount !== 0) {
       const wasMulti = existing.deduct_from_base === true;
-      if (wasMulti !== isMulti) { showToast(`${existing.name} par stock count hai, is liye qisam nahi badal sakti.`, 'warning'); return; }
+      if (wasMulti !== isMulti) { showToast(`${existing.name} has a stock count, so its kind can't change.`, 'warning'); return; }
       if (!wasMulti && Math.abs(sellUnitContains(existing) - contains) > 0.0000001) {
-        showToast(`${formatQty(heldCount, 3)} × ${existing.name} stock mein hain, is liye size nahi badal sakta. Naya pack add karein.`, 'warning');
+        showToast(`${formatQty(heldCount, 3)} × ${existing.name} in stock, so the size can't change. Add a new pack.`, 'warning');
         return;
       }
     }
@@ -366,7 +366,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     if (existing) next[editingVariantIndex] = variant;
     else next.push(variant);
     patch({ variants: next });
-    showToast(existing ? `${variant.name} update ho gaya` : `${variant.name} add ho gaya`, 'success');
+    showToast(existing ? `${variant.name} updated` : `${variant.name} added`, 'success');
     resetVariantForm();
   };
 
@@ -392,7 +392,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     if (!target) return;
     const onHand = countOnUnit(liveVariantStocks, target.id);
     if (target.deduct_from_base !== true && onHand !== 0) {
-      showToast(`${formatQty(onHand, 3)} × ${target.name} abhi stock mein hain, is liye hata nahi sakte. Pehle Inventory mein count karke 0 karein, ya isko hide kar dein (stock Inventory mein dikhta rahega).`, 'warning');
+      showToast(`${formatQty(onHand, 3)} × ${target.name} still in stock, so it can't be removed. First count it to 0 in Inventory, or hide it (the stock stays visible in Inventory).`, 'warning');
       return;
     }
     patch({ variants: (formData.variants || []).filter((_, i) => i !== index) });
@@ -413,15 +413,15 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     const hiding = target.isActive !== false;
     const onHand = countOnUnit(liveVariantStocks, target.id);
     if (hiding && target.deduct_from_base !== true && onHand !== 0 && !(await confirmAction({
-      title: `${target.name} POS mein chhupayen?`,
-      message: `${formatQty(onHand, 3)} × ${target.name} abhi stock mein hain.`,
+      title: `Hide ${target.name} in POS?`,
+      message: `${formatQty(onHand, 3)} × ${target.name} still in stock.`,
       consequences: [
-        'POS aur orders mein yeh pack nahi bikega.',
-        'Stock gayab nahi hota: Inventory mein "(hidden)" ke saath dikhta rahega aur total stock aur value mein gina jayega.',
-        'Stock khatam karna hai to Inventory mein count karein, ya pack wapas dikha kar bechein.',
+        "This pack won't sell in POS or orders.",
+        'The stock stays: it shows in Inventory marked "(hidden)" and still counts in total stock and value.',
+        'To clear the stock, count it in Inventory, or show the pack again and sell it.',
       ],
-      confirmLabel: 'Haan, chhupayen',
-      cancelLabel: 'Wapas',
+      confirmLabel: 'Yes, hide',
+      cancelLabel: 'Back',
       tone: 'warning',
     }))) return;
     setFormData(prev => ({
@@ -447,24 +447,24 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
    */
   const saveOpeningStock = async (knownId: string | null, knownIds: Set<string>) => {
     if (isEdit && !openingOpenRef.current) {
-      showToast('Is dauran stock aa gaya, is liye opening stock save nahi kiya. Inventory mein stock count karein.', 'warning');
+      showToast("Stock arrived in the meantime, so the opening stock wasn't saved. Do a stock count in Inventory.", 'warning');
       return;
     }
     const id = knownId || await waitForNewItem(() => itemsRef.current, trimmedName, knownIds);
     if (!id) {
-      showToast('Product save ho gaya, lekin opening stock save nahi hua. Product khol kar dobara likhein.', 'warning');
+      showToast("Product saved, but the opening stock couldn't be saved. Open the product and enter it again.", 'warning');
       return;
     }
     // On failure setOpeningStock shows its own message; the product itself is saved either way.
     if (await setOpeningStock(id, opening.piles, OPENING_NOTE)) {
-      showToast(`Opening stock likh diya: ${formatBaseQty(opening.totalBase, unit)}`, 'success');
+      showToast(`Opening stock saved: ${formatBaseQty(opening.totalBase, unit)}`, 'success');
     }
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submittingRef.current) return;
-    if (!canSave) { showToast('Aap ko products save karne ki ijazat nahi', 'warning'); return; }
+    if (!canSave) { showToast("You don't have permission to save products", 'warning'); return; }
     setShowErrors(true);
     const firstError = (Object.keys(errors) as (keyof typeof errors)[]).find(key => errors[key]);
     if (firstError) {
@@ -478,10 +478,10 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
       });
       return;
     }
-    if (imageBusy) { showToast('Photo abhi process ho rahi hai, thora ruk kar save karein', 'warning'); return; }
+    if (imageBusy) { showToast('The photo is still processing. Wait a moment, then save', 'warning'); return; }
     if (variantPending) {
       setActiveTab('variants');
-      showToast(editingVariantIndex >= 0 ? 'Unit ki edit adhoori hai: "Update unit" ya "Cancel" dabayein' : 'Naya unit abhi add nahi hua: "Add unit" dabayein ya fields khali karein', 'warning');
+      showToast(editingVariantIndex >= 0 ? 'Unit edit not finished: press "Update unit" or "Cancel"' : 'New unit not added yet: press "Add unit" or clear the fields', 'warning');
       return;
     }
 
@@ -519,7 +519,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
         return;
       }
     } catch (err: any) {
-      showToast('Product save nahi hua: ' + (err?.message || 'Failed'), 'error');
+      showToast("Product couldn't be saved: " + (err?.message || 'Failed'), 'error');
     }
     submittingRef.current = false;
     setIsSubmitting(false);
@@ -545,13 +545,13 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-info-soft text-info-fg"><Lock className="size-[18px]" /></span>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-fg-subtle">{isEdit ? 'Edit product' : 'Naya product'}</p>
-            <h2 id={titleId} className="truncate text-xl font-bold tracking-tight text-fg">{trimmedName || (isEdit ? item?.name : 'Product ka naam')}</h2>
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-fg-subtle">{isEdit ? 'Edit product' : 'New product'}</p>
+            <h2 id={titleId} className="truncate text-xl font-bold tracking-tight text-fg">{trimmedName || (isEdit ? item?.name : 'Product name')}</h2>
           </div>
           {isEdit && item && canDelete && !isSystem && (
-            <IconButton aria-label="Product delete karein" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(item.id)} />
+            <IconButton aria-label="Delete product" icon={<Trash2 />} className="hover:bg-danger-soft hover:text-danger-fg" onClick={() => onDelete(item.id)} />
           )}
-          <IconButton aria-label="Band karein" icon={<X />} onClick={requestClose} />
+          <IconButton aria-label="Close" icon={<X />} onClick={requestClose} />
         </div>
         <SegmentedControl aria-label="Form sections" variant="underline" value={tab} onChange={setActiveTab} options={tabOptions} className="mt-3" />
       </header>
@@ -576,7 +576,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                 <div className="flex items-start gap-3 rounded-card border border-info/20 bg-info-soft px-4 py-3 text-info-fg">
                   <Lock className="mt-0.5 size-4 shrink-0" />
                   <p className="text-xs leading-relaxed">
-                    <strong className="font-bold">System milk variety.</strong> Naam, type aur unit nahi badal sakte taake hisaab theek rahe. Cost, rate aur Active status badal sakte hain.
+                    <strong className="font-bold">System milk variety.</strong> Name, type and unit can't change, so the accounts stay correct. You can change cost, rate and Active status.
                   </p>
                 </div>
               )}
@@ -589,7 +589,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                   onError={message => showToast(message, 'error')}
                   onBusyChange={setImageBusy}
                 />
-                <Field label="Product ka naam" required error={shown('name')} hint="Inventory, POS aur bills mein yahi naam aayega.">
+                <Field label="Product name" required error={shown('name')} hint="This name shows in Inventory, POS and bills.">
                   {control => (
                     <Input
                       {...control}
@@ -623,7 +623,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                   </Field>
                 </div>
                 <fieldset>
-                  <legend className="mb-1.5 text-xs font-semibold text-fg-muted">Kis kaam aata hai<span className="ml-0.5 text-danger" aria-hidden="true">*</span></legend>
+                  <legend className="mb-1.5 text-xs font-semibold text-fg-muted">Used for<span className="ml-0.5 text-danger" aria-hidden="true">*</span></legend>
                   <div className="grid gap-2 sm:grid-cols-3">
                     {ITEM_TYPES.slice().reverse().map(type => {
                       const on = types.includes(type);
@@ -657,8 +657,8 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
 
               <FormSection
                 title="Unit"
-                description="Stock, cost aur har pack size isi unit mein napa jata hai."
-                aside={!isSystem && <Button size="sm" variant="ghost" leftIcon={<Ruler />} onClick={() => setUnitManagerOpen(true)}>Units manage</Button>}
+                description="Stock, cost and every pack size are measured in this unit."
+                aside={!isSystem && <Button size="sm" variant="ghost" leftIcon={<Ruler />} onClick={() => setUnitManagerOpen(true)}>Manage units</Button>}
               >
                 <div>
                   <UnitSelector
@@ -670,8 +670,8 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                     <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-fg-subtle">
                       <Lock className="mt-0.5 size-3 shrink-0" />
                       <span>
-                        Unit lock hai: abhi stock hai ({pileBreakdown(savedReading).join(' · ')}). Unit badalne se yeh stock naye unit mein ghalat parha jata.
-                        Badalna ho to pehle Inventory mein har pile ka count 0 karein.
+                        Unit is locked: there is stock ({pileBreakdown(savedReading).join(' · ')}). Changing the unit would read this stock wrongly in the new unit.
+                        To change it, first count every pile to 0 in Inventory.
                       </span>
                     </p>
                   )}
@@ -679,7 +679,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                 </div>
               </FormSection>
 
-              <FormSection title="Price aur stock alert" description={unit ? `Har rate 1 ${unit} ka hai.` : 'Pehle unit chunein.'}>
+              <FormSection title="Price and stock alert" description={unit ? `Every rate is per 1 ${unit}.` : 'Choose a unit first.'}>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <Field label="Cost (landed)" error={shown('cost')}>
                     {control => (
@@ -696,10 +696,10 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                   <Field
                     label={`Low stock alert${unit ? ` (${unit})` : ''}`}
                     error={shown('reorder')}
-                    hint={Number(nums.reorder) > 0 ? `Total stock (loose + packs) ${nums.reorder}${unit ? ` ${unit}` : ''} ya kam ho to alert.` : '0 ya khali = koi alert nahi.'}
+                    hint={Number(nums.reorder) > 0 ? `Alert when total stock (loose + packs) is ${nums.reorder}${unit ? ` ${unit}` : ''} or less.` : '0 or empty = no alert.'}
                   >
                     {control => (
-                      <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix={unit || undefined} placeholder="0 = band"
+                      <Input {...control} type="number" inputMode="decimal" min="0" step="any" suffix={unit || undefined} placeholder="0 = off"
                         className="tabular-nums" value={nums.reorder} onWheel={blurOnWheel} onChange={event => setNum('reorder', event.target.value)} />
                     )}
                   </Field>
@@ -711,8 +711,8 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                       pricing.profit < 0 ? 'bg-danger-soft text-danger-fg' : 'bg-surface-2 text-fg-muted',
                     )}>
                       <span>
-                        {pricing.profit < 0 ? 'Nuqsan' : 'Profit'} <Money amount={Math.abs(pricing.profit)} className="font-bold" /> per {basis.per}
-                        {basis.per !== unit && <span className="text-xs"> (loose sale band hai, pehla pack)</span>}
+                        {pricing.profit < 0 ? 'Loss' : 'Profit'} <Money amount={Math.abs(pricing.profit)} className="font-bold" /> per {basis.per}
+                        {basis.per !== unit && <span className="text-xs"> (loose sale is off, first pack)</span>}
                       </span>
                       <span className="flex items-center gap-2 text-xs font-semibold">
                         {pricing.marginPct !== null && <Badge tone={pricing.profit < 0 ? 'danger' : 'success'}>{pricing.marginPct.toFixed(1)}% margin</Badge>}
@@ -721,7 +721,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                     </div>
                   ) : (
                     <p className="flex items-center gap-2 rounded-control bg-warning-soft px-3.5 py-2.5 text-xs font-medium text-warning-fg">
-                      <AlertTriangle className="size-4 shrink-0" />Selling rate 0 hai aur koi priced pack nahi. POS mein yeh product nahi bikega.
+                      <AlertTriangle className="size-4 shrink-0" />Selling rate is 0 and no pack has a price. This product won't sell in POS.
                     </p>
                   )
                 )}
@@ -732,8 +732,8 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                   <FormSection
                     title="Opening stock"
                     description={isEdit
-                      ? 'Is product ka abhi koi stock ya stock record nahi. Dukaan mein pehle se maal hai to yahan likhein.'
-                      : 'Dukaan mein abhi kitna maal hai? Save hone par Inventory mein "Opening Stock" ke naam se likha jayega.'}
+                      ? 'This product has no stock or stock record yet. If the shop already has stock, enter it here.'
+                      : 'How much stock does the shop have now? On save it is recorded in Inventory as "Opening Stock".'}
                     aside={<Badge tone="neutral">Optional</Badge>}
                   >
                     <OpeningStockFields
@@ -744,7 +744,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                       onChange={setOpeningDraft}
                       check={opening}
                       showErrors={showErrors}
-                      disabledReason={canAdjustStock ? undefined : 'Stock likhne ke liye Inventory "Adjust stock" ki ijazat chahiye.'}
+                      disabledReason={canAdjustStock ? undefined : 'Entering stock needs the Inventory "Adjust stock" permission.'}
                       onOpenSellUnits={() => setActiveTab('variants')}
                     />
                   </FormSection>
@@ -752,13 +752,13 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
               )}
 
               {isSale && (
-                <FormSection title="POS setup" description="Cashier ke POS screen par yeh product kahan aur kaise khulega.">
-                  <Field label="POS grid position" error={shown('sortOrder')} hint="1 = sab se pehle, 2 = us ke baad...">
+                <FormSection title="POS setup" description="Where and how this product opens on the cashier's POS screen.">
+                  <Field label="POS grid position" error={shown('sortOrder')} hint="1 = first, 2 = next...">
                     {control => (
                       <div className="flex flex-wrap items-center gap-2">
                         <Input {...control} type="number" inputMode="numeric" min="1" max="999" step="1" className="w-24 text-center font-mono font-bold"
                           value={nums.sortOrder} onWheel={blurOnWheel} onChange={event => setNum('sortOrder', event.target.value)} />
-                        <div className="flex flex-wrap gap-1" role="group" aria-label="Position jaldi chunein">
+                        <div className="flex flex-wrap gap-1" role="group" aria-label="Quick pick position">
                           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
                             <button
                               key={n}
@@ -778,24 +778,24 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                     )}
                   </Field>
 
-                  <Field label="POS dialog pehle kya dikhaye">
+                  <Field label="What the POS dialog shows first">
                     {() => (
                       <div className="space-y-1.5">
                         <SegmentedControl
-                          aria-label="POS dialog pehle kya dikhaye"
+                          aria-label="What the POS dialog shows first"
                           fullWidth
                           value={formData.pos_primary_mode === 'qty' ? 'qty' : 'amount'}
                           onChange={value => patch({ pos_primary_mode: value })}
-                          options={[{ value: 'amount', label: 'Rupay (cash) pehle' }, { value: 'qty', label: 'Quantity pehle' }]}
+                          options={[{ value: 'amount', label: 'Rupees (cash) first' }, { value: 'qty', label: 'Quantity first' }]}
                         />
                         <p className="text-xs text-fg-subtle">
-                          {formData.pos_primary_mode === 'qty' ? 'Quantity stepper aur volume chips upar aayenge.' : 'Cash buttons upar aayenge. Loose doodh aur dahi ke liye behtar.'}
+                          {formData.pos_primary_mode === 'qty' ? 'Quantity stepper and volume chips come first.' : 'Cash buttons come first. Best for loose milk and yogurt.'}
                         </p>
                       </div>
                     )}
                   </Field>
 
-                  <Field label="Quick cash buttons (Rs)" error={shown('quick')} hint={!quickAmountsRaw.trim() ? 'Khali chhoren to rate ke hisaab se khud bante hain.' : undefined}>
+                  <Field label="Quick cash buttons (Rs)" error={shown('quick')} hint={!quickAmountsRaw.trim() ? 'Leave empty to build them from the rate.' : undefined}>
                     {control => (
                       <div className="space-y-2">
                         <Input {...control} inputMode="decimal" className="font-mono" placeholder="e.g. 50, 100, 150, 200" value={quickAmountsRaw} onChange={event => setQuickAmountsRaw(event.target.value)} />
@@ -805,7 +805,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                           ))}
                           {quickAmountsRaw && <Button size="sm" variant="ghost" onClick={() => setQuickAmountsRaw('')}>Clear</Button>}
                         </div>
-                        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Raqam add karein">
+                        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Add amount">
                           {QUICK_ADD.map(amount => {
                             const added = quick.values.includes(amount);
                             return (
@@ -834,7 +834,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                     checked={formData.isActive !== false}
                     onChange={next => patch({ isActive: next })}
                     label="Active"
-                    description={formData.isActive !== false ? 'POS, purchases aur production mein dikhta hai.' : 'Inactive: kahin bikta ya khareeda nahi jata. Purana record wese hi rehta hai.'}
+                    description={formData.isActive !== false ? 'Shows in POS, purchases and production.' : 'Inactive: not sold or bought anywhere. Old records stay as they are.'}
                   />
                   {isSale && (
                     <Switch
@@ -843,10 +843,10 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                       onChange={next => patch({ allow_loose_sale: next })}
                       label="Loose sale"
                       description={formData.allow_loose_sale !== false
-                        ? `Customer kitna bhi ${unit || 'quantity'} le sakta hai.`
+                        ? `Customers can buy any amount${unit ? ` in ${unit}` : ''}.`
                         : <>
-                          Sirf packs mein bikta hai (Sell units tab).
-                          {looseStuck && <span className="mt-0.5 block font-semibold text-warning-fg">{formatBaseQty(liveLoose || 0, unit)} loose stock POS mein nahi bikega jab tak loose sale band hai (ya koi multi-unit na ho).</span>}
+                          Sold in packs only (Sell units tab).
+                          {looseStuck && <span className="mt-0.5 block font-semibold text-warning-fg">{formatBaseQty(liveLoose || 0, unit)} loose stock won't sell in POS while loose sale is off and there is no multi-unit.</span>}
                         </>}
                     />
                   )}
@@ -857,7 +857,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
 
           {tab === 'recipe' && (
             <>
-              <FormSection title="Standard batch" description="Ek batch mein kitna maal lagta hai aur kitna banta hai.">
+              <FormSection title="Standard batch" description="How much goes into one batch and how much it makes.">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Input quantity" error={shown('recipe')}>
                     {control => (
@@ -874,7 +874,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                 </div>
               </FormSection>
 
-              <FormSection title="Ingredients" description="Raw materials jo is batch mein lagte hain.">
+              <FormSection title="Ingredients" description="Raw materials used in this batch.">
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Select
                     aria-label="Raw material"
@@ -882,12 +882,12 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                     value={newIngredient.itemId}
                     onChange={event => setNewIngredient({ ...newIngredient, itemId: event.target.value })}
                   >
-                    <option value="">Raw material chunein...</option>
+                    <option value="">Choose raw material...</option>
                     {rawMaterials.map(m => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                   </Select>
                   <div className="flex gap-2">
                     <Input
-                      aria-label="Miqdar"
+                      aria-label="Quantity"
                       type="number" inputMode="decimal" min="0" step="any" placeholder="Qty"
                       className="w-28 tabular-nums"
                       suffix={items.find(i => i.id === newIngredient.itemId)?.unit}
@@ -900,7 +900,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                   </div>
                 </div>
                 {rawMaterials.length === 0 && (
-                  <p className="text-xs text-fg-subtle">Koi raw material nahi. Pehle kisi product ko "Raw material" type dein.</p>
+                  <p className="text-xs text-fg-subtle">No raw materials yet. First give a product the "Raw material" type.</p>
                 )}
                 {(formData.recipe || []).length > 0 && (
                   <ol className="divide-y divide-line/70 overflow-hidden rounded-card border border-line">
@@ -912,7 +912,7 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
                         </span>
                         <span className="flex shrink-0 items-center gap-1">
                           <span className="text-sm font-semibold tabular-nums text-fg-muted">{formatQty(ing.quantity, 3)} {ing.unit}</span>
-                          <IconButton size="sm" aria-label={`${ing.item_name} hatayen`} icon={<X />} onClick={() => removeIngredient(index)} />
+                          <IconButton size="sm" aria-label={`Remove ${ing.item_name}`} icon={<X />} onClick={() => removeIngredient(index)} />
                         </span>
                       </li>
                     ))}
@@ -951,12 +951,12 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
         <footer className="flex shrink-0 items-center gap-3 border-t border-line bg-surface-2/60 px-4 py-3 sm:px-6">
           <p className="hidden min-w-0 flex-1 truncate text-xs sm:block">
             {errorCount > 0
-              ? <span className="font-semibold text-danger-fg">{errorCount} {errorCount === 1 ? 'cheez' : 'cheezein'} theek karni hain</span>
-              : isDirty ? <span className="text-fg-subtle">Changes save nahi hue</span> : <span className="text-fg-faint">Koi change nahi</span>}
+              ? <span className="font-semibold text-danger-fg">{errorCount} {errorCount === 1 ? 'thing' : 'things'} to fix</span>
+              : isDirty ? <span className="text-fg-subtle">Unsaved changes</span> : <span className="text-fg-faint">No changes</span>}
           </p>
           <Button variant="secondary" onClick={requestClose} disabled={isSubmitting} className="flex-1 sm:flex-none">Cancel</Button>
           <Button type="submit" leftIcon={<Save />} loading={isSubmitting} disabled={!canSave || imageBusy} className="flex-[2] sm:flex-none">
-            {isEdit ? 'Save changes' : 'Product save karein'}
+            {isEdit ? 'Save changes' : 'Save product'}
           </Button>
         </footer>
       </form>

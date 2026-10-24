@@ -31,7 +31,7 @@ const TONE: Record<ConfirmTone, { icon: React.ReactNode; iconClass: string; dotC
     iconClass: 'bg-danger-soft text-danger-fg ring-danger/20',
     dotClass: 'bg-danger',
     variant: 'danger',
-    defaultLabel: 'Haan, delete karein',
+    defaultLabel: 'Yes, delete',
   },
   warning: {
     icon: <AlertTriangle />,
@@ -39,20 +39,20 @@ const TONE: Record<ConfirmTone, { icon: React.ReactNode; iconClass: string; dotC
     dotClass: 'bg-warning',
     variant: 'primary',
     buttonClass: 'bg-warning text-white hover:bg-warning/90',
-    defaultLabel: 'Haan, aage barhein',
+    defaultLabel: 'Yes, continue',
   },
   info: {
     icon: <Info />,
     iconClass: 'bg-info-soft text-info-fg ring-info/20',
     dotClass: 'bg-info',
     variant: 'primary',
-    defaultLabel: 'Theek hai',
+    defaultLabel: 'OK',
   },
 };
 
 /** Confirmation dialog with a consequences list and a clearly marked danger button. */
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
-  open, title, message, consequences, confirmLabel, cancelLabel = 'Wapas jayen', tone = 'danger', onConfirm, onCancel, busy = false,
+  open, title, message, consequences, confirmLabel, cancelLabel = 'Go back', tone = 'danger', onConfirm, onCancel, busy = false,
 }) => {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -80,7 +80,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           </Button>
         )}
         <Button ref={confirmRef} variant={style.variant} onClick={onConfirm} loading={busy} className={style.buttonClass}>
-          {busy ? 'Ho raha hai…' : (confirmLabel || style.defaultLabel)}
+          {busy ? 'Working…' : (confirmLabel || style.defaultLabel)}
         </Button>
       </>}
     >

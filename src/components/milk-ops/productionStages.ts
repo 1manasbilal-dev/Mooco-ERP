@@ -46,8 +46,8 @@ export function batchYield(output: number, inputLitres: number, target: number) 
 
 /** The same two yield labels (with their explanation) on the batch sheet and in history. */
 export const YIELD_COPY = {
-  perLitre: { label: 'Yield / litre', hint: '1 litre doodh se kitna maal bana' },
-  ofTarget: { label: 'Target ka %', hint: 'Batch ke target (andaza output) ka kitna hissa bana' },
+  perLitre: { label: 'Yield / litre', hint: 'How much product 1 litre of milk made' },
+  ofTarget: { label: '% of target', hint: 'How much of the batch target (estimated output) was made' },
 } as const;
 
 export const formatYieldPerLitre = (perLitre: number | null, unit: string) =>

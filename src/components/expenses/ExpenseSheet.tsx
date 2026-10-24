@@ -233,7 +233,7 @@ export const Sheet: React.FC<{
               {subtitle && <div className="mt-0.5 text-xs text-fg-subtle">{subtitle}</div>}
             </div>
             {dismissible && (
-              <IconButton size="sm" aria-label="Band karein" icon={<X />} onClick={onClose} className="-mr-1.5 -mt-1" />
+              <IconButton size="sm" aria-label="Close" icon={<X />} onClick={onClose} className="-mr-1.5 -mt-1" />
             )}
           </div>
         </div>

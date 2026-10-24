@@ -46,18 +46,18 @@ const AddOpeningCashDialog: React.FC<AddOpeningCashDialogProps> = ({ drawerAccou
   const busy = busyKey === busyId;
 
   const amountError = !amount.empty && !amount.valid
-    ? 'Sahi raqam likhein.'
+    ? 'Enter a valid amount.'
     : (tried || !amount.empty) && amount.valid && amount.value <= 0
-      ? 'Amount 0 se zyada honi chahiye.'
+      ? 'Amount must be more than 0.'
       : amount.valid && amount.value > 0 && amount.value < replaced
-        ? `Drawer mein pehle se ${formatCurrency(replaced)} pending hai — opening is se kam declare nahi ho sakti.`
-        : tried && amount.empty ? 'Amount likhein.' : undefined;
+        ? `The drawer already has ${formatCurrency(replaced)} pending — the opening can't be less than that.`
+        : tried && amount.empty ? 'Enter an amount.' : undefined;
   const sourceError = sources.length === 0
-    ? 'Koi dusra account mojood nahi — pehle Bank & Cash mein ek aur account banayein.'
+    ? 'No other account exists — first add another account in Bank & Cash.'
     : tried && !sourceId
-      ? 'Source account chunein — cash kahan se aa rahi hai?'
+      ? 'Choose a source account — where is the cash coming from?'
       : source && Number(source.balance || 0) < netMove
-        ? `${source.name} mein sirf ${formatCurrency(source.balance)} hai — ${formatCurrency(netMove)} transfer nahi ho sakti.`
+        ? `${source.name} has only ${formatCurrency(source.balance)} — ${formatCurrency(netMove)} can't be transferred.`
         : undefined;
   const ready = amount.valid && amount.value > 0 && amount.value >= replaced && Boolean(source) && Number(source?.balance || 0) >= netMove;
 
@@ -84,7 +84,7 @@ const AddOpeningCashDialog: React.FC<AddOpeningCashDialogProps> = ({ drawerAccou
       dismissible={!busy}
       size="md"
       title="Add opening cash"
-      description={`${drawer?.name || 'Drawer'} — agli shift isi cash se start hogi.`}
+      description={`${drawer?.name || 'Drawer'} — the next shift will start with this cash.`}
       icon={<span className="flex size-10 items-center justify-center rounded-xl bg-info-soft text-info-fg"><Plus size={20} /></span>}
       footer={(
         <>
@@ -111,10 +111,10 @@ const AddOpeningCashDialog: React.FC<AddOpeningCashDialogProps> = ({ drawerAccou
           )}
         </Field>
 
-        <Field label="Cash kahan se aa rahi hai? (source account)" required error={sourceError}>
+        <Field label="Where is the cash coming from? (source account)" required error={sourceError}>
           {control => (
             <Select {...control} value={sourceId} onChange={event => setSourceId(event.target.value)} disabled={busy || sources.length === 0}>
-              <option value="">Source account chunein…</option>
+              <option value="">Choose source account…</option>
               {sources.map(option => (
                 <option key={option.id} value={option.id}>{option.name} ({option.type}) · {formatCurrency(option.balance)}</option>
               ))}
@@ -130,8 +130,8 @@ const AddOpeningCashDialog: React.FC<AddOpeningCashDialogProps> = ({ drawerAccou
             <span className="font-semibold">{drawer?.name || 'Drawer'}</span>
             <Money amount={netMove} tone="signed" className="font-bold" />
             <span className="w-full text-xs text-fg-subtle">
-              Dono taraf ledger entry banegi.
-              {replaced > 0 && ` Drawer mein pehle se ${formatCurrency(replaced)} pending hai — nayi opening ${formatCurrency(amount.value)} us ki jagah legi.`}
+              A ledger entry is made on both sides.
+              {replaced > 0 && ` The drawer already has ${formatCurrency(replaced)} pending — the new opening of ${formatCurrency(amount.value)} replaces it.`}
             </span>
           </div>
         )}
@@ -150,7 +150,7 @@ const AddOpeningCashDialog: React.FC<AddOpeningCashDialogProps> = ({ drawerAccou
             onChange={setDenominations}
             onApply={total => setAmountRaw(String(total))}
             title="Opening cash count"
-            subtitle={`${drawer?.name || 'Drawer'} mein jane wale notes`}
+            subtitle={`Notes going into ${drawer?.name || 'Drawer'}`}
           />
         </Suspense>
       )}

@@ -113,7 +113,7 @@ export const Modal: React.FC<ModalProps> = ({
             {description && <div id={descriptionId} className="mt-1 text-sm text-fg-subtle">{description}</div>}
           </div>
           {dismissible && (
-            <IconButton size="sm" variant="ghost" aria-label="Band karein" icon={<X />} onClick={onClose} className="-mr-1.5 -mt-1 shrink-0" />
+            <IconButton size="sm" variant="ghost" aria-label="Close" icon={<X />} onClick={onClose} className="-mr-1.5 -mt-1 shrink-0" />
           )}
         </div>
         {children && <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2 pt-4">{children}</div>}

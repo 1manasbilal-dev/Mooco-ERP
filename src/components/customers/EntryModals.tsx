@@ -71,7 +71,7 @@ export function InvoiceModal({ sale, customer, shop, onClose, onWhatsApp }: Invo
             <span className="mb-0.5 block text-[11px] font-semibold text-fg-subtle">Payment mode</span>
             <Badge tone={sale.payment_mode === 'Cash' ? 'success' : sale.payment_mode === 'Online' ? 'info' : 'warning'}>{sale.payment_mode}</Badge>
             <span className={cn('mt-1.5 block text-[11px] font-bold', isCredit ? 'text-danger-fg' : 'text-success-fg')}>
-              {isCredit ? 'Charged to khata (due)' : 'Paid on counter'}
+              {isCredit ? 'Charged to account (due)' : 'Paid on counter'}
             </span>
           </div>
         </div>
@@ -104,7 +104,7 @@ export function InvoiceModal({ sale, customer, shop, onClose, onWhatsApp }: Invo
                     <TD numeric className="py-2.5">{formatCurrency(it.total || (it.qty * it.price))}</TD>
                   </TR>
                 )) : (
-                  <tr><td colSpan={4} className="p-4 text-center italic text-fg-subtle">Item details record nahi</td></tr>
+                  <tr><td colSpan={4} className="p-4 text-center italic text-fg-subtle">No item details on record</td></tr>
                 )}
               </TBody>
             </Table>
@@ -123,7 +123,7 @@ export function InvoiceModal({ sale, customer, shop, onClose, onWhatsApp }: Invo
           </div>
           {isCredit && paid > 0 && <SummaryRow label="Paid on bill" className="text-success-fg">{formatCurrency(paid)}</SummaryRow>}
           {isCredit && (
-            <SummaryRow label="Charged to khata" className="text-danger-fg">{formatCurrency(roundCurrency(Math.max(0, Number(sale.total || 0) - paid)))}</SummaryRow>
+            <SummaryRow label="Charged to account" className="text-danger-fg">{formatCurrency(roundCurrency(Math.max(0, Number(sale.total || 0) - paid)))}</SummaryRow>
           )}
           {sale.return_reason && (
             <div className="mt-2 rounded-control border border-danger/25 bg-danger-soft p-2.5 text-danger-fg">
@@ -146,7 +146,7 @@ interface VoucherModalProps {
 
 export function VoucherModal({ entry, customer, shop, onClose, onDelete }: VoucherModalProps) {
   const isCredit = entry.credit > 0;
-  const title = entry.type === 'Payment' ? 'Payment receipt voucher' : entry.type === 'Return' ? 'Sales return voucher' : 'Khata charge voucher';
+  const title = entry.type === 'Payment' ? 'Payment receipt voucher' : entry.type === 'Return' ? 'Sales return voucher' : 'Ledger charge voucher';
   return (
     <Modal
       open

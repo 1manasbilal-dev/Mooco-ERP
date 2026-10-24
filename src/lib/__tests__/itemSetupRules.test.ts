@@ -23,8 +23,8 @@ describe('checkItemSetupChange', () => {
 
   it('blocks resizing, removing or turning a stocked pack into a multi-unit', () => {
     const resized = curd.variants.map(v => v.id === 'tub' ? { ...v, quantity_in_base_unit: 0.4 } : v);
-    expect(checkItemSetupChange(curd, { variants: resized }).error).toContain('size 0.5 kg se 0.4 kg');
-    expect(checkItemSetupChange(curd, { variants: curd.variants.filter(v => v.id !== 'tub') }).error).toContain('Pack hatane');
+    expect(checkItemSetupChange(curd, { variants: resized }).error).toContain('size from 0.5 kg to 0.4 kg');
+    expect(checkItemSetupChange(curd, { variants: curd.variants.filter(v => v.id !== 'tub') }).error).toContain('removing the pack');
     const multi = curd.variants.map(v => v.id === 'tub' ? { ...v, deduct_from_base: true } : v);
     expect(checkItemSetupChange(curd, { variants: multi }).error).toContain('dozen/tray');
   });
@@ -37,7 +37,7 @@ describe('checkItemSetupChange', () => {
 
   it('a stray count on a multi-unit blocks turning it into a pack', () => {
     const toPack = curd.variants.map(v => v.id === 'dz' ? { ...v, deduct_from_base: false } : v);
-    expect(checkItemSetupChange(curd, { variants: toPack }).error).toContain('purana count 2');
+    expect(checkItemSetupChange(curd, { variants: toPack }).error).toContain('old count of 2');
   });
 
   it('hiding a stocked pack is allowed with a notice', () => {

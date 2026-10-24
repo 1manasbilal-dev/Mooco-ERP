@@ -6,7 +6,7 @@ import {
   Avatar, PillGroup, PillOption, ProcurementHeader, SettlementBar, ShiftIcon, StatTile, VARIETY_DOT,
 } from '../components/procurement/ProcurementUI';
 import {
-  dayOf, formatRate, isActiveEntry, pkTime, prettyDate, settlementLabel, settlementOf, useBusinessClock, useConfiguredShifts,
+  SETTLEMENT_TEXT, dayOf, formatRate, isActiveEntry, pkTime, prettyDate, settlementLabel, settlementOf, useBusinessClock, useConfiguredShifts,
 } from '../components/procurement/procurementData';
 import {
   Badge, Button, EmptyState, IconButton, Input, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, TBody, TD, TH, THead, TR, Table,
@@ -301,7 +301,7 @@ const MilkCollectionDetails: React.FC = () => {
             id="collection-search"
             value={query}
             onChange={setQuery}
-            placeholder="Farmer, gaon ya phone dhoondein"
+            placeholder="Search farmer, village or phone"
             shortcut="/"
             className="w-full lg:ml-auto lg:max-w-xs"
           />
@@ -344,7 +344,7 @@ const MilkCollectionDetails: React.FC = () => {
               <button type="button" onClick={clearFilters} aria-label="Clear filters" className="-mr-1 cursor-pointer rounded-full p-0.5 hover:bg-brand/15"><X size={11} /></button>
             </Badge>
           )}
-          {excluded > 0 && <span className="text-fg-subtle">{excluded} returned {excluded === 1 ? 'slip' : 'slips'} shamil nahi</span>}
+          {excluded > 0 && <span className="text-fg-subtle">{excluded} returned {excluded === 1 ? 'slip' : 'slips'} not included</span>}
         </div>
       )}
 
@@ -353,7 +353,7 @@ const MilkCollectionDetails: React.FC = () => {
           <MixBar buffalo={totals.buffalo} cow={totals.cow} mixed={totals.mixed} />
         </StatTile>
         <StatTile icon={Wallet} label="Milk bill" value={<Money amount={totals.amount} />} hint={totals.liters > 0 ? `Avg Rs ${formatRate(totals.rate)}/L` : 'No collection yet'} />
-        <StatTile icon={BookOpen} tone="rose" label="Settlement" value={<Money amount={totals.due} />} valueTone={totals.due > 0.5 ? 'rose' : undefined} hint="Khata (unpaid) in this view">
+        <StatTile icon={BookOpen} tone="rose" label="Settlement" value={<Money amount={totals.due} />} valueTone={totals.due > 0.5 ? 'rose' : undefined} hint="On credit (unpaid) in this view">
           <div className="mt-1"><SettlementBar total={totals.amount} paid={totals.paid} /></div>
         </StatTile>
         <div className="col-span-2 flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 shadow-e1 sm:col-span-1">
@@ -386,8 +386,8 @@ const MilkCollectionDetails: React.FC = () => {
         <TableContainer>
           <EmptyState
             icon={<Droplets />}
-            title="Is view mein koi collection nahi"
-            description="Dates badlein, ya farmer, variety aur shift filters hata dein."
+            title="No collection in this view"
+            description="Change the dates, or clear the farmer, variety and shift filters."
             action={
               <div className="flex justify-center gap-2">
                 {filtersActive && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
@@ -443,7 +443,7 @@ function MixBar({ buffalo, cow, mixed }: { buffalo: number; cow: number; mixed: 
 
 function StatusPill({ paid, due }: { paid: number; due: number }) {
   const label = settlementLabel(paid, due);
-  return <Badge tone={STATUS_TONE[label]} dot>{label}</Badge>;
+  return <Badge tone={STATUS_TONE[label]} dot>{SETTLEMENT_TEXT[label]}</Badge>;
 }
 
 function VarietyText({ variety }: { variety: Variety }) {
@@ -653,12 +653,12 @@ function FarmerSlips({ farmer, onOpenSupplier }: { farmer: FarmerRow; onOpenSupp
           ))}
           {farmer.phone && <Badge tone="neutral" icon={<Phone />}>{farmer.phone}</Badge>}
           {farmer.balance !== 0 && (
-            <Badge tone={farmer.balance > 0 ? 'danger' : 'success'}>Running khata <Money amount={farmer.balance} /></Badge>
+            <Badge tone={farmer.balance > 0 ? 'danger' : 'success'}>Running balance <Money amount={farmer.balance} /></Badge>
           )}
         </div>
         {farmer.id !== 'unknown' && (
           <Button variant="ghost" size="sm" rightIcon={<ArrowUpRight />} onClick={() => onOpenSupplier(farmer.id)} className="text-brand-fg">
-            Open khata
+            Open ledger
           </Button>
         )}
       </div>

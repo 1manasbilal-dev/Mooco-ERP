@@ -39,7 +39,7 @@ interface PosPaymentPanelProps {
 const MODES = [
   { id: 'Cash', label: 'Cash', icon: Banknote },
   { id: 'Online', label: 'Online / Bank', short: 'Online', icon: Wallet },
-  { id: 'Credit', label: 'Khata / Credit', short: 'Khata', icon: BookOpen },
+  { id: 'Credit', label: 'Credit', icon: BookOpen },
 ] as const;
 
 const TENDER_NOTES = [500, 1000, 2000, 5000];
@@ -85,7 +85,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   const payableNow = amountDue ?? grandTotal;
   const noShift = !activeShiftSession || activeShiftSession.status !== 'Active';
   const hasItems = cart.length > 0;
-  // A walk-in has no khata to carry the unpaid part, so a short cash payment cannot be completed.
+  // A walk-in has no ledger to carry the unpaid part, so a short cash payment cannot be completed.
   const walkInShort = !selectedCustomerId && paymentMode === 'Cash' && cashGiven > 0 && cashGiven < grandTotal
     ? Math.round((grandTotal - cashGiven) * 100) / 100
     : 0;
@@ -104,7 +104,7 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
   };
 
   const payLabel = isDayLocked
-    ? 'Business day closed — sale band'
+    ? 'Business day closed — sales blocked'
     : noShift
       ? 'Start Shift First — Sale Blocked'
       : selectedCustomerId && customerDueAmount > 0
@@ -164,21 +164,21 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
             {customerDueAmount > 0 ? (
               <span className="flex items-center gap-1.5 font-semibold text-warning-fg">
                 <span className="size-2 rounded-full bg-warning" aria-hidden="true" />
-                Khata mein jayega: <Money amount={customerDueAmount} className="font-bold" />
+                On credit: <Money amount={customerDueAmount} className="font-bold" />
               </span>
             ) : customerChangeReturn > 0 ? (
               <span className="flex items-center gap-1.5 font-semibold text-success-fg">
                 <span className="size-2 rounded-full bg-success" aria-hidden="true" />
-                Change wapas: <Money amount={customerChangeReturn} className="font-bold" />
+                Change back: <Money amount={customerChangeReturn} className="font-bold" />
               </span>
             ) : (
               <span className="flex items-center gap-1 font-semibold text-success-fg">
-                <Check className="size-3.5" aria-hidden="true" /> Fully paid (Rs 0 khata)
+                <Check className="size-3.5" aria-hidden="true" /> Fully paid (Rs 0 on credit)
               </span>
             )}
             <span className="flex items-center gap-1.5">
-              <ChipButton tone="warning" title="Zero payment received - Add full bill to Khata ledger" onClick={() => { setPaymentMode('Credit'); setCustomerPaidAmount('0'); }}>
-                Full khata
+              <ChipButton tone="warning" title="Zero payment received - add the full bill to the ledger" onClick={() => { setPaymentMode('Credit'); setCustomerPaidAmount('0'); }}>
+                Full credit
               </ChipButton>
               <ChipButton tone="success" title="Full payment received" onClick={() => { if (paymentMode === 'Credit') setPaymentMode('Cash'); setCustomerPaidAmount(String(payableNow)); }}>
                 Full paid · {formatCurrency(payableNow)}
@@ -279,13 +279,13 @@ export const PosPaymentPanel: React.FC<PosPaymentPanelProps> = ({
       {/* A blank or 0 qty line blocks checkout; handleCheckout shows the same message as a toast. */}
       {hasZeroQtyLine && (
         <p role="status" className="flex items-center gap-1.5 rounded-lg bg-warning-soft px-2.5 py-1.5 text-xs font-semibold text-warning-fg">
-          <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" /> Qty 0 wali line hata dein ya qty likhein
+          <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" /> Remove the qty 0 line or enter a qty
         </p>
       )}
       {walkInShort > 0 && (
         <p role="status" className="flex items-start gap-1.5 rounded-lg bg-danger-soft px-2.5 py-1.5 text-xs font-semibold text-danger-fg">
           <AlertCircle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-          <span>{formatCurrency(walkInShort)} kam hain. Poori raqam lein, ya customer select karein taake baqi khaate mein jaye.</span>
+          <span>{formatCurrency(walkInShort)} short. Take the full amount, or select a customer so the rest goes on their ledger.</span>
         </p>
       )}
 

@@ -40,7 +40,7 @@ const txByCustomer = (txs: CustomerTransaction[]) => {
 };
 
 const supplyStatus = (e: DailySupplyEntry) => lower((e as any).status ?? (e as any).details?.status);
-/** Delivery entries that moved the khata: recordDailySupply skips Pending and Cancelled ones. */
+/** Delivery entries that moved the ledger: recordDailySupply skips Pending and Cancelled ones. */
 const isPostedSupply = (e: DailySupplyEntry) => Boolean(e?.date) && !['pending', 'cancelled'].includes(supplyStatus(e));
 const supplyPaid = (e: DailySupplyEntry) => n((e as any).payment_received ?? (e as any).details?.payment_received);
 /** Unpaid part of a delivery, exactly what recordDailySupply added to the customer balance. */
@@ -50,8 +50,8 @@ const supplyDue = (e: DailySupplyEntry) => {
 };
 
 /**
- * Home-delivery dues raise the customer balance directly (no khata row is written for them), so
- * statements and aging read them from the delivery entries as khata charges of their own.
+ * Home-delivery dues raise the customer balance directly (no ledger row is written for them), so
+ * statements and aging read them from the delivery entries as ledger charges of their own.
  */
 function supplyChargesByCustomer(data: ReportData) {
   const map = new Map<string, CustomerTransaction[]>();
@@ -71,7 +71,7 @@ function supplyChargesByCustomer(data: ReportData) {
   return map;
 }
 
-/** What a khata row is, for the statement badge. */
+/** What a ledger row is, for the statement badge. */
 const txKind = (tx: CustomerTransaction) => {
   if (isOpeningCustomerTx(tx)) return 'Opening';
   if (isWriteOffCustomerTx(tx)) return 'Write-off';
@@ -88,11 +88,11 @@ const statusTones = { New: 'info', Active: 'good', 'At risk': 'warn', Lost: 'bad
 export const customerReports: ReportDefinition[] = [
   {
     id: 'receivables_aging',
-    title: 'Receivables Aging (Udhaar)',
+    title: 'Receivables Aging',
     subtitle: 'Who owes how much and for how long, aged by the oldest unpaid charges',
     category: 'customers',
     icon: 'Hourglass',
-    keywords: ['udhaar', 'receivable', 'aging', 'outstanding', 'baqaya', 'khata', 'debtors'],
+    keywords: ['udhaar', 'receivable', 'aging', 'outstanding', 'baqaya', 'khata', 'debtors', 'credit'],
     financial: false,
     snapshot: true,
     // FIFO aging: payments clear the oldest dues first, so what is still owed is the newest charges.
@@ -179,7 +179,7 @@ export const customerReports: ReportDefinition[] = [
   },
   {
     id: 'customer_statement',
-    title: 'Customer Statement (Khata)',
+    title: 'Customer Statement',
     subtitle: 'Opening balance, every charge and payment, and running balance for one customer',
     category: 'customers',
     icon: 'BookUser',
@@ -187,9 +187,9 @@ export const customerReports: ReportDefinition[] = [
     financial: false,
     filters: ['customerId'],
     requires: 'customerId',
-    // Opening balance is worked back from today's balance: balance today minus every khata movement
-    // on or after the start date. Movements = khata rows (charge / debit adjustment up; payment /
-    // return down) plus home-delivery dues, which change the balance without a khata row.
+    // Opening balance is worked back from today's balance: balance today minus every ledger movement
+    // on or after the start date. Movements = ledger rows (charge / debit adjustment up; payment /
+    // return down) plus home-delivery dues, which change the balance without a ledger row.
     build: (data, f) => {
       const customer = findCustomer(data, f.customerId);
       if (!customer) return { notes: [{ tone: 'warn', text: 'Choose a customer to see the statement.' }] };
@@ -217,7 +217,7 @@ export const customerReports: ReportDefinition[] = [
       const charges = sum(rows, r => n(r.debit));
       const payments = sum(rows.filter(r => r.type === 'Payment'), r => n(r.credit));
       const returns = sum(rows.filter(r => r.type === 'Return'), r => n(r.credit));
-      // Opening-advance, write-off and adjustment credits: they lower the khata, but no money came in.
+      // Opening-advance, write-off and adjustment credits: they lower the balance, but no money came in.
       const otherCredits = r2(sum(rows, r => n(r.credit)) - payments - returns);
       const bills: ReportRow[] = data.sales
         .filter(s => s.customer_id === customer.id && !isVoidStatus(s.status) && inRange(s.date, f))
@@ -242,7 +242,7 @@ export const customerReports: ReportDefinition[] = [
           {
             id: 'ledger', title: customer.name, subtitle: 'Debit = charged to customer, Credit = received or returned',
             sort: { key: 'date', dir: 'asc' }, showTotals: true,
-            emptyText: 'No khata entries in this period.',
+            emptyText: 'No ledger entries in this period.',
             columns: [
               { key: 'date', label: 'Date', format: 'date' },
               { key: 'type', label: 'Type', format: 'badge', tones: { Charge: 'warn', Delivery: 'warn', Payment: 'good', Return: 'info', Opening: 'neutral', 'Write-off': 'bad', Adjustment: 'neutral' } },
@@ -267,7 +267,7 @@ export const customerReports: ReportDefinition[] = [
               { key: 'mode', label: 'Mode', format: 'badge', tones: { Cash: 'good', Online: 'info', Credit: 'warn', 'Partial credit': 'warn' } },
               { key: 'net', label: 'Net', format: 'money', total: true },
               { key: 'paid', label: 'Paid', format: 'money', total: true },
-              { key: 'credit', label: 'On khata', format: 'money', total: true },
+              { key: 'credit', label: 'On credit', format: 'money', total: true },
             ],
             rows: bills,
           },
@@ -364,7 +364,7 @@ export const customerReports: ReportDefinition[] = [
             { key: 'days', label: 'Days since', format: 'number' },
             { key: 'bills', label: 'Bills', format: 'number', total: true },
             { key: 'net', label: 'Net sales', format: 'money', total: true },
-            { key: 'charged', label: 'Charged (khata)', format: 'money', total: true, hidden: true },
+            { key: 'charged', label: 'Charged to account', format: 'money', total: true, hidden: true },
             { key: 'balance', label: 'Balance', format: 'money', signed: true, hidden: true },
             { key: 'status', label: 'Status', format: 'badge', tones: { ...statusTones } },
           ],
@@ -387,7 +387,7 @@ export const customerReports: ReportDefinition[] = [
     financial: false,
     filters: ['customerId', 'groupBy'],
     build: (data, f) => {
-      // Cancelled entries never reached the khata; pending ones are kept and flagged in a note.
+      // Cancelled entries never reached the ledger; pending ones are kept and flagged in a note.
       const entries = data.dailySupplyEntries.filter(e => inRange(e.date, f) && supplyStatus(e) !== 'cancelled' && (!f.customerId || e.customer_id === f.customerId));
       const netQty = (e: typeof entries[number]) => n(e.net_qty) || Math.max(0, n(e.delivered_qty) - n(e.returned_qty));
       const byCustomer = new Map<string, any>();
@@ -452,7 +452,7 @@ export const customerReports: ReportDefinition[] = [
               { key: 'amount', label: 'Amount', format: 'money', total: true },
               { key: 'received', label: 'Received', format: 'money', total: true },
               { key: 'due', label: 'Unpaid', format: 'money', total: true },
-              { key: 'balance', label: 'Khata balance', format: 'money', signed: true, hidden: true },
+              { key: 'balance', label: 'Ledger balance', format: 'money', signed: true, hidden: true },
             ],
             rows: customerRows,
           },
@@ -477,8 +477,8 @@ export const customerReports: ReportDefinition[] = [
   },
   {
     id: 'customer_recoveries',
-    title: 'Recoveries (Wasooli)',
-    subtitle: 'Payments received from customers against their khata',
+    title: 'Recoveries',
+    subtitle: 'Payments received from customers against their balance',
     category: 'customers',
     icon: 'HandCoins',
     keywords: ['wasooli', 'recovery', 'collection', 'payment received', 'receipts'],
@@ -487,7 +487,7 @@ export const customerReports: ReportDefinition[] = [
     comparable: true,
     build: (data, f) => {
       // Money received only: opening-balance advances and bad-debt write-offs are "Payment" rows too,
-      // but nothing was collected, so they are listed in a note instead of counted as wasooli.
+      // but nothing was collected, so they are listed in a note instead of counted as recoveries.
       const forCustomer = (t: CustomerTransaction) => inRange(t.date, f) && (!f.customerId || t.customer_id === f.customerId);
       const txs = data.customerTransactions.filter(t =>
         isCustomerReceipt(t) && forCustomer(t) &&
@@ -529,7 +529,7 @@ export const customerReports: ReportDefinition[] = [
           ],
           rows,
         }],
-        notes: writtenOff > 0 ? [{ tone: 'info', text: `Rs ${fmt(writtenOff)} of khata was written off as bad debt in this period. It is not counted as recovered.` }] : undefined,
+        notes: writtenOff > 0 ? [{ tone: 'info', text: `Rs ${fmt(writtenOff)} of customer balance was written off as bad debt in this period. It is not counted as recovered.` }] : undefined,
       };
     },
   },

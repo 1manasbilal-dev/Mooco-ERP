@@ -105,8 +105,8 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ module, children }) => 
       <EmptyState
         className="min-h-[50vh]"
         icon={<Lock />}
-        title="Access nahi hai"
-        description="Is page ki ijazat aap ke role mein nahi hai. Admin se rabta karein."
+        title="No access"
+        description="Your role doesn't have permission for this page. Please contact the admin."
       />
     );
   }

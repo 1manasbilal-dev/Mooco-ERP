@@ -12,8 +12,8 @@ export type OperatorLoginRequest =
 
 export type OperatorLoginResult = { user?: any; message?: string };
 
-const LOGIN_FAILED = 'Ghalat Username ya PIN code!';
-const OFFLINE = 'Internet nahi hai. Login ke liye connection zaroori hai.';
+const LOGIN_FAILED = 'Wrong username or PIN code!';
+const OFFLINE = 'No internet. You need a connection to log in.';
 
 const readFunctionError = async (error: any): Promise<string> => {
   // The request never reached the login service (network drop, DNS, relay): not a wrong PIN.

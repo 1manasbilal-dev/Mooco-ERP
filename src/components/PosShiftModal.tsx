@@ -401,13 +401,13 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     return reason.length >= 3 && !/^other\.?$/i.test(reason);
   })();
   const closeBlocker = !hasCount
-    ? 'Drawer ki cash gin kar likhein.'
+    ? 'Count the drawer cash and enter it.'
     : countInvalid || leaveInvalid
-      ? 'Raqam sahi likhein — sirf number (jaise 5000 ya 5000+3260).'
+      ? 'Enter a valid amount — numbers only (like 5000 or 5000+3260).'
     : effectiveCountedCash < effectiveLeaveInDrawer
-      ? 'Drawer mein rakhi raqam gini hui cash se zyada nahi ho sakti.'
+      ? "The amount kept in the drawer can't be more than the counted cash."
       : hasVariance && !reasonOk
-        ? 'Farq ki wajah likhein.'
+        ? 'Enter the reason for the difference.'
         : '';
 
   const reasonInputRef = useRef<HTMLInputElement>(null);
@@ -499,31 +499,31 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     try {
       const receiveAccount = accounts.find(a => a.id === effectiveReceiveAccountId);
       const consequences: React.ReactNode[] = [
-        `Gini hui cash: ${money(effectiveCountedCash)} (expected ${money(shiftTotals.expectedCash)})`,
-        `Drawer mein agli shift ke liye: ${money(effectiveLeaveInDrawer)}`,
+        `Counted cash: ${money(effectiveCountedCash)} (expected ${money(shiftTotals.expectedCash)})`,
+        `Kept in drawer for the next shift: ${money(effectiveLeaveInDrawer)}`,
       ];
       if (effectiveRemitToHead > 0) {
         consequences.push(receiveAccount
-          ? `${money(effectiveRemitToHead)} abhi "${receiveAccount.name}" mein receive ho jayenge`
-          : `${money(effectiveRemitToHead)} Head Inbox mein jayenge (accept hone tak pending)`);
+          ? `${money(effectiveRemitToHead)} will be received into "${receiveAccount.name}" now`
+          : `${money(effectiveRemitToHead)} goes to Head Inbox (pending until accepted)`);
       }
       if (hasVariance) {
         consequences.push(canApproveOwnDifference && approveDifferenceNow
-          ? `${variance < 0 ? 'Kami' : 'Zyada'} ${money(Math.abs(variance))} — record ho kar abhi approve ho jayega`
-          : `${variance < 0 ? 'Kami' : 'Zyada'} ${money(Math.abs(variance))} — manager review ke liye record hoga`);
+          ? `${variance < 0 ? 'Short' : 'Over'} ${money(Math.abs(variance))} — recorded and approved now`
+          : `${variance < 0 ? 'Short' : 'Over'} ${money(Math.abs(variance))} — recorded for manager review`);
       }
       if (unfinishedCounter.cartLines > 0 || unfinishedCounter.parked > 0) {
-        consequences.push(`Cart/parked bills (${unfinishedCounter.cartLines + unfinishedCounter.parked}) is shift ki sale mein shamil nahi honge`);
+        consequences.push(`Cart/parked bills (${unfinishedCounter.cartLines + unfinishedCounter.parked}) won't count in this shift's sales`);
       }
       if (pendingSyncCount > 0) {
-        consequences.push(`${pendingSyncCount} entry abhi server par nahi gayi — internet check kar lein`);
+        consequences.push(`${pendingSyncCount} ${pendingSyncCount === 1 ? "entry hasn't" : "entries haven't"} reached the server yet — check the internet`);
       }
       const confirmed = await confirmAction({
         tone: hasVariance || pendingSyncCount > 0 ? 'warning' : 'info',
-        title: 'Shift close karein?',
-        message: 'Close ke baad is shift mein sale nahi ho sakegi. Agli sale ke liye nayi shift start karni hogi.',
+        title: 'Close shift?',
+        message: 'After closing, no more sales can go into this shift. Start a new shift for the next sale.',
         consequences,
-        confirmLabel: 'Haan, shift close karein',
+        confirmLabel: 'Yes, close shift',
       });
       if (!confirmed) return;
 
@@ -570,8 +570,8 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
     : isStarting
       ? 'Starting Shift...'
       : isEditingOpening
-        ? (openingCashInput.trim() === '' ? 'Gini hui cash likhein' : `Start Shift with ${money(openingAmount)}`)
-        : `Cash ${money(openingAmount)} theek hai — Start Shift`;
+        ? (openingCashInput.trim() === '' ? 'Enter the counted cash' : `Start Shift with ${money(openingAmount)}`)
+        : `Cash ${money(openingAmount)} is correct — Start Shift`;
   const varianceShort = variance < 0;
 
   const modalContent = (
@@ -642,7 +642,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
             {!online && (
               <div role="status" className="flex items-start gap-2.5 rounded-control border border-warning/30 bg-warning-soft px-3.5 py-3 text-xs font-medium text-warning-fg">
                 <WifiOff size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>Internet nahi hai. Shift start ya close karne ke liye internet zaroori hai.</span>
+                <span>No internet. You need the internet to start or close a shift.</span>
               </div>
             )}
 
@@ -703,18 +703,18 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                                 setIsEditingOpening(true);
                               }}
                             >
-                              Cash alag hai? Gin kar likhein
+                              Cash different? Count and enter it
                             </Button>
                           </div>
                           <p className="mx-auto mt-3 max-w-md text-xs text-fg-subtle">
-                            Shift start karne se pehle drawer ki cash gin lein. Raqam alag ho to upar se likhein — farq manager ke review mein jayega.
+                            Count the drawer cash before starting the shift. If the amount is different, enter it above — the difference goes to the manager for review.
                           </p>
                         </>
                       ) : (
                         <div className="mx-auto mt-3 max-w-xs space-y-3 text-left">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <Label htmlFor="shift-opening-cash" className="mb-0">
-                              Drawer mein gini hui cash (Rs)
+                              Cash counted in the drawer (Rs)
                             </Label>
                             <Button variant="soft" leftIcon={<Banknote />} onClick={openOpeningDenom}>
                               Count notes
@@ -737,7 +737,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                           />
                           {openingCashInput.trim() !== '' && Math.abs(openingDifference) >= 0.01 && (
                             <p role="status" className="text-center text-xs font-semibold text-warning-fg">
-                              {openingDifference < 0 ? 'Kami' : 'Zyada'} {money(Math.abs(openingDifference))} — manager review ke liye record hoga.
+                              {openingDifference < 0 ? 'Short' : 'Over'} {money(Math.abs(openingDifference))} — recorded for manager review.
                             </p>
                           )}
                           <div className="flex justify-center">
@@ -750,7 +750,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                                 setIsEditingOpening(false);
                               }}
                             >
-                              Wapas {money(defaultOpeningAmount)} rakhein
+                              Go back to {money(defaultOpeningAmount)}
                             </Button>
                           </div>
                         </div>
@@ -846,7 +846,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                       <Field
                         label="Difference reason"
                         required
-                        error={differenceReason.trim() !== '' && !reasonOk ? 'Wajah thori wazeh likhein — sirf "Other" kaafi nahi.' : undefined}
+                        error={differenceReason.trim() !== '' && !reasonOk ? 'Give a clearer reason — just "Other" is not enough.' : undefined}
                       >
                         {control => (
                           <Input
@@ -855,7 +855,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                             value={differenceReason}
                             disabled={isClosing}
                             onChange={e => setDifferenceReason(e.target.value)}
-                            placeholder="Kya hua? e.g. Rs 500 ka khula galat diya"
+                            placeholder="What happened? e.g. gave wrong change for Rs 500"
                           />
                         )}
                       </Field>
@@ -885,7 +885,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                           }}
                           className={cn(CHIP, 'border-dashed border-line-strong bg-surface text-fg-muted hover:text-fg')}
                         >
-                          Other — likhein
+                          Other — type it
                         </button>
                       </div>
 
@@ -898,7 +898,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                             onChange={e => setApproveDifferenceNow(e.target.checked)}
                             className="mt-0.5 size-4 shrink-0 accent-[rgb(var(--brand))]"
                           />
-                          <span>Farq abhi approve karein (aap owner hain). Warna Audit Trail mein review ke liye pending rahega aur din close nahi hoga.</span>
+                          <span>Approve the difference now (you are the owner). Otherwise it stays pending for review in Audit Trail and the day can't be closed.</span>
                         </label>
                       )}
                     </div>
@@ -943,8 +943,8 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                     <Field
                       label={`3. Receive ${money(effectiveRemitToHead)} into`}
                       hint={effectiveReceiveAccountId
-                        ? 'Aap head hain — cash close ke sath hi is account mein aa jayegi.'
-                        : 'Cash "in transit" rahegi jab tak Cash Control → Head Inbox se accept na ho.'}
+                        ? 'You are the head — the cash goes into this account as soon as you close.'
+                        : 'The cash stays "in transit" until it is accepted in Cash Control → Head Inbox.'}
                     >
                       {control => (
                         <Select {...control} value={effectiveReceiveAccountId || 'inbox'} disabled={isClosing} onChange={e => setReceiveAccountId(e.target.value)}>
@@ -977,9 +977,9 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
                   {/* Things that will not be part of this shift if it closes now */}
                   {(pendingSyncCount > 0 || unfinishedCounter.cartLines > 0 || unfinishedCounter.parked > 0) && (
                     <div role="status" className="space-y-1 rounded-control border border-warning/30 bg-warning-soft px-3 py-2.5 text-xs text-warning-fg">
-                      {unfinishedCounter.cartLines > 0 && <p>Cart mein {unfinishedCounter.cartLines} item hain — pehle bill karein ya cart khali karein.</p>}
-                      {unfinishedCounter.parked > 0 && <p>{unfinishedCounter.parked} parked bill hain — ye is shift ki sale mein nahi ginay jayenge.</p>}
-                      {pendingSyncCount > 0 && <p>{pendingSyncCount} entry abhi server par nahi gayi. Internet check karein.</p>}
+                      {unfinishedCounter.cartLines > 0 && <p>{unfinishedCounter.cartLines} {unfinishedCounter.cartLines === 1 ? 'item is' : 'items are'} in the cart — bill them or clear the cart first.</p>}
+                      {unfinishedCounter.parked > 0 && <p>{unfinishedCounter.parked} parked {unfinishedCounter.parked === 1 ? 'bill' : 'bills'} — {unfinishedCounter.parked === 1 ? 'it' : 'they'} won't count in this shift's sales.</p>}
+                      {pendingSyncCount > 0 && <p>{pendingSyncCount} {pendingSyncCount === 1 ? "entry hasn't" : "entries haven't"} reached the server yet. Check the internet.</p>}
                     </div>
                   )}
                 </Card>
@@ -1059,7 +1059,7 @@ export const PosShiftModal: React.FC<PosShiftModalProps> = ({ isOpen, onClose })
           setOpeningCashInput(String(total));
         }}
         title="Opening Cash Denominations"
-        subtitle="Drawer ke notes gin kar likhein"
+        subtitle="Count the notes in the drawer"
       />
 
       {detailModalTab && (

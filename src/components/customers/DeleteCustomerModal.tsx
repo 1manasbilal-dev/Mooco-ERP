@@ -12,7 +12,7 @@ export interface DeleteTarget {
   name: string;
   count: number;
   balance: number;
-  /** Bills, deliveries or khata rows exist (from the context's assessment or this screen's own ledger). */
+  /** Bills, deliveries or ledger rows exist (from the context's assessment or this screen's own ledger). */
   hasHistory: boolean;
   salesCount: number;
   txCount: number;
@@ -53,8 +53,8 @@ export default function DeleteCustomerModal({ target, busy, onClose, onAction, o
         onClose={onClose}
         dismissible={!busy}
         icon={<IconChip tone="warning"><Archive size={20} /></IconChip>}
-        title={`${target.count} customers archive karein?`}
-        description="Ye customers Inactive (archived) ho jayenge: POS aur daily routes se chhup jayenge, lekin unki khata history aur balance waise hi rahenge."
+        title={`Archive ${target.count} customers?`}
+        description="These customers will become Inactive (archived): hidden from POS and daily routes, but their ledger history and balance stay as they are."
         footer={<>
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button variant="danger" className="bg-warning hover:bg-warning/90" loading={busy} onClick={onBulkArchive}>Make inactive</Button>
@@ -74,23 +74,23 @@ export default function DeleteCustomerModal({ target, busy, onClose, onAction, o
         dismissible={!busy}
         icon={<IconChip tone="danger"><AlertTriangle size={20} /></IconChip>}
         title="Open balance warning"
-        description="Khula balance hote hue customer delete nahi ho sakta, warna balance sheet bigar jayegi."
+        description="A customer with an open balance can't be deleted, or the balance sheet would go wrong."
       >
         <div className="space-y-3">
           <div className="rounded-control border border-danger/25 bg-danger-soft p-4 text-center">
-            <span className="block text-xs font-semibold text-danger-fg">{balance > 0 ? 'Receivable khata (customer ne dena hai)' : 'Advance credit (Mooco ne dena hai)'}</span>
+            <span className="block text-xs font-semibold text-danger-fg">{balance > 0 ? 'Receivable (customer owes)' : 'Advance credit (Mooco owes)'}</span>
             <span className="mt-1 block text-2xl font-bold tabular-nums text-danger-fg">{formatCurrency(Math.abs(balance))}</span>
           </div>
           <Button variant="danger" fullWidth size="lg" loading={busy} onClick={() => onAction('write_off_bad_debt')} className="h-auto flex-col gap-0.5 py-2.5">
-            <span>{balance > 0 ? 'Bad debt write off karein' : 'Advance forfeit karein'} & make inactive</span>
+            <span>{balance > 0 ? 'Write off bad debt' : 'Forfeit advance'} & make inactive</span>
             <span className="text-[11px] font-normal opacity-85">
-              {balance > 0 ? 'Loss expense post hoga, balance sheet barabar rahegi' : 'Advance khaate se khatam hoga, customer archive hoga'}
+              {balance > 0 ? 'A loss expense is posted, the balance sheet stays balanced' : 'The advance is cleared from the ledger and the customer is archived'}
             </span>
           </Button>
           <Button variant="secondary" fullWidth leftIcon={<Archive />} disabled={busy} onClick={() => onAction('deactivate')}>
-            Khata rakhein & make inactive (POS se chhupayein)
+            Keep ledger & make inactive (hide from POS)
           </Button>
-          <Button variant="ghost" fullWidth disabled={busy} onClick={onClose}>Cancel, active rehne dein</Button>
+          <Button variant="ghost" fullWidth disabled={busy} onClick={onClose}>Cancel, keep active</Button>
         </div>
       </Modal>
     );
@@ -103,8 +103,8 @@ export default function DeleteCustomerModal({ target, busy, onClose, onAction, o
         onClose={onClose}
         dismissible={!busy}
         icon={<IconChip tone="warning"><Archive size={20} /></IconChip>}
-        title="Customer archive karein"
-        description="Purani sales aur khata ki history mehfooz rakhne ke liye ye customer delete nahi, sirf inactive hoga."
+        title="Archive customer"
+        description="To keep the old sales and ledger history safe, this customer won't be deleted, only made inactive."
         footer={<>
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button variant="danger" className="bg-warning hover:bg-warning/90" loading={busy} onClick={() => onAction('deactivate')}>Make inactive</Button>
@@ -112,8 +112,8 @@ export default function DeleteCustomerModal({ target, busy, onClose, onAction, o
       >
         <Facts rows={[
           ['Customer', target.name],
-          ['Khata balance', <span key="b" className="text-success-fg">Rs 0 (Settled)</span>],
-          ['Past history', `${target.salesCount} bills, ${target.txCount} khata entries`],
+          ['Ledger balance', <span key="b" className="text-success-fg">Rs 0 (Settled)</span>],
+          ['Past history', `${target.salesCount} bills, ${target.txCount} ledger entries`],
         ]} />
       </Modal>
     );
@@ -126,8 +126,8 @@ export default function DeleteCustomerModal({ target, busy, onClose, onAction, o
       dismissible={!busy}
       role="alertdialog"
       icon={<IconChip tone="danger"><Trash2 size={20} /></IconChip>}
-      title="Permanently delete karein?"
-      description={<>Customer <strong>{target.name}</strong> ki koi sale, delivery ya balance nahi. Ye database se hamesha ke liye hat jayega.</>}
+      title="Delete permanently?"
+      description={<>Customer <strong>{target.name}</strong> has no sales, deliveries or balance. They will be removed from the database for good.</>}
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button variant="danger" loading={busy} onClick={() => onAction('hard_delete')}>Delete permanently</Button>

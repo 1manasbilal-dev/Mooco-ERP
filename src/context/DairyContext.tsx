@@ -70,7 +70,7 @@ const DEFAULT_SYSTEM_ROLES: AppRole[] = [
   {
     id: 'role_manager',
     name: 'Manager / Accountant',
-    description: 'Access to financial management, bills, and khata ledgers.',
+    description: 'Access to financial management, bills, and party ledgers.',
     is_system: true,
     permissions: ['dashboard', 'purchase', 'allocation', 'pos', 'sales_history', 'customer_orders', 'retail_stock', 'cash_control', 'production', 'items', 'inventory', 'customers', 'suppliers', 'expenses', 'bank_cash', 'accounts', 'reports', 'approvals']
   },
@@ -154,7 +154,7 @@ const DEFAULT_SYSTEM_MANUAL_ACCOUNTS: Array<{
     details: {
       is_system: true,
       parentId: '2400',
-      description: 'Temporary loans or Qarz-e-Hasana from directors or partners.'
+      description: 'Temporary or interest-free loans from directors or partners.'
     }
   },
   {
@@ -266,7 +266,7 @@ interface DairyContextType {
   cashVariances: CashVariance[];
   shiftCashEvents: ShiftCashEvent[];
   /** Cash submitted to head at shift close but not yet received into any
-   *  account — "darmiyan" / pending receive. Out of the drawer, in no account. */
+   *  account — "in transit" / pending receive. Out of the drawer, in no account. */
   cashInTransit: { count: number; amount: number };
   refreshCashControl: () => Promise<void>;
   getShiftTotals: (shiftId: string) => {
@@ -951,7 +951,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Local work that was still unsynced when the current server snapshot was requested. A bill that
   // syncs while the snapshot is in flight is no longer "unsynced", yet parts of the snapshot can
   // predate its effects; reapplyLedger spots that and queues one more load of the same tables
-  // instead of showing pre-sale stock/cash/khata until the next reload.
+  // instead of showing pre-sale stock/cash/ledger until the next reload.
   // Only set while loadData runs.
   const preLoadWork = useRef<Awaited<ReturnType<typeof readUnsyncedWork>> | null>(null);
 
@@ -1914,7 +1914,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, []);
 
   // The refresh token was revoked or expired for good (or another tab logged out): lock the
-  // terminal instead of letting every request fail with "Login zaroori hai".
+  // terminal instead of letting every request fail with "Login required".
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange(event => {
       if (event !== 'SIGNED_OUT') return;
@@ -2124,7 +2124,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   ): Promise<boolean> => {
     if (!guardOpenPeriod(entry.date)) return false;
     if (!(Number(entry.quantity) > 0) || !(Number(entry.rate) > 0)) {
-      showToast('Doodh ki miqdar aur rate 0 se zyada hone chahiye.', 'warning');
+      showToast('Milk quantity and rate must be more than 0.', 'warning');
       return false;
     }
     // Keyed by the business day, not the full timestamp: the timestamp differs on every click, so
@@ -2142,7 +2142,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const requestedPaid = roundCurrency(Math.max(0, Number(rawPaid) || 0));
         // Paying more than the bill would take the extra out of the drawer with no supplier advance recorded.
         if (requestedPaid > total_amount + 0.01) {
-          showToast(`Paid (Rs ${requestedPaid.toLocaleString()}) bill (Rs ${total_amount.toLocaleString()}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`, 'warning');
+          showToast(`Paid (Rs ${requestedPaid.toLocaleString()}) is more than the bill (Rs ${total_amount.toLocaleString()}). Pay the extra to the supplier as a separate advance payment.`, 'warning');
           return false;
         }
         const paid_amount = roundCurrency(Math.min(requestedPaid, total_amount));
@@ -2178,7 +2178,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           ) || null;
 
           if (!targetAccId) {
-            throw new Error("Payment account nahi mila! Pehle 'Bank & Cash' module men Cash Drawer ya Bank Account banayein, ya phir is purchase ko Khata (Unpaid) per record karein.");
+            throw new Error("No payment account found! First create a cash drawer or bank account in the 'Bank & Cash' module, or record this purchase on credit (unpaid).");
           }
         }
 
@@ -2308,7 +2308,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         showToast(
           paid_amount > 0
             ? `Milk Intake of ${entry.quantity}L recorded! (Paid: Rs ${paid_amount.toLocaleString()}, Due: Rs ${due_amount.toLocaleString()})`
-            : `Milk Intake of ${entry.quantity}L recorded on Khata (Due: Rs ${total_amount.toLocaleString()})`,
+            : `Milk Intake of ${entry.quantity}L recorded on credit (Due: Rs ${total_amount.toLocaleString()})`,
           "success"
         );
         return true;
@@ -2319,7 +2319,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
 
     if (lockResult === null) {
-      showToast('Is supplier ki pichli entry abhi save ho rahi hai.', 'warning');
+      showToast("This supplier's previous entry is still being saved.", 'warning');
       return false;
     }
     return lockResult;
@@ -2363,7 +2363,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const rolledShift = await rolloverStaleShift(staleActiveShift);
           shiftToUse = rolledShift || staleActiveShift;
         } else {
-          showToast("Shift active nahi hai! Sale karne se pehle active shift start karein.", "warning");
+          showToast("No active shift! Start a shift before making a sale.", "warning");
           return false;
         }
       }
@@ -2375,7 +2375,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       const emptyLine = cart.find((line: any) => !(Number(line.qty) > 0));
       if (emptyLine) {
-        showToast(`"${emptyLine.name}" ki qty 0 hai. Qty likhein ya line hata dein.`, "warning");
+        showToast(`"${emptyLine.name}" has qty 0. Enter a qty or remove the line.`, "warning");
         return false;
       }
 
@@ -2385,9 +2385,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const roundedTotal = roundCurrency(total);
       // Money kept on the bill never exceeds its total; anything over is change handed back (cash_given / change_return).
       const actualPaid = roundCurrency(Math.min(roundedTotal, paidAmount !== undefined ? Math.max(0, paidAmount) : (paymentMode === 'Credit' ? 0 : roundedTotal)));
-      // A walk-in has no khata: any unpaid part would be saved as paid < total with due 0 and simply vanish.
+      // A walk-in has no ledger: any unpaid part would be saved as paid < total with due 0 and simply vanish.
       if (!customer.id && (paymentMode === 'Credit' || actualPaid < roundedTotal - 0.01)) {
-        showToast('Walk-in customer ka udhaar nahi ho sakta. Poori raqam lein ya customer select karein.', 'warning');
+        showToast("A walk-in customer can't buy on credit. Take the full amount or select a customer.", 'warning');
         return false;
       }
       const dueAmount = roundCurrency(customer.id ? Math.max(0, roundedTotal - actualPaid) : 0);
@@ -2698,7 +2698,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               ? Number(pool.remaining_quantity)
               : Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0);
             if (quantity > roundQuantity(Math.max(0, left)) + 0.001) {
-              showToast(`Sirf ${roundQuantity(Math.max(0, left))} L doodh baqi hai, ${quantity} L allocate nahi ho sakta.`, 'error');
+              showToast(`Only ${roundQuantity(Math.max(0, left))} L of milk is left; ${quantity} L can't be allocated.`, 'error');
               return false;
             }
           }
@@ -2706,7 +2706,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (destination === DestinationType.RETAIL) {
             const counterItem = counterMilkItemFor(items, pool?.milk_type, customUnits);
             if (!counterItem) {
-              showToast(`${pool?.milk_type || 'Mixed'} doodh ke liye counter ka milk item (L ya ml) nahi mila. Pehle catalog mein milk item banayein.`, 'error');
+              showToast(`No counter milk item (L or ml) found for ${pool?.milk_type || 'Mixed'} milk. Create a milk item in the catalog first.`, 'error');
               return false;
             }
             itemId = counterItem.id;
@@ -2740,7 +2740,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return true;
       } catch (e) {
         console.error(e);
-        showToast("Allocation nahi hui: " + moneyRpcMessage(e), "error");
+        showToast("Allocation failed: " + moneyRpcMessage(e), "error");
         return false;
       }
     });
@@ -2835,7 +2835,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const { error } = await supabase.from('production_batches').delete().eq('id', batchId);
     if (error) {
       console.error('Failed to discard batch:', error);
-      showToast(`Batch remove nahi hua: ${error.message || 'Error'}`, 'error');
+      showToast(`Batch couldn't be removed: ${error.message || 'Error'}`, 'error');
       return false;
     }
     setProductionBatches(prev => prev.filter(b => b.id !== batchId));
@@ -2850,7 +2850,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const { data: row, error: readError } = await supabase.from('production_batches').select('*').eq('id', batchId).single();
     if (readError || !row) {
       console.error('Failed to read batch for trim:', readError);
-      showToast(`Batch update nahi hua: ${readError?.message || 'Batch not found'}`, 'error');
+      showToast(`Batch couldn't be updated: ${readError?.message || 'Batch not found'}`, 'error');
       return false;
     }
     const details: any = row.details || {};
@@ -2871,7 +2871,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const { error } = await supabase.from('production_batches').update(update).eq('id', batchId);
     if (error) {
       console.error('Failed to trim batch:', error);
-      showToast(`Batch update nahi hua: ${error.message || 'Error'}`, 'error');
+      showToast(`Batch couldn't be updated: ${error.message || 'Error'}`, 'error');
       return false;
     }
     setProductionBatches(prev => prev.map(b => b.id === batchId ? { ...b, ...update } as any : b));
@@ -2891,12 +2891,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const rawId = String(item.itemId || item.id || '');
             const def = findLineItem<ItemDefinition>(items, { ...item, itemId: rawId.startsWith('inv_') ? rawId.slice(4) : rawId || undefined, id: undefined });
             if (!def) {
-              showToast(`Counter item nahi mila (${rawId || 'unknown'}). Page reload karein.`, 'error');
+              showToast(`Counter item not found (${rawId || 'unknown'}). Please reload the page.`, 'error');
               return false;
             }
             const fromUnit = String(item.unit || 'L');
             if (convertQuantity(Number(item.quantity) || 0, fromUnit, def.unit || fromUnit, customUnits) === null) {
-              showToast(`${def.name}: ${fromUnit} ko ${def.unit} mein badla nahi ja sakta. Ye item yahan allocate nahi ho sakta.`, 'error');
+              showToast(`${def.name}: ${fromUnit} can't be converted to ${def.unit}, so this item can't be allocated here.`, 'error');
               return false;
             }
             lines.push({ item_id: def.id, quantity: roundQuantity(Number(item.quantity) || 0), unit: fromUnit });
@@ -2916,7 +2916,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
       } catch (e) {
         console.error("allocateFromRetailStock error:", e);
-        showToast('Counter milk allocate nahi hua: ' + moneyRpcMessage(e), 'error');
+        showToast('Counter milk allocation failed: ' + moneyRpcMessage(e), 'error');
         return false;
       }
     });
@@ -2943,7 +2943,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         // Completed stock is already on the shelf and may be sold; cancelling would return the milk a second time.
         if (newStage === ProductionStage.CANCELLED && batch.status === ProductionStage.COMPLETED) {
-          showToast("Completed batch cancel nahi ho sakta. Stock adjustment se correction karein.", "warning");
+          showToast("A completed batch can't be cancelled. Correct it with a stock adjustment.", "warning");
           return false;
         }
 
@@ -2978,7 +2978,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
           if (completing) {
             const short = shortMaterialsText(result);
-            if (short) showToast(`Batch complete ho gaya, lekin stock kam tha: ${short}. In ka stock minus ho gaya; stock count se theek karein.`, 'warning');
+            if (short) showToast(`Batch completed, but stock was short: ${short}. Their stock is now in minus; fix it with a stock count.`, 'warning');
           } else if (!result?.already_applied) {
             const counter = roundQuantity(Number(result?.counter_litres) || 0);
             showToast(`Batch #${batch.batch_number} cancelled. ${roundQuantity(Number(result?.returned_litres) || 0)} L returned${counter > 0 ? ` (${counter} L to counter stock)` : ''}.`, "success");
@@ -2999,7 +2999,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           .select('id');
         if (batchUpdateError) throw batchUpdateError;
         if (!moved || moved.length === 0) {
-          showToast('Ye batch pehle hi complete ya cancel ho chuka hai.', 'warning');
+          showToast('This batch is already completed or cancelled.', 'warning');
           fetchData(['productionBatches']);
           return false;
         }
@@ -3010,7 +3010,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return true;
       } catch (e) {
         console.error(e);
-        showToast('Batch update nahi hua: ' + moneyRpcMessage(e), 'error');
+        showToast("Batch couldn't be updated: " + moneyRpcMessage(e), 'error');
         fetchData(['productionBatches', 'allocations', ...STOCK]);
         return false;
       }
@@ -3044,7 +3044,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const returnPurchase = async (...args: Parameters<typeof returnPurchaseUnlocked>): Promise<boolean> => {
     const result = await actionLock.runExclusiveAcrossTabs(`return_purchase_${args[0]}`, () => returnPurchaseUnlocked(...args));
     if (result === null) {
-      showToast('Is entry ka return pehle se chal raha hai.', 'warning');
+      showToast('A return for this entry is already in progress.', 'warning');
       return false;
     }
     return result;
@@ -3082,7 +3082,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      // Intake, milk pool, cash refund, khata, supplier ledger and stock log move together in
+      // Intake, milk pool, cash refund, supplier balance, supplier ledger and stock log move together in
       // return_milk_purchase, computed from the locked intake row; the screen follows its answer.
       const result = await callMoneyRpc('return_milk_purchase', `milk_return:${purchaseId}:${actualReturnQty}:${refundAs}:${reason}`, requestId => ({
         p_purchase_id: purchaseId,
@@ -3100,7 +3100,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }));
 
       if (result?.already_applied) {
-        showToast('Ye return pehle hi save ho chuka tha.', 'info');
+        showToast('This return was already saved.', 'info');
         fetchData(['purchases', 'allocations', 'suppliers', 'supplierTransactions', 'inventoryLogs', ...MONEY_ADDED]);
         return true;
       }
@@ -3160,12 +3160,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (err: any) {
       console.error("returnPurchase error:", err);
-      showToast(`Doodh wapas nahi hua: ${moneyRpcMessage(err)}`, "error");
+      showToast(`Milk return failed: ${moneyRpcMessage(err)}`, "error");
       return false;
     }
   };
 
-  // Bill line, stock pile, average cost, stock log, cash refund, khata and supplier ledger move
+  // Bill line, stock pile, average cost, stock log, cash refund, supplier balance and supplier ledger move
   // together in return_material_purchase, from the locked bill line; the screen follows its answer.
   // The goods leave the pile the purchase put them in (the pack it was stocked as, else loose).
   const returnMaterialPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Material Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
@@ -3204,7 +3204,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       noteLocalWrite();
       if (result?.already_applied) {
-        showToast('Ye return pehle hi save ho chuka tha.', 'info');
+        showToast('This return was already saved.', 'info');
       } else {
         if (result?.row) {
           const row = materialPurchaseFromRow(result.row);
@@ -3234,7 +3234,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (err: any) {
       console.error("returnMaterialPurchase error:", err);
-      showToast(`Material wapas nahi hua: ${moneyRpcMessage(err)}`, "error");
+      showToast(`Material return failed: ${moneyRpcMessage(err)}`, "error");
       return false;
     }
   };
@@ -3242,13 +3242,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deletePurchase = async (id: string) => { return returnPurchase(id, undefined, 'Deleted by user'); };
   const deleteMaterialPurchase = async (id: string) => { return returnMaterialPurchase(id, undefined, 'Deleted by user'); };
   
-  // One bill per supplier at a time: a double click used to save the whole bill (stock, khata, cash) twice.
+  // One bill per supplier at a time: a double click used to save the whole bill (stock, ledger, cash) twice.
   const addBulkMaterialPurchase = async (data: any) => {
     const lockResult = await actionLock.runExclusive(`add_material_purchase_${data?.supplier_id || 'spot'}`, () => addBulkMaterialPurchaseUnlocked(data), 60000);
     return lockResult !== null ? lockResult : false;
   };
 
-  // The whole bill (lines, stock piles, average cost, stock logs, khata, cash and the supplier
+  // The whole bill (lines, stock piles, average cost, stock logs, supplier balance, cash and the supplier
   // ledger) is saved by record_material_purchase in one transaction. The server picks each line's
   // pile and conversion from the catalog; the screen follows its answer.
   const addBulkMaterialPurchaseUnlocked = async (data: any) => {
@@ -3259,7 +3259,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const totalBill = roundCurrency(cartItems.reduce((sum: number, item: any) => sum + (Number(item.quantity) || 0) * (Number(item.rate) || 0), 0));
           const requestedPaid = roundCurrency(paid_amount !== undefined ? Math.max(0, Number(paid_amount) || 0) : (!supplier_id ? totalBill : 0));
           if (requestedPaid > totalBill + 0.01) {
-            throw new Error(`Paid (Rs ${requestedPaid.toLocaleString()}) bill (Rs ${totalBill.toLocaleString()}) se zyada hai. Zyada raqam supplier ko alag Advance payment ke taur par dein.`);
+            throw new Error(`Paid (Rs ${requestedPaid.toLocaleString()}) is more than the bill (Rs ${totalBill.toLocaleString()}). Pay the extra to the supplier as a separate advance payment.`);
           }
           const effectivePaid = roundCurrency(Math.min(requestedPaid, totalBill));
 
@@ -3273,7 +3273,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 : (settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || accounts.find(a => a.isActive !== false)?.id)
             );
             if (!resolvedTargetAccId) {
-              throw new Error("Payment account nahi mila! Pehle 'Bank & Cash' module men account banayein ya bill ko Khata per save karein.");
+              throw new Error("No payment account found! Create an account in the 'Bank & Cash' module first, or save the bill on credit.");
             }
           }
 
@@ -3317,14 +3317,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               setAccounts(prev => prev.map(a => a.id === result.account_id ? { ...a, balance: roundCurrency(Number(result.account_balance) || 0) } : a));
             }
           } else {
-            showToast('Ye bill pehle hi save ho chuka tha.', 'info');
+            showToast('This bill was already saved.', 'info');
           }
 
           fetchData(['materialPurchases', 'suppliers', 'supplierTransactions', ...STOCK, ...MONEY_ADDED]);
           return true;
       } catch (e: any) {
         console.error(e);
-        showToast(`Purchase save nahi hui: ${moneyRpcMessage(e)}`, 'error');
+        showToast(`Purchase couldn't be saved: ${moneyRpcMessage(e)}`, 'error');
         return false;
       }
   };
@@ -3340,11 +3340,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   ) => { 
       try {
         if (date && isDayLocked(date)) {
-          showToast('Ye din band (locked) hai. Payment aaj ki tareekh par darj karein.', 'error');
+          showToast("This day is locked. Record the payment on today's date.", 'error');
           return false;
         }
         if (!(Number(amount) > 0)) {
-          showToast('Amount 0 se zyada honi chahiye.', 'warning');
+          showToast('Amount must be more than 0.', 'warning');
           return false;
         }
         const supplier = suppliers.find(s => s.id === supplierId);
@@ -3357,7 +3357,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             );
 
             if ((type === 'Payment' || type === 'Advance') && amount > 0 && !sourceAccountId) {
-              throw new Error("Payment account nahi mila! Pehle 'Bank & Cash' module men account banayein.");
+              throw new Error("No payment account found! Create an account in the 'Bank & Cash' module first.");
             }
 
             const isDrawerAccount = Boolean(
@@ -3537,7 +3537,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       const tx = supplierTransactions.find(t => t.id === id);
       if (tx && tx.date && isDayLocked(tx.date)) {
-        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        showToast('This entry is on a locked day. Post a reversing entry instead of deleting it.', 'error');
         return false;
       }
 
@@ -3563,7 +3563,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (e) {
       console.error("deleteSupplierTransaction error:", e);
-      showToast('Entry delete nahi hui: ' + getErrorMessage(e), 'error');
+      showToast("Entry couldn't be deleted: " + getErrorMessage(e), 'error');
       fetchData(['suppliers', 'supplierTransactions', 'purchases', 'materialPurchases', ...MONEY_CHANGED]);
       return false;
     }
@@ -3574,7 +3574,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const guardStockWrite = (what: string, moduleKey = 'inventory', action = 'edit'): boolean => {
     if (!requireRight(moduleKey, action, what)) return false;
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      showToast('Stock badalne ke liye internet zaroori hai. Connection aane par dobara karein.', 'warning');
+      showToast('You need internet to change stock. Try again once you are back online.', 'warning');
       return false;
     }
     return guardOpenPeriod(getBusinessDate());
@@ -3592,10 +3592,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // dozen/tray or a deleted pack, which can only be cleared to 0 (docs/stock-model.md).
   const adjustStock = async (itemId: string, newQty: number, reason: AdjustmentReason | string, notes?: string, variantId: string = 'loose') => {
      try {
-        if (!guardStockWrite('stock count badalne')) return false;
+        if (!guardStockWrite('change a stock count')) return false;
         const target = roundQuantity(Number(newQty));
         if (!Number.isFinite(Number(newQty)) || target < 0) {
-          showToast('Count 0 ya us se zyada number hona chahiye.', 'warning');
+          showToast('Count must be 0 or more.', 'warning');
           return false;
         }
         const invItem = inventory.find(i => i.id === itemId || i.item_id === itemId);
@@ -3609,8 +3609,8 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const isStray = isPack && (!variantDef || variantDef.deduct_from_base === true);
         if (isStray && target !== 0) {
           showToast(variantDef
-            ? `${variantDef.name} main stock ka hissa hai, iska alag count nahi hota. ${currentItem.unit || 'base unit'} mein loose stock count karein; purana count sirf 0 ho sakta hai.`
-            : 'Ye pack ab product mein nahi hai; is ka purana count sirf 0 kiya ja sakta hai.', "warning");
+            ? `${variantDef.name} is part of main stock and has no count of its own. Count loose stock in ${currentItem.unit || 'base unit'}; the old count can only be set to 0.`
+            : 'This pack is no longer on the product; its old count can only be set to 0.', "warning");
           return false;
         }
         const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
@@ -3639,13 +3639,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             reason, notes: notes ? `${notes} (${auditNote})` : auditNote,
             details: { loose_delta: looseDelta, variant_deltas: packDeltas, business_date: getBusinessDate() }
         }]);
-        if (logError) showToast('Stock count lag gaya, lekin history log save nahi hua.', 'warning');
+        if (logError) showToast("Stock count applied, but the history log couldn't be saved.", 'warning');
 
         fetchData(STOCK);
         return true;
      } catch(err) {
         console.error(err);
-        showToast('Stock count save nahi hua: ' + getErrorMessage(err), 'error');
+        showToast("Stock count couldn't be saved: " + getErrorMessage(err), 'error');
         return false;
      }
   };
@@ -3655,14 +3655,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // call, and one log with reason Opening Stock records all piles so reports treat it as an intake.
   const setOpeningStock = async (itemId: string, piles: OpeningStockPiles, notes?: string): Promise<boolean> => {
     try {
-      if (!guardStockWrite('opening stock lagane')) return false;
+      if (!guardStockWrite('set opening stock')) return false;
       const targets = [piles.loose, ...Object.values(piles.packs || {})].filter(t => t !== undefined);
       if (targets.some(t => !Number.isFinite(Number(t)) || Number(t) < 0)) {
-        showToast('Opening stock 0 ya us se zyada number hona chahiye.', 'warning');
+        showToast('Opening stock must be 0 or more.', 'warning');
         return false;
       }
       const { data: currentItem, error } = await supabase.from('items').select('*').eq('id', itemId).single();
-      if (error || !currentItem) { showToast('Product nahi mila.', 'error'); return false; }
+      if (error || !currentItem) { showToast('Product not found.', 'error'); return false; }
       const variants: any[] = (currentItem.variants || []) as any[];
       const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
       const looseDelta = piles.loose === undefined ? 0 : roundQuantity((Number(piles.loose) || 0) - oldLoose);
@@ -3670,7 +3670,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       for (const [variantId, target] of Object.entries(piles.packs || {})) {
         const variant = variants.find(v => v.id === variantId);
         if (!variant || variant.deduct_from_base === true) {
-          showToast(`${variant?.name || variantId} ka alag stock nahi hota; loose ${currentItem.unit || ''} mein likhein.`, 'warning');
+          showToast(`${variant?.name || variantId} has no stock of its own; enter it as loose ${currentItem.unit || ''}.`, 'warning');
           return false;
         }
         const delta = roundQuantity((Number(target) || 0) - (Number(((currentItem.variant_stocks || {}) as Record<string, number>)[variantId]) || 0));
@@ -3686,22 +3686,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         reason: AdjustmentReason.OPENING_STOCK, notes: notes || 'Opening stock',
         details: { loose_delta: looseDelta, variant_deltas: packDeltas, business_date: getBusinessDate() },
       }]);
-      if (logError) showToast('Stock set ho gaya, lekin log save nahi hua.', 'warning');
+      if (logError) showToast("Stock set, but the log couldn't be saved.", 'warning');
       fetchData(STOCK);
       return true;
     } catch (err) {
       console.error(err);
-      showToast('Opening stock save nahi hua. Dobara koshish karein.', 'error');
+      showToast("Opening stock couldn't be saved. Please try again.", 'error');
       return false;
     }
   };
 
   // One return per bill at a time, also across tabs: two clicks or two tabs could post the same
-  // return (stock, khata and refund) twice.
+  // return (stock, ledger and refund) twice.
   const processSalesReturn = async (...args: Parameters<typeof processSalesReturnUnlocked>): Promise<boolean> => {
     const result = await actionLock.runExclusiveAcrossTabs(`sales_return_${args[0]}`, () => processSalesReturnUnlocked(...args));
     if (result === null) {
-      showToast('Is bill ka return pehle se chal raha hai. Thori der baad dekhein.', 'warning');
+      showToast('A return for this bill is already in progress. Check again in a moment.', 'warning');
       return false;
     }
     return result;
@@ -3724,7 +3724,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return false;
       }
       if (await isSaleUnsynced(localSale.id)) {
-        showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad return karein.', 'error');
+        showToast('This bill is still syncing. Return it after the sync finishes.', 'error');
         return false;
       }
       // Another device may have returned (part of) this bill or changed its mode since it was loaded:
@@ -3732,7 +3732,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { data: serverSale, error: serverSaleError } = await supabase.from('sales').select('*').eq('id', saleId).maybeSingle();
       if (serverSaleError) throw serverSaleError;
       if (!serverSale) {
-        showToast('Ye bill server par nahi mila. Records refresh kar ke dobara koshish karein.', 'error');
+        showToast('This bill was not found on the server. Refresh the records and try again.', 'error');
         return false;
       }
       const sale: POSBill = {
@@ -3769,7 +3769,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       // Line prices are before the bill discount. The refund keeps that discount
-      // and is split so khata is reversed before any cash leaves the drawer.
+      // and is split so the ledger (credit) is reversed before any cash leaves the drawer.
       const calculatedRefundAmount = isReplacement ? 0 : proportionalRefund(sale, itemsToReturn);
       const refundSplit = splitRefund(sale, calculatedRefundAmount);
 
@@ -3810,7 +3810,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }));
 
       // Everything below is collected first and applied by process_sales_return in ONE locked server
-      // transaction (bill, stock, logs, khata, refund, drawer event). Local state follows on success.
+      // transaction (bill, stock, logs, ledger, refund, drawer event). Local state follows on success.
       const stockMoves: Array<{ item_id: string; variant_id: string | null; delta: number }> = [];
       const inventoryLogRows: any[] = [];
       const localStockMoves: Array<() => void> = [];
@@ -3893,7 +3893,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      // Khata absorbs the unpaid part; only money that
+      // The customer ledger absorbs the unpaid part; only money that
       // was collected leaves the drawer or bank that received it.
       const itemsLabel = itemsToReturn.map(i => `${i.qty}x ${i.name}`).join(', ');
       const activeShift = activeShiftSession?.status === 'Active' ? activeShiftSession : null;
@@ -3921,7 +3921,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           // Cash physically leaves the drawer that is open now, so the refund comes out of that drawer's account.
           const activeDrawerAccountId = activeShift ? (activeShift.account_id || resolveDrawerAccountId(activeShift.drawer_id) || activeShift.drawer_id) : null;
           if (!isOnlineRefund && !refundAccountId && !activeDrawerAccountId) {
-            showToast('Cash refund ke liye pehle shift start karein, taake refund drawer se nikle.', 'warning');
+            showToast('Start a shift first for a cash refund, so the refund comes out of the drawer.', 'warning');
             return false;
           }
           const targetAccId = refundAccountId || (
@@ -3930,7 +3930,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               : activeDrawerAccountId
           );
           if (!targetAccId || !accounts.some(a => a.id === targetAccId)) {
-            showToast('Refund ka account nahi mila. Account select karein.', 'error');
+            showToast('Refund account not found. Please select an account.', 'error');
             return false;
           }
           refundTargetAccountId = targetAccId;
@@ -3982,7 +3982,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }));
       if (returnResult?.already_applied) {
-        showToast('Ye return pehle hi save ho chuka tha.', 'info');
+        showToast('This return was already saved.', 'info');
         fetchData(['sales', 'customers', 'customerTransactions', ...STOCK, ...MONEY_CHANGED]);
         return true;
       }
@@ -4015,16 +4015,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const refundMessage = cashPart && khataPart
-        ? `Rs ${cashPart.amount.toLocaleString()} wapas diye, Rs ${khataPart.amount.toLocaleString()} khaate se kam hue`
+        ? `Rs ${cashPart.amount.toLocaleString()} paid back, Rs ${khataPart.amount.toLocaleString()} taken off the ledger`
         : cashPart
-          ? `Rs ${cashPart.amount.toLocaleString()} refund diya gaya`
+          ? `Rs ${cashPart.amount.toLocaleString()} refunded`
           : khataPart
-            ? `Rs ${khataPart.amount.toLocaleString()} customer ke khaate se kam hue (cash nahi diya)`
-            : 'Koi raqam wapas nahi hui';
+            ? `Rs ${khataPart.amount.toLocaleString()} taken off the customer ledger (no cash given)`
+            : 'No amount was refunded';
       showToast(
         isReplacement
           ? `Replacement processed for ${itemsToReturn.length} item(s) on #${sale.bill_number}!`
-          : `Return ho gaya: ${refundMessage}.`,
+          : `Return done: ${refundMessage}.`,
         "success"
       );
 
@@ -4032,7 +4032,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (err: any) {
       console.error("processSalesReturn error:", err);
-      showToast(`Return nahi hua: ${moneyRpcMessage(err)}`, "error");
+      showToast(`Return failed: ${moneyRpcMessage(err)}`, "error");
       return false;
     }
   };
@@ -4069,20 +4069,20 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
 
         if (!canPerform('sales_history', 'edit')) {
-          showToast('Aap ko bill ka payment mode badalne ki ijazat nahi hai.', 'error');
+          showToast("You don't have permission to change a bill's payment mode.", 'error');
           return false;
         }
         if (sale.status === 'Returned' || sale.status === 'Partially Returned' || Number(sale.refund_amount || 0) > 0) {
-          showToast('Returned bill ka payment mode nahi badla ja sakta.', 'error');
+          showToast("A returned bill's payment mode can't be changed.", 'error');
           return false;
         }
         if (await isSaleUnsynced(sale.id)) {
-          showToast('Ye bill abhi sync ho raha hai. Sync mukammal hone ke baad mode badlein.', 'error');
+          showToast('This bill is still syncing. Change the mode after the sync finishes.', 'error');
           return false;
         }
         const saleShift = sale.shift_session_id ? shiftSessions.find(s => s.id === sale.shift_session_id) : undefined;
         if ((sale.date && isDayLocked(sale.date)) || (saleShift && saleShift.status !== 'Active' && saleShift.status !== 'Closing')) {
-          showToast('Ye bill band shift / band din ka hai. Drawer ka hisaab ho chuka hai, is liye mode nahi badla ja sakta.', 'error');
+          showToast("This bill is from a closed shift or a locked day. The drawer is already settled, so the mode can't be changed.", 'error');
           return false;
         }
 
@@ -4194,7 +4194,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const recordDailySupply = async (entries: any[]) => {
       try {
           if (!entries.every(entry => guardOpenPeriod(entry.date))) return false;
-          // record_daily_supply_effects saves the whole batch with each entry's khata charge and cash
+          // record_daily_supply_effects saves the whole batch with each entry's ledger charge and cash
           // receipt in one transaction: all of it or none. Saved entry ids are skipped on a resend.
           const batchKey = `daily_supply:${JSON.stringify(entries)}`;
           const batchId = requestIdFor(batchKey, generateUUID);
@@ -4225,7 +4225,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
       } catch (e) {
         console.error(e);
-        showToast('Delivery ka hisaab save nahi hua (kuch bhi post nahi hua): ' + moneyRpcMessage(e), 'error');
+        showToast("The delivery couldn't be saved (nothing was posted): " + moneyRpcMessage(e), 'error');
         return false;
       }
   };
@@ -4503,7 +4503,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   // Cash submitted to head but not yet received into any account — the money
-  // sits "darmiyan": out of the drawer, in no account, pending receive.
+  // sits "in transit": out of the drawer, in no account, pending receive.
   const cashInTransit = useMemo(() => {
     const pending = cashRemittances.filter(r => r.status === 'Pending');
     return {
@@ -4551,7 +4551,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           p_remittance_id: `remit_${generateUUID()}`
         });
         if (autoCloseError) {
-          showToast(`Pichli shift (${activeShiftSession.business_date}) close nahi hui: ${autoCloseError.message}`, 'error');
+          showToast(`The previous shift (${activeShiftSession.business_date}) couldn't be closed: ${autoCloseError.message}`, 'error');
           return false;
         }
         if (!effectiveHandoverId && expectedCash > 0 && activeShiftSession.drawer_id === data.drawerId) {
@@ -4585,7 +4585,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           p_remittance_id: `remit_${generateUUID()}`
         });
         if (autoCloseError) {
-          showToast(`Is drawer ki pichli shift (${conflictingShift.business_date}) close nahi hui: ${autoCloseError.message}`, 'error');
+          showToast(`This drawer's previous shift (${conflictingShift.business_date}) couldn't be closed: ${autoCloseError.message}`, 'error');
           return false;
         }
         if (!effectiveHandoverId && expectedCash > 0) {
@@ -4698,7 +4698,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const shiftSales = allShiftSales.filter(s => s.status !== 'Returned');
     const grossSales = roundCurrency(shiftSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0));
 
-    // Cash that left the drawer on THIS shift for a given sale (khata reversals are not cash).
+    // Cash that left the drawer on THIS shift for a given sale (ledger reversals are not cash).
     const sameShiftCashRefund = (saleId: string) => roundCurrency(shiftCashEvents
       .filter(e => e.shift_id === shiftId && e.direction === 'Out' && String(e.event_type || '').toLowerCase().includes('refund'))
       .filter(e => {
@@ -5140,7 +5140,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       void refreshCashControl().catch(() => {});
-      showToast(`Pichli shift (${staleShift.business_date}) auto-close kar ke aaj ki shift (Rs ${expectedCash.toLocaleString()}) start kar di gayi hai.`, 'info');
+      showToast(`The previous shift (${staleShift.business_date}) was auto-closed and today's shift (Rs ${expectedCash.toLocaleString()}) has been started.`, 'info');
       return newShift;
     } catch (err) {
       console.warn('[ShiftRollover] Unexpected error:', err);
@@ -5308,7 +5308,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         : receivedNow
           ? `Shift closed. Rs ${remit.toLocaleString()} received into ${receivedAccountName}.`
           : receiveIntoAccountId
-            ? `Shift closed, lekin Rs ${remit.toLocaleString()} abhi receive nahi hua — Cash Control → Head Inbox se accept karein.`
+            ? `Shift closed, but Rs ${remit.toLocaleString()} is not received yet — accept it in Cash Control → Head Inbox.`
             : `Shift closed. Rs ${remit.toLocaleString()} sent to Head Inbox (pending until accepted).`,
       remit > 0 && receiveIntoAccountId && !receivedNow ? 'warning' : 'success'
     );
@@ -5339,7 +5339,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       p_notes: notes
     });
     if (error) {
-      showToast(`Head receipt accept nahi hui: ${error.message}`, 'error');
+      showToast(`Head receipt couldn't be accepted: ${error.message}`, 'error');
       return false;
     }
     if (pendingRemittance) {
@@ -5390,7 +5390,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     }
     await refreshCashControl();
-    if (!opts.silent) showToast('Remittance received — darmiyan cash ab account mein aa gaya.', 'success');
+    if (!opts.silent) showToast('Remittance received — the in-transit cash is now in the account.', 'success');
     return true;
   };
 
@@ -5406,7 +5406,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       status, resolution_notes: notes, resolved_by: currentUser.id, resolved_at: new Date().toISOString()
     }).eq('id', varianceId);
     if (error) {
-      showToast(`Difference resolve nahi hua: ${error.message}`, 'error');
+      showToast(`Difference couldn't be resolved: ${error.message}`, 'error');
       return false;
     }
     if (variance.handover_id) await supabase.from('drawer_handovers').update({ status: 'Resolved', resolution_notes: notes, resolved_at: new Date().toISOString() }).eq('id', variance.handover_id);
@@ -5432,22 +5432,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
     try {
       if (!drawerId) {
-        showToast('Drawer select karein.', 'warning');
+        showToast('Please select a drawer.', 'warning');
         return false;
       }
       const amt = roundCurrency(amount);
       if (!(amt > 0)) {
-        showToast('Amount 0 se zyada honi chahiye.', 'warning');
+        showToast('Amount must be more than 0.', 'warning');
         return false;
       }
       const drawerAccountId = resolveDrawerAccountId(drawerId);
       const sourceAcc = sourceAccountId ? accounts.find(a => a.id === sourceAccountId) : null;
       if (!sourceAcc) {
-        showToast('Source account zaroori hai — opening cash kisi account se transfer ho kar hi aati hai.', 'warning');
+        showToast('Source account is required — opening cash always comes as a transfer from an account.', 'warning');
         return false;
       }
       if (!drawerAccountId || sourceAcc.id === drawerAccountId) {
-        showToast('Source account aur drawer alag hone chahiye.', 'warning');
+        showToast('Source account and drawer must be different.', 'warning');
         return false;
       }
       const businessDate = getBusinessDate();
@@ -5465,13 +5465,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const netCredit = roundCurrency(amt - replacedSum);
       // The replaced handover's cash stays in the drawer; a smaller declaration would hide the difference.
       if (netCredit < 0) {
-        showToast(`Drawer mein pehle se Rs ${replacedSum.toLocaleString()} pending hain. Opening cash is se kam declare nahi ho sakti.`, 'warning');
+        showToast(`The drawer already has Rs ${replacedSum.toLocaleString()} pending. Opening cash can't be declared below that.`, 'warning');
         return false;
       }
       if (sourceAcc && netCredit > 0 && Number(sourceAcc.balance || 0) < netCredit) {
         showToast(
-          `Source account "${sourceAcc.name}" mein sirf Rs ${Number(sourceAcc.balance || 0).toLocaleString()} hai — ` +
-          `Rs ${netCredit.toLocaleString()} transfer nahi ho sakti. Pehle source account mein raqam rakhein ya kam raqam declared karein.`,
+          `Source account "${sourceAcc.name}" has only Rs ${Number(sourceAcc.balance || 0).toLocaleString()} — ` +
+          `Rs ${netCredit.toLocaleString()} can't be transferred. Add money to the source account first or declare a smaller amount.`,
           'error'
         );
         return false;
@@ -5531,7 +5531,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             await supabase.from('drawer_handovers').update({ status: 'Pending' }).in('id', replacedIds);
           }
           await refreshCashControl();
-          showToast(`Opening cash transfer nahi hui: ${transferError.message}`, 'error');
+          showToast(`Opening cash transfer failed: ${transferError.message}`, 'error');
           return false;
         }
         setAccounts(prev => prev.map(a => {
@@ -5543,15 +5543,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       await refreshCashControl();
       showToast(
-        `Opening cash Rs ${amt.toLocaleString()} drawer mein add ho gayi — agli shift isi se start hogi.` +
+        `Opening cash Rs ${amt.toLocaleString()} added to the drawer — the next shift will start with it.` +
         ` (Source: ${sourceAcc.name} - Rs ${netCredit.toLocaleString()} transfer.)` +
-        (replacedCount > 0 ? ` (Purani pending handover Rs ${Number(existingPending[0].declared_amount).toLocaleString()} replace ho gayi.)` : ''),
+        (replacedCount > 0 ? ` (Old pending handover of Rs ${Number(existingPending[0].declared_amount).toLocaleString()} replaced.)` : ''),
         'success'
       );
       return true;
     } catch (e) {
       console.error('addDrawerOpeningCash error:', e);
-      showToast('Opening cash add nahi hui: ' + getErrorMessage(e), 'error');
+      showToast("Opening cash couldn't be added: " + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -5580,7 +5580,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }).eq('id', handoverId);
 
     if (error) {
-      showToast(`Handover update nahi hua: ${error.message}`, 'error');
+      showToast(`Handover couldn't be updated: ${error.message}`, 'error');
       return false;
     }
     // The handover's count difference is settled with it: left Open, it kept the business day from
@@ -5594,7 +5594,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }).eq('handover_id', handoverId).eq('status', 'Open').select('shift_id');
     if (varianceError) {
       console.error('[resolveCashHandover] Handover difference left open:', varianceError);
-      showToast('Handover update ho gaya, lekin uska cash difference open reh gaya. Differences mein resolve karein.', 'warning');
+      showToast('Handover updated, but its cash difference is still open. Resolve it under Differences.', 'warning');
     }
     for (const shiftId of new Set((settled || []).map((row: any) => row.shift_id).filter(Boolean))) {
       const { count } = await supabase.from('cash_variances').select('id', { count: 'exact', head: true }).eq('shift_id', shiftId).eq('status', 'Open');
@@ -5627,7 +5627,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       ? await supabase.from('cash_drawers').update(payload).eq('id', drawer.id).select()
       : await supabase.from('cash_drawers').insert({ ...payload, id: `drawer_${generateUUID().slice(0, 12)}` }).select();
     if (error) {
-      showToast(`Drawer save nahi hua: ${error.message}`, 'error');
+      showToast(`Drawer couldn't be saved: ${error.message}`, 'error');
       return false;
     }
     const savedRow = Array.isArray(data) ? data[0] : data;
@@ -5655,7 +5655,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // dozen/tray or deleted pack, which the server only lets go to 0 (dayclose_stock_count).
       const bad = counts.find(entry => !entry.itemId || !Number.isFinite(Number(entry.counted)) || Number(entry.counted) < 0);
       if (bad) {
-        showToast('Har count 0 ya us se zyada number hona chahiye.', 'warning');
+        showToast('Every count must be 0 or more.', 'warning');
         return null;
       }
       const payload = counts.map(entry => ({
@@ -5681,7 +5681,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       };
     } catch (e) {
       console.error('submitDayCloseStockCount error:', e);
-      showToast('Stock count apply nahi hui: ' + getErrorMessage(e), 'error');
+      showToast("Stock count couldn't be applied: " + getErrorMessage(e), 'error');
       return null;
     }
   };
@@ -5714,11 +5714,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }).eq('id', businessDayId);
       if (error) throw error;
       setBusinessDays(prev => prev.map(d => d.id === businessDayId ? { ...d, cash_closed_at: closedAt } as BusinessDay : d));
-      showToast('Cash closing complete ho gayi.', 'success');
+      showToast('Cash closing completed.', 'success');
       return true;
     } catch (e) {
       console.error('closeDayCash error:', e);
-      showToast('Cash closing fail hui: ' + getErrorMessage(e), 'error');
+      showToast('Cash closing failed: ' + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -5733,11 +5733,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const { error } = await supabase.from('business_days').update({ stock_closed_at: closedAt }).eq('id', businessDayId);
       if (error) throw error;
       setBusinessDays(prev => prev.map(d => d.id === businessDayId ? { ...d, stock_closed_at: closedAt } as BusinessDay : d));
-      showToast('Stock closing complete ho gayi.', 'success');
+      showToast('Stock closing completed.', 'success');
       return true;
     } catch (e) {
       console.error('closeDayStock error:', e);
-      showToast('Stock closing mark nahi hui: ' + getErrorMessage(e), 'error');
+      showToast("Stock closing couldn't be marked: " + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -5780,12 +5780,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       p_payload: { notes, summary, cash_close: cashClose || null, user_name: currentUser.name }
     });
     if (error) {
-      showToast(`Day close nahi hua: ${moneyRpcMessage(error)}`, 'error');
+      showToast(`Day couldn't be closed: ${moneyRpcMessage(error)}`, 'error');
       return false;
     }
     await refreshCashControl();
     showToast(
-      (closeResult as any)?.already_closed ? `${day.business_date} ka din pehle hi band ho chuka tha.` : `${day.business_date} ka business day close ho gaya.`,
+      (closeResult as any)?.already_closed ? `${day.business_date} was already closed.` : `Business day ${day.business_date} closed.`,
       (closeResult as any)?.already_closed ? 'info' : 'success'
     );
     return true;
@@ -5814,7 +5814,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       closed_by: null
     }).eq('id', businessDayId).eq('status', 'Closed');
     if (error) {
-      showToast(`Day reopen nahi hua: ${error.message}`, 'error');
+      showToast(`Day couldn't be reopened: ${error.message}`, 'error');
       return false;
     }
     const businessDate = day?.business_date;
@@ -6018,14 +6018,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // and any caller (another screen, a shortcut, the console) reaches these actions.
   const requireRight = (moduleKey: string, action: string, what: string): boolean => {
     if (canPerform(moduleKey, action)) return true;
-    showToast(`Aap ko ${what} ki ijazat nahi hai.`, 'error');
+    showToast(`You don't have permission to ${what}.`, 'error');
     return false;
   };
 
   // Shared guard for anything that writes a dated entry: refuses dates inside the closed books.
   const guardOpenPeriod = (dateStr?: string): boolean => {
     if (!dateStr || !isPeriodLocked(dateStr)) return true;
-    showToast(`Books ${settings.security?.lockDate} tak band hain. Is tareekh ki entry add, edit ya delete nahi ho sakti.`, 'error');
+    showToast(`Books are closed up to ${settings.security?.lockDate}. Entries on this date can't be added, edited or deleted.`, 'error');
     return false;
   };
 
@@ -6121,14 +6121,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateCustomer = async (id: string, u: Partial<Customer>) => {
-    if (!requireRight('customers', 'edit', 'customer ki tafseel badalne')) return false;
+    if (!requireRight('customers', 'edit', 'edit customer details')) return false;
     return updateCustomerRecord(id, u);
   };
 
   // Internal: archive / reactivate check their own (delete / edit) right before calling this.
   const updateCustomerRecord = async (id: string, u: Partial<Customer>) => {
     try {
-      // The khata balance moves only through ledger entries (sale, payment, charge, return). A profile
+      // The customer balance moves only through ledger entries (sale, payment, charge, return). A profile
       // edit that sets it would change the balance with no customer_transactions row behind it.
       const { name, phone, address, route, type, balance: _ignoredBalance, isActive, ...extraData } = u;
       setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...extraData, ...(name !== undefined ? { name } : {}), ...(phone !== undefined ? { phone } : {}), ...(address !== undefined ? { address } : {}), ...(route !== undefined ? { route } : {}), ...(type !== undefined ? { type } : {}), ...(isActive !== undefined ? { isActive } : {}) } : c));
@@ -6188,15 +6188,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   ) => { 
       try {
           if (date && isDayLocked(date)) {
-            showToast('Ye din band (locked) hai. Entry aaj ki tareekh par darj karein.', 'error');
+            showToast("This day is locked. Record the entry on today's date.", 'error');
             return false;
           }
           if (!canPerform('customers', type === 'Payment' ? 'payment' : 'edit')) {
-            showToast('Aap ko customer khata mein entry karne ki ijazat nahi hai.', 'error');
+            showToast("You don't have permission to post entries to customer ledgers.", 'error');
             return false;
           }
           if (!(Number(amount) > 0)) {
-            showToast('Amount 0 se zyada honi chahiye.', 'warning');
+            showToast('Amount must be more than 0.', 'warning');
             return false;
           }
           const cust = customers.find(c => c.id === customerId);
@@ -6214,7 +6214,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               );
 
               if (type === 'Payment' && amount > 0 && !targetAccountId) {
-                showToast("Payment account select karna zaroori hai! Pehle Bank & Cash men account banayein.", "warning");
+                showToast("A payment account is required! Create an account in Bank & Cash first.", "warning");
                 return false;
               }
 
@@ -6284,7 +6284,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 () => supabase.rpc('record_customer_payment_effects', customerPaymentPayload)
               );
 
-              showToast(type === 'Charge' ? 'Customer khata mein charge darj ho gaya' : 'Customer Payment Recorded Successfully', "success");
+              showToast(type === 'Charge' ? 'Charge posted to the customer ledger' : 'Customer Payment Recorded Successfully', "success");
               return true;
           }
           return false;
@@ -6298,21 +6298,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const deleteCustomerTransaction = async (id: string) => {
     try {
       if (!canPerform('customers', 'delete')) {
-        showToast('Aap ko khata entry delete karne ki ijazat nahi hai.', 'error');
+        showToast("You don't have permission to delete ledger entries.", 'error');
         return false;
       }
       const tx = customerTransactions.find(t => t.id === id);
       if (tx && tx.date && isDayLocked(tx.date)) {
-        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        showToast('This entry is on a locked day. Post a reversing entry instead of deleting it.', 'error');
         return false;
       }
       const txShift = (tx as any)?.shift_session_id ? shiftSessions.find(s => s.id === (tx as any).shift_session_id) : undefined;
       if (tx?.type === 'Payment' && txShift && txShift.status !== 'Active' && txShift.status !== 'Closing') {
-        showToast('Ye payment band shift ki hai, drawer ka hisaab ho chuka hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        showToast('This payment is from a closed shift and the drawer is already settled. Post a reversing entry instead of deleting it.', 'error');
         return false;
       }
 
-      // Balance reversal (khata + account + linked bank tx) happens in ONE atomic Postgres
+      // Balance reversal (ledger + account + linked bank tx) happens in ONE atomic Postgres
       // transaction, keyed off the stored ledger row. No fallback account: money is only taken back
       // from the account the payment actually went into (opening advances / write-offs had none).
       const { error: delError } = await supabase.rpc('delete_customer_transaction_effects', {
@@ -6324,7 +6324,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (tx) {
         const cust = customers.find(c => c.id === tx.customer_id);
         if (cust) {
-          // Payment and Return both lowered the khata when posted, so deleting them raises it back.
+          // Payment and Return both lowered the ledger balance when posted, so deleting them raises it back.
           const balanceReversal = (tx.type === 'Payment' || (tx.type as string) === 'Return') ? tx.amount : -tx.amount;
           setCustomers(prev => prev.map(c => c.id === tx.customer_id ? { ...c, balance: roundCurrency(cust.balance + balanceReversal) } : c));
         }
@@ -6341,13 +6341,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   
   const addExpense = async (e: Omit<ExpenseEntry, 'id'>) => {
-    if (!requireRight('expenses', 'create', 'kharcha darj karne')) return false;
+    if (!requireRight('expenses', 'create', 'record an expense')) return false;
     try {
       const id = `exp_${generateUUID()}`;
       const { date, category, amount, paidAmount, paymentStatus, description, account_id, account_name, vendor_id, vendor_name, ...extraDetails } = e as any;
       if (!guardOpenPeriod(date)) return false;
       if (date && isDayLocked(date)) {
-        showToast('Ye din band (locked) hai. Kharcha aaj ki tareekh par darj karein.', 'error');
+        showToast("This day is locked. Record the expense on today's date.", 'error');
         return false;
       }
       
@@ -6460,7 +6460,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteExpense = async (id: string) => {
-    if (!requireRight('expenses', 'delete', 'kharcha delete karne')) return false;
+    if (!requireRight('expenses', 'delete', 'delete an expense')) return false;
     try {
       const exp = expenses.find(e => e.id === id);
       if (exp) {
@@ -6546,7 +6546,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch(e) {
       console.error("deleteExpense error:", e);
-      showToast('Expense delete nahi hua: ' + getErrorMessage(e), 'error');
+      showToast("Expense couldn't be deleted: " + getErrorMessage(e), 'error');
       fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
       return false;
     }
@@ -6554,10 +6554,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // One edit per expense at a time (also across tabs): two saves moved the money twice.
   const updateExpense = async (id: string, updates: Partial<ExpenseEntry>): Promise<boolean> => {
-    if (!requireRight('expenses', 'edit', 'kharcha badalne')) return false;
+    if (!requireRight('expenses', 'edit', 'edit an expense')) return false;
     const result = await actionLock.runExclusiveAcrossTabs(`update_expense_${id}`, () => updateExpenseUnlocked(id, updates));
     if (result === null) {
-      showToast('Is kharche ki pichli tabdeeli abhi save ho rahi hai.', 'warning');
+      showToast("This expense's previous change is still being saved.", 'warning');
       return false;
     }
     return result;
@@ -6576,7 +6576,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
       // Moving an expense INTO a locked day would change that day's closed figures too.
       if (updates.date && updates.date !== exp.date && isDayLocked(updates.date)) {
-        showToast('Closed Period Lock: Expense ko band (locked) din par nahi le ja sakte.', 'error');
+        showToast("Closed Period Lock: an expense can't be moved onto a locked day.", 'error');
         return false;
       }
 
@@ -6611,7 +6611,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }));
       if (result?.already_applied) {
-        showToast('Ye tabdeeli pehle hi save ho chuki thi.', 'info');
+        showToast('This change was already saved.', 'info');
         fetchData(['expenses', 'expenseVendors', ...MONEY_CHANGED]);
         return true;
       }
@@ -6656,14 +6656,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (err) {
       console.error("updateExpense error:", err);
-      showToast("Kharcha update nahi hua: " + moneyRpcMessage(err), "error");
+      showToast("Expense couldn't be updated: " + moneyRpcMessage(err), "error");
       return false;
     }
   };
 
   // Both used to report success whatever the database said.
   const addRecurringExpense = async (e: Omit<RecurringExpense, 'id'>) => {
-    if (!requireRight('expenses', 'create', 'recurring kharcha banane')) return false;
+    if (!requireRight('expenses', 'create', 'create a recurring expense')) return false;
     try {
       const id = `re_${generateUUID()}`;
       const { name, amount, ...extraDetails } = e;
@@ -6678,16 +6678,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       fetchData(['recurringExpenses']);
       return true;
     } catch (err) {
-      showToast('Recurring kharcha save nahi hua: ' + getErrorMessage(err), 'error');
+      showToast("Recurring expense couldn't be saved: " + getErrorMessage(err), 'error');
       return false;
     }
   };
 
   const deleteRecurringExpense = async (id: string) => {
-    if (!requireRight('expenses', 'delete', 'recurring kharcha delete karne')) return false;
+    if (!requireRight('expenses', 'delete', 'delete a recurring expense')) return false;
     const { error } = await supabase.from('recurring_expenses').delete().eq('id', id);
     if (error) {
-      showToast('Recurring kharcha delete nahi hua: ' + error.message, 'error');
+      showToast("Recurring expense couldn't be deleted: " + error.message, 'error');
       return false;
     }
     fetchData(['recurringExpenses']);
@@ -6695,7 +6695,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
   
   const addExpenseVendor = async (v: Omit<ExpenseVendor, 'id' | 'total_paid'> & { id?: string }): Promise<string | false> => {
-    if (!requireRight('expenses', 'create', 'vendor banane')) return false;
+    if (!requireRight('expenses', 'create', 'create a vendor')) return false;
     try {
       const id = (v as any).id || `ev_${generateUUID()}`;
       const { name, service_type, phone, contact_person, address, notes, isActive, opening_balance, bank_name, account_number, iban, ...extraDetails } = v as any;
@@ -6754,7 +6754,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateExpenseVendor = async (id: string, updates: Partial<ExpenseVendor>) => {
-    if (!requireRight('expenses', 'edit', 'vendor badalne')) return false;
+    if (!requireRight('expenses', 'edit', 'edit a vendor')) return false;
     try {
       const existing = expenseVendors.find(v => v.id === id);
       if (!existing) return false;
@@ -6809,13 +6809,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteExpenseVendor = async (id: string) => {
-    if (!requireRight('expenses', 'delete', 'vendor delete karne')) return false;
+    if (!requireRight('expenses', 'delete', 'delete a vendor')) return false;
     try {
       const vendor = expenseVendors.find(v => v.id === id);
       // A vendor with bills, payments or a balance keeps its history: archive it instead.
       const assessment = getDeleteAssessment('vendor', id);
       if (!assessment.canHardDelete) {
-        showToast(`Vendor delete nahi ho sakta: ${assessment.blockingReasons[0] || 'history maujood hai'} Inactive kar dein.`, 'warning');
+        showToast(`Vendor can't be deleted: ${assessment.blockingReasons[0] || 'it has history.'} Make it inactive instead.`, 'warning');
         return false;
       }
       const { error } = await supabase.from('expense_vendors').delete().eq('id', id);
@@ -6842,11 +6842,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     referenceNo?: string,
     transactionType: 'payment' | 'refund' = 'payment'
   ): Promise<boolean> => {
-    if (!requireRight('expenses', 'create', 'vendor payment darj karne')) return false;
+    if (!requireRight('expenses', 'create', 'record a vendor payment')) return false;
     try {
       if (!guardOpenPeriod(date)) return false;
       if (date && isDayLocked(date)) {
-        showToast('Ye din band (locked) hai. Entry aaj ki tareekh par darj karein.', 'error');
+        showToast("This day is locked. Record the entry on today's date.", 'error');
         return false;
       }
       const vendor = expenseVendors.find(v => v.id === vendorId);
@@ -7007,12 +7007,12 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteExpenseVendorTransaction = async (id: string): Promise<boolean> => {
-    if (!requireRight('expenses', 'delete', 'vendor entry delete karne')) return false;
+    if (!requireRight('expenses', 'delete', 'delete a vendor entry')) return false;
     try {
       const tx = expenseVendorTransactions.find(t => t.id === id);
       if (tx && !guardOpenPeriod(tx.date)) return false;
       if (tx?.date && isDayLocked(tx.date)) {
-        showToast('Ye entry band (locked) din ki hai. Delete ki jagah ulti (reverse) entry karein.', 'error');
+        showToast('This entry is on a locked day. Post a reversing entry instead of deleting it.', 'error');
         return false;
       }
       if (tx) {
@@ -7115,7 +7115,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       console.error("addAccount error:", e);
       setAccounts(prev => prev.filter(acc => acc.id !== id));
       if (type === 'Cash') setCashDrawers(prev => prev.filter(d => d.id !== id));
-      showToast('Account nahi bana: ' + moneyRpcMessage(e), 'error');
+      showToast("Account couldn't be created: " + moneyRpcMessage(e), 'error');
       return false;
     }
   };
@@ -7182,7 +7182,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
       } catch(e) {
         console.error('recordBankTransaction error:', e);
-        showToast(`${data?.type || 'Entry'} record nahi hui: ${moneyRpcMessage(e)}`, 'error');
+        showToast(`${data?.type || 'Entry'} couldn't be recorded: ${moneyRpcMessage(e)}`, 'error');
         return false;
       }
   };
@@ -7222,7 +7222,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch(e) { 
       console.error(e);
       setManualAccounts(prev => prev.filter(m => m.id !== id));
-      showToast('Account save nahi hua: ' + getErrorMessage(e), 'error');
+      showToast("Account couldn't be saved: " + getErrorMessage(e), 'error');
       return false; 
     }
   };
@@ -7235,7 +7235,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true; 
     } catch(e) {
       console.error(e);
-      showToast('Account delete nahi hua: ' + getErrorMessage(e), 'error');
+      showToast("Account couldn't be deleted: " + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -7257,7 +7257,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch(e) {
       console.error(e);
-      showToast('Account update nahi hua: ' + getErrorMessage(e), 'error');
+      showToast("Account couldn't be updated: " + getErrorMessage(e), 'error');
       return false;
     }
   };
@@ -7277,7 +7277,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Every line must post somewhere; a line on an unknown account would leave the entry unbalanced.
       const unknownLine = entryLines.find(l => !manualAccounts.some(m => m.id === l.account_id) && !accounts.some(a => a.id === l.account_id));
       if (unknownLine) {
-        showToast('Journal mein sirf Chart of Accounts aur Bank/Cash accounts chun sakte hain. Customer/Supplier khata ke liye payment ya charge use karein.', 'error');
+        showToast('A journal can only use Chart of Accounts and Bank/Cash accounts. For customer/supplier ledgers, use a payment or charge.', 'error');
         return false;
       }
 
@@ -7299,13 +7299,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           drawer_account_ids: activeDrawerAccountIds()
         }
       }));
-      if (result?.already_applied) showToast('Ye journal entry pehle hi post ho chuki thi.', 'info');
+      if (result?.already_applied) showToast('This journal entry was already posted.', 'info');
 
       fetchData(['journalEntries', 'manualAccounts', ...MONEY_ADDED]);
       return true;
     } catch(e) {
       console.error(e);
-      showToast('Journal entry post nahi hui: ' + moneyRpcMessage(e), 'error');
+      showToast("Journal entry couldn't be posted: " + moneyRpcMessage(e), 'error');
       return false;
     }
   };
@@ -7326,10 +7326,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const hasHistory = salesCount > 0 || supplyCount > 0 || txCount > 0;
 
       if (!isZeroBalance(bal)) {
-        blockingReasons.push(`Customer has an open balance of Rs ${Math.abs(bal).toLocaleString()} (${bal > 0 ? 'Receivable Khata' : 'Advance Credit'}).`);
+        blockingReasons.push(`Customer has an open balance of Rs ${Math.abs(bal).toLocaleString()} (${bal > 0 ? 'Receivable' : 'Advance Credit'}).`);
       }
       if (hasHistory) {
-        blockingReasons.push(`Customer has ${salesCount} sales bills, ${supplyCount} deliveries, and ${txCount} khata transactions.`);
+        blockingReasons.push(`Customer has ${salesCount} sales bills, ${supplyCount} deliveries, and ${txCount} ledger transactions.`);
       }
 
       return {
@@ -7523,14 +7523,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     id: string,
     action: 'hard_delete' | 'deactivate' | 'write_off_bad_debt'
   ): Promise<boolean> => {
-    if (!requireRight('customers', 'delete', 'customer archive / delete karne')) return false;
+    if (!requireRight('customers', 'delete', 'archive or delete a customer')) return false;
     try {
       const cust = customers.find(c => c.id === id);
       if (!cust) return false;
 
       if (action === 'write_off_bad_debt') {
         // One write-off per customer at a time (also across tabs): a double click used to post it twice.
-        // write_off_customer_balance writes off the server's balance (khata row, bad-debt expense,
+        // write_off_customer_balance writes off the server's balance (ledger row, bad-debt expense,
         // balance move) and archives the customer in one transaction.
         const writeOffResult = await actionLock.runExclusiveAcrossTabs(`write_off_customer_${id}`, () =>
           callMoneyRpc('write_off_customer_balance', `write_off_customer:${id}`, requestId => ({
@@ -7539,7 +7539,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             p_deactivate: true
           })));
         if (writeOffResult === null) {
-          showToast('Is customer ka write-off pehle se chal raha hai.', 'warning');
+          showToast('A write-off for this customer is already in progress.', 'warning');
           return false;
         }
         setCustomers(prev => prev.map(c => c.id === id ? { ...c, balance: 0, isActive: false } : c));
@@ -7549,7 +7549,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       if (action === 'deactivate') {
-        if (!(await updateCustomerRecord(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
+        if (!(await updateCustomerRecord(id, { isActive: false }))) { showToast("Couldn't save the inactive status. Please try again.", 'error'); return false; }
         showToast(`Customer "${cust.name}" marked Inactive (Archived). Ledger and balance sheet preserved.`, 'info');
         fetchData(['customers']);
         return true;
@@ -7600,7 +7600,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             p_deactivate: true
           })));
         if (settled === null) {
-          showToast('Is supplier ka hisaab pehle se settle ho raha hai.', 'warning');
+          showToast("This supplier's balance is already being settled.", 'warning');
           return false;
         }
         setSuppliers(prev => prev.map(s => s.id === id ? { ...s, balance: 0, pending_balance: 0, isActive: false } : s));
@@ -7650,7 +7650,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!item) return false;
 
       if (action === 'write_off_spoilage') {
-        if (!guardStockWrite('stock write-off karne', 'items', 'delete')) return false;
+        if (!guardStockWrite('write off stock', 'items', 'delete')) return false;
         // Loose stock AND ready packs leave the shelf: writing off only the loose pile left the packs
         // sellable (and counted) on a discontinued item. Read from the server, not the screen copy.
         const { data: stockRow, error: stockReadError } = await supabase.from('items').select('stock, variant_stocks').eq('id', id).single();
@@ -7679,14 +7679,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (logError) console.error('[safeDeleteItem] Write-off log not saved:', logError);
           mirrorStockMove(id, -looseOff, packDeltas);
         }
-        if (!(await updateItem(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
+        if (!(await updateItem(id, { isActive: false }))) { showToast("Couldn't save the inactive status. Please try again.", 'error'); return false; }
         showToast(`Stock written off to spoilage and "${item.name}" marked Inactive (Discontinued)!`, 'success');
         fetchData(STOCK);
         return true;
       }
 
       if (action === 'deactivate') {
-        if (!(await updateItem(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
+        if (!(await updateItem(id, { isActive: false }))) { showToast("Couldn't save the inactive status. Please try again.", 'error'); return false; }
         showToast(`Item "${item.name}" marked Inactive (Discontinued). Past sales bills preserved.`, 'info');
         fetchData(['items']);
         return true;
@@ -7706,7 +7706,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           const liveHeld = Math.abs(Number(liveRow.stock) || 0) > 0.0005
             || ((liveRow.variants || []) as any[]).some(v => v.deduct_from_base !== true && Math.abs(Number(livePacks[v.id]) || 0) > 0.0005);
           if (liveHeld) {
-            showToast('Is product mein abhi stock hai (server par). Pehle write-off ya stock count se 0 karein.', 'error');
+            showToast('This product still has stock (on the server). Bring it to 0 with a write-off or stock count first.', 'error');
             fetchData(STOCK);
             return false;
           }
@@ -7753,14 +7753,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         // Same rule as the delete assessment: the default cash / digital account receives every
         // POS receipt, so archiving it left receipts with nowhere to go.
         if (!getDeleteAssessment('account', id).canDeactivate) {
-          showToast('Default system account ya balance wala account archive nahi ho sakta.', 'error');
+          showToast("A default system account or an account with a balance can't be archived.", 'error');
           return false;
         }
         if (!isZeroBalance(acc.balance)) {
           showToast(`Cannot archive account with non-zero balance (Rs ${acc.balance}). Transfer funds out first.`, 'error');
           return false;
         }
-        if (!(await updateAccount(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
+        if (!(await updateAccount(id, { isActive: false }))) { showToast("Couldn't save the inactive status. Please try again.", 'error'); return false; }
         showToast(`Account "${acc.name}" marked Inactive. Past statements preserved.`, 'info');
         fetchData(['accounts', 'cashDrawers']);
         return true;
@@ -7800,22 +7800,22 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       customer: ['customers', 'edit'], supplier: ['suppliers', 'edit'], item: ['items', 'edit'],
       account: ['bank_cash', 'create'], vendor: ['expenses', 'edit']
     };
-    if (!requireRight(right[entityType][0], right[entityType][1], 'dobara active karne')) return false;
+    if (!requireRight(right[entityType][0], right[entityType][1], 'reactivate this')) return false;
     try {
       if (entityType === 'customer') {
-        if (!(await updateCustomerRecord(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
+        if (!(await updateCustomerRecord(id, { isActive: true }))) { showToast("Couldn't save the reactivation.", 'error'); return false; }
         showToast("Customer reactivated successfully!", 'success');
       } else if (entityType === 'supplier') {
-        if (!(await updateSupplier(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
+        if (!(await updateSupplier(id, { isActive: true }))) { showToast("Couldn't save the reactivation.", 'error'); return false; }
         showToast("Supplier reactivated successfully!", 'success');
       } else if (entityType === 'item') {
-        if (!(await updateItem(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
+        if (!(await updateItem(id, { isActive: true }))) { showToast("Couldn't save the reactivation.", 'error'); return false; }
         showToast("Item reactivated successfully!", 'success');
       } else if (entityType === 'account') {
-        if (!(await updateAccount(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
+        if (!(await updateAccount(id, { isActive: true }))) { showToast("Couldn't save the reactivation.", 'error'); return false; }
         showToast("Account reactivated successfully!", 'success');
       } else if (entityType === 'vendor') {
-        if (!(await updateExpenseVendor(id, { isActive: true }))) { showToast('Dobara active karna save nahi hua.', 'error'); return false; }
+        if (!(await updateExpenseVendor(id, { isActive: true }))) { showToast("Couldn't save the reactivation.", 'error'); return false; }
         showToast("Vendor reactivated successfully!", 'success');
       }
       fetchData(entityType === 'customer' ? ['customers'] : entityType === 'supplier' ? ['suppliers'] : entityType === 'item' ? ['items'] : entityType === 'account' ? ['accounts', 'cashDrawers'] : ['expenseVendors']);
@@ -7855,14 +7855,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (err) {
       console.error("Failed to save settings:", err);
       setSettings(previous);
-      showToast("Settings save nahi huin. Internet check karke dobara koshish karein.", "error");
+      showToast("Settings couldn't be saved. Check the internet and try again.", "error");
       return false;
     }
   };
 
   const requestManagerApproval = async (approverId: string, pin: string, permission: string) => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      return { approved: false, message: 'Manager PIN check karne ke liye internet zaroori hai.' };
+      return { approved: false, message: 'Checking a manager PIN needs internet.' };
     }
     const { data, error } = await supabase.rpc('app_approve_override', {
       p_user_id: approverId,
@@ -7870,7 +7870,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       p_permission: permission
     });
     if (error || !data?.approved) {
-      return { approved: false, message: error?.message || 'Ghalat PIN code!' };
+      return { approved: false, message: error?.message || 'Wrong PIN code!' };
     }
     return { approved: true, approverName: String(data.name || '') };
   };
@@ -7911,13 +7911,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       throw countError;
     }
     if ((count || 0) > 0) {
-      throw new Error(`${count} Customer Order booking(s) in records se linked hain aur app unhe delete nahi kar sakti. Pehle database se customer_orders saaf karwayein; kuch bhi delete nahi hua.`);
+      throw new Error(`${count} customer order booking(s) are linked to these records and the app can't delete them. Have customer_orders cleared in the database first; nothing was deleted.`);
     }
   };
 
   const resetSystem = async () => {
     if (currentUser?.role_id !== 'role_super_admin') {
-      showToast('Sirf Owner / Super Admin data delete kar sakta hai.', 'error');
+      showToast('Only the Owner / Super Admin can delete data.', 'error');
       return;
     }
     try {
@@ -7967,7 +7967,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         supabase.from('recurring_expenses').delete().neq('id', sentinel),
         supabase.from('expense_vendor_transactions').delete().neq('id', sentinel),
       ]);
-      // Masters are referenced by these rows (sales/khata -> customers, attendance -> employees):
+      // Masters are referenced by these rows (sales/ledger -> customers, attendance -> employees):
       // stop here rather than delete some masters while their history is still in place.
       const txFailure = txResults.find(r => r.error);
       if (txFailure) {
@@ -8042,7 +8042,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const modules = Array.isArray(moduleOrModules) ? moduleOrModules : [moduleOrModules];
     if (modules.length === 0) return;
     if (currentUser?.role_id !== 'role_super_admin') {
-      showToast('Sirf Owner / Super Admin data delete kar sakta hai.', 'error');
+      showToast('Only the Owner / Super Admin can delete data.', 'error');
       return;
     }
 
@@ -8169,7 +8169,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         } else if (module === 'customer_ledger') {
           // Reset only customer credit balances and ledger history, keep profiles
           await check(wipe('customer_transactions'));
-          // Zeroed straight after the khata is gone: a later failure must not leave balances with no ledger behind them.
+          // Zeroed straight after the ledger rows are gone: a later failure must not leave balances with no ledger behind them.
           await check(supabase.from('customers').update({ balance: 0 }).neq('id', ALL));
           await check(wipe('sales'));
           await check(wipe('daily_supply'));
@@ -8325,7 +8325,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (!cleanPin) {
       return { success: false, message: 'Enter the password / PIN code' };
     }
-    return signInOperator({ mode: 'username', username: cleanUser, pin: cleanPin }, 'Ghalat Username ya PIN code!');
+    return signInOperator({ mode: 'username', username: cleanUser, pin: cleanPin }, 'Wrong username or PIN code!');
   };
 
   const switchUserWithPin = async (pin: string): Promise<{ success: boolean; message?: string; user?: AppUser }> => {
@@ -8406,7 +8406,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const cleanPin = (updates.pin || '').trim();
       if (cleanPin) {
         if (!/^\d{4,10}$/.test(cleanPin)) {
-          showToast('PIN 4 se 10 digits ka hona chahiye.', 'error');
+          showToast('PIN must be 4 to 10 digits.', 'error');
           return false;
         }
         payload.pin = cleanPin;
@@ -8452,7 +8452,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Roles are the business's access policy: the database lets only the Owner (Super Admin) write
   // them (20261023119000). RLS skips a refused UPDATE / DELETE silently, so the rows are checked.
-  const ROLE_OWNER_ONLY = 'Roles sirf Owner (Super Admin) bana, badal ya delete kar sakta hai.';
+  const ROLE_OWNER_ONLY = 'Only the Owner (Super Admin) can create, change or delete roles.';
   const createRole = async (roleData: Omit<AppRole, 'id'>): Promise<boolean> => {
     if (currentUser?.role_id !== 'role_super_admin') {
       showToast(ROLE_OWNER_ONLY, 'error');
@@ -8475,14 +8475,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (e: any) {
       console.error('Error creating role:', e);
-      showToast(`Role nahi bana: ${moneyRpcMessage(e)}`, "error");
+      showToast(`Role couldn't be created: ${moneyRpcMessage(e)}`, "error");
       return false;
     }
   };
 
   const updateRole = async (id: string, updates: Partial<AppRole>): Promise<boolean> => {
     if (id === 'role_super_admin') {
-      showToast('Owner role hamesha full access rakhta hai.', 'warning');
+      showToast('The Owner role always has full access.', 'warning');
       return false;
     }
     if (currentUser?.role_id !== 'role_super_admin') {
@@ -8502,7 +8502,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (e: any) {
       console.error('Error updating role:', e);
-      showToast(`Role update nahi hua: ${moneyRpcMessage(e)}`, "error");
+      showToast(`Role couldn't be updated: ${moneyRpcMessage(e)}`, "error");
       return false;
     }
   };
@@ -8536,7 +8536,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return true;
     } catch (e: any) {
       console.error('Error deleting role:', e);
-      showToast(`Role delete nahi hua: ${moneyRpcMessage(e)}`, "error");
+      showToast(`Role couldn't be deleted: ${moneyRpcMessage(e)}`, "error");
       return false;
     }
   };

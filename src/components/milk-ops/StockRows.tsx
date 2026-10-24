@@ -100,7 +100,7 @@ function Sellable({ row }: { row: StockRow }) {
   const sellable = Math.max(0, row.reading.sellableBase);
   const short = sellable < Math.max(0, row.reading.totalBase);
   return (
-    <span className={cn('font-semibold tabular-nums', sellable <= 0 ? 'text-fg-faint' : short ? 'text-warning-fg' : 'text-fg-muted')} title={short ? 'Kuch stock hidden pack ya band loose sale mein hai' : undefined}>
+    <span className={cn('font-semibold tabular-nums', sellable <= 0 ? 'text-fg-faint' : short ? 'text-warning-fg' : 'text-fg-muted')} title={short ? 'Some stock is in a hidden pack or in loose stock that is not for sale' : undefined}>
       {formatBaseQty(sellable, row.reading.unit)}
     </span>
   );
@@ -119,7 +119,7 @@ function ValueCell({ row }: { row: StockRow }) {
     <>
       <Money amount={row.reading.costValue} className="font-bold text-fg" />
       {row.costMissing ? (
-        <span className="block text-[11px] font-semibold text-warning-fg">Cost set nahi</span>
+        <span className="block text-[11px] font-semibold text-warning-fg">No cost set</span>
       ) : row.isProduct && row.retailValue > 0 ? (
         <span className="block text-[11px] font-medium text-fg-subtle">Retail {formatCurrency(row.retailValue)}</span>
       ) : null}

@@ -103,7 +103,7 @@ export function batchMaterialCheck({ product, inputLitres, packCounts, itemsById
   const base = Number(product?.recipe_base_quantity) || 0;
 
   if (recipe.length > 0 && base <= 0) {
-    warnings.push('Recipe mein "kitne litre doodh par" (base quantity) set nahi, is liye recipe ke materials stock se nahi katenge. Catalog mein recipe theek karein.');
+    warnings.push('The recipe has no base quantity ("for how many litres of milk"), so its materials won\'t be taken from stock. Fix the recipe in the catalog.');
   }
   if (base > 0) {
     const scale = inputLitres / base;
@@ -159,14 +159,14 @@ export function batchMaterialCheck({ product, inputLitres, packCounts, itemsById
     let shortBy = 0;
     if (!material) {
       problem = 'missing';
-      message = `${name}: ye material catalog mein nahi mila. Recipe / pack se hatayen ya material dobara banayen.`;
+      message = `${name}: this material was not found in the catalog. Remove it from the recipe / pack or create the material again.`;
     } else if (unconvertible) {
       problem = 'unit';
-      message = `${name}: recipe ki unit "${unconvertible.rawUnit || '—'}" ko stock ki unit "${unit}" mein badla nahi ja sakta. Recipe ya material ki unit theek karein.`;
+      message = `${name}: the recipe unit "${unconvertible.rawUnit || '—'}" can't be converted to the stock unit "${unit}". Fix the unit on the recipe or the material.`;
     } else if (need !== null && need > available + EPS) {
       problem = 'short';
       shortBy = cleanQty(need - available);
-      message = `${name}: ${qtyText(need, unit)} chahiye, stock mein ${qtyText(available, unit)} hai (${qtyText(shortBy, unit)} kam). Purchase ya stock count darj karein.`;
+      message = `${name}: needs ${qtyText(need, unit)}, ${qtyText(available, unit)} in stock (${qtyText(shortBy, unit)} short). Record a purchase or a stock count.`;
     }
     needs.push({ itemId, name, unit, need, available, piles, problem, shortBy, message });
   }

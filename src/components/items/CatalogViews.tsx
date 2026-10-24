@@ -29,8 +29,8 @@ export function stockTitle(row: CatalogRow): string {
   const { reading } = row;
   const parts = [row.item.isActive === false ? 'Inactive (no alerts)' : STOCK_STATUS_LABEL[reading.status]];
   if (row.breakdown.length) parts.push(row.breakdown.join(' · '));
-  if (row.isSale && Math.abs(reading.sellableBase - reading.totalBase) > 0.0005) parts.push(`${formatBaseQty(reading.sellableBase, reading.unit)} bik sakta hai`);
-  parts.push(row.reorder > 0 ? `alert ${formatBaseQty(row.reorder, reading.unit)} par` : 'low-stock alert band');
+  if (row.isSale && Math.abs(reading.sellableBase - reading.totalBase) > 0.0005) parts.push(`${formatBaseQty(reading.sellableBase, reading.unit)} can be sold`);
+  parts.push(row.reorder > 0 ? `alert at ${formatBaseQty(row.reorder, reading.unit)}` : 'low-stock alert off');
   return parts.join(' · ');
 }
 
@@ -88,7 +88,7 @@ export function MarginText({ row, className }: { row: CatalogRow; className?: st
   return (
     <span
       className={cn('whitespace-nowrap font-semibold tabular-nums', pct < 0 ? 'text-danger-fg' : pct === 0 ? 'text-fg-subtle' : 'text-success-fg', className)}
-      title={pct < 0 ? 'Cost se kam rate: har sale par nuqsan' : `Profit per ${row.basis?.per}`}
+      title={pct < 0 ? 'Rate below cost: a loss on every sale' : `Profit per ${row.basis?.per}`}
     >
       {pct < 0 ? 'Loss ' : ''}{pct.toFixed(Math.abs(pct) < 10 ? 1 : 0)}%
     </span>
@@ -131,7 +131,7 @@ function RowActions({ row, canEdit, canDelete, onEdit, onDelete }: Omit<CatalogI
       {canEdit && <IconButton size="sm" aria-label={`Edit ${item.name}`} icon={<Pencil />} onClick={() => onEdit(item.id)} />}
       {canDelete && (
         item.isSystem ? (
-          <IconButton size="sm" aria-label={item.isActive ? `${item.name}: system product, inactive karein` : `${item.name}: system product`} icon={<ShieldAlert />} onClick={() => onDelete(item.id)} />
+          <IconButton size="sm" aria-label={item.isActive ? `${item.name}: system product, make inactive` : `${item.name}: system product`} icon={<ShieldAlert />} onClick={() => onDelete(item.id)} />
         ) : (
           <IconButton
             size="sm"
@@ -149,8 +149,8 @@ function RowActions({ row, canEdit, canDelete, onEdit, onDelete }: Omit<CatalogI
 function MoveButtons({ id, isFirst, isLast, onMove, className }: { id: string; isFirst?: boolean; isLast?: boolean; onMove?: ReorderProps['onMove']; className?: string }) {
   return (
     <div className={cn('flex items-center', className)} onClick={stopClick} onKeyDown={stopClick}>
-      <IconButton size="sm" aria-label="POS mein upar karein" icon={<ArrowUp />} disabled={isFirst} onClick={() => onMove?.(id, 'up')} />
-      <IconButton size="sm" aria-label="POS mein neeche karein" icon={<ArrowDown />} disabled={isLast} onClick={() => onMove?.(id, 'down')} />
+      <IconButton size="sm" aria-label="Move up in POS" icon={<ArrowUp />} disabled={isFirst} onClick={() => onMove?.(id, 'up')} />
+      <IconButton size="sm" aria-label="Move down in POS" icon={<ArrowDown />} disabled={isLast} onClick={() => onMove?.(id, 'down')} />
     </div>
   );
 }
@@ -187,14 +187,14 @@ export const ProductTableRow = memo(function ProductTableRow(props: CatalogItemP
       <TD className="w-28 py-2.5">
         <div className="flex items-center gap-1">
           {reorderable ? (
-            <span className="cursor-grab text-fg-faint hover:text-fg-muted active:cursor-grabbing" title="Upar neeche khench kar POS order badlein" aria-hidden="true">
+            <span className="cursor-grab text-fg-faint hover:text-fg-muted active:cursor-grabbing" title="Drag up or down to change the POS order" aria-hidden="true">
               <GripVertical className="size-4" />
             </span>
           ) : (
             <span className="w-4" aria-hidden="true" />
           )}
           {row.isSale ? (
-            <Badge tone="brand" className="min-w-9 justify-center font-mono" title="POS grid mein position">#{item.sort_order ?? 999}</Badge>
+            <Badge tone="brand" className="min-w-9 justify-center font-mono" title="Position in the POS grid">#{item.sort_order ?? 999}</Badge>
           ) : (
             <span className="min-w-9 text-center text-xs text-fg-faint">—</span>
           )}

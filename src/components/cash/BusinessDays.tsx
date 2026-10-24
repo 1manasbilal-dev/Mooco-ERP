@@ -64,7 +64,7 @@ const BusinessDays: React.FC<BusinessDaysProps> = ({ run, busyKey, canReopen, on
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h3 className="text-[15px] font-bold text-fg">Business days</h3>
-          <p className="mt-0.5 max-w-2xl text-[13px] text-fg-subtle">Din tab lock hota hai jab har shift, remittance, handover aur variance settle ho. Har card ki checklist batati hai kya baqi hai.</p>
+          <p className="mt-0.5 max-w-2xl text-[13px] text-fg-subtle">A day locks once every shift, remittance, handover and variance is settled. Each card&apos;s checklist shows what is left.</p>
         </div>
         <Badge tone="brand" size="md" dot>Today: {formatBusinessDate(today)}</Badge>
       </div>
@@ -74,8 +74,8 @@ const BusinessDays: React.FC<BusinessDaysProps> = ({ run, busyKey, canReopen, on
           <span className="flex items-start gap-2 font-semibold">
             <CalendarDays className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             {earlierOpenDays.length === 1
-              ? `${formatBusinessDate(earlierOpenDays[0].business_date)} abhi open hai — aaj ka kaam nahi rukta, lekin is din ko close karein.`
-              : `${earlierOpenDays.length} pichle din abhi open hain — aaj ka kaam nahi rukta, lekin inhein close karein.`}
+              ? `${formatBusinessDate(earlierOpenDays[0].business_date)} is still open — today's work isn't blocked, but please close this day.`
+              : `${earlierOpenDays.length} earlier days are still open — today's work isn't blocked, but please close them.`}
           </span>
           <Button size="sm" variant="secondary" onClick={() => openClose(earlierOpenDays[earlierOpenDays.length - 1])}>
             Close {formatBusinessDate(earlierOpenDays[earlierOpenDays.length - 1].business_date)}
@@ -85,7 +85,7 @@ const BusinessDays: React.FC<BusinessDaysProps> = ({ run, busyKey, canReopen, on
 
       {days.length === 0 ? (
         <Card>
-          <EmptyState icon={<CalendarDays />} title="No business day yet" description="Pehli shift start hote hi business day ban jata hai." />
+          <EmptyState icon={<CalendarDays />} title="No business day yet" description="A business day is created as soon as the first shift starts." />
         </Card>
       ) : (
         <>
@@ -127,11 +127,11 @@ const BusinessDays: React.FC<BusinessDaysProps> = ({ run, busyKey, canReopen, on
             onClose={() => setReopenDayId(null)}
             busy={busyKey === `day-reopen:${reopenDay.id}`}
             tone="danger"
-            title="Business day reopen karein"
-            description={`${formatBusinessDate(reopenDay.business_date)} dobara khul jayega; cash aur stock closing dobara karni hogi. Wajah audit trail mein record hogi.`}
+            title="Reopen business day"
+            description={`${formatBusinessDate(reopenDay.business_date)} will open again; cash and stock closing must be done again. The reason is recorded in the audit trail.`}
             icon={<span className="flex size-10 items-center justify-center rounded-xl bg-danger-soft text-danger-fg"><RefreshCw size={20} /></span>}
-            label="Reopen ki wajah"
-            placeholder="e.g. stock closing reh gayi thi — complete karne ke liye"
+            label="Reason for reopening"
+            placeholder="e.g. stock closing was missed — reopening to complete it"
             confirmLabel="Reopen day"
             confirmIcon={<RefreshCw />}
             onConfirm={reason => run(`day-reopen:${reopenDay.id}`, () => reopenRef.current(reopenDay.id, reason))}
@@ -219,8 +219,8 @@ const DayCard = memo(function DayCard({ day, status, summary, isToday, canReopen
           </div>
         ) : (
           <div className="text-xs text-fg-subtle">
-            {day.notes ? <p><span className="font-semibold text-fg-muted">Close notes:</span> {day.notes}</p> : <p>Final record — lock ke waqt ke figures.</p>}
-            {day.reopen_reason && <p className="mt-1"><span className="font-semibold text-fg-muted">Pehle reopen hua:</span> {day.reopen_reason}</p>}
+            {day.notes ? <p><span className="font-semibold text-fg-muted">Close notes:</span> {day.notes}</p> : <p>Final record — figures as at the lock.</p>}
+            {day.reopen_reason && <p className="mt-1"><span className="font-semibold text-fg-muted">Reopened before:</span> {day.reopen_reason}</p>}
           </div>
         )}
         {summary && (

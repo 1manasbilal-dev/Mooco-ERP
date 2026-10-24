@@ -114,7 +114,7 @@ export function optionStockText(option: PosSellOption, baseUnit: string): string
 
 const sameText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** "Dahi (500 g tub)" or just "Dahi" for loose. */
+/** "Yogurt (500 g tub)" or just "Yogurt" for loose. */
 function lineLabel(productName: string, option: PosSellOption): string {
   return option.kind === 'loose' || sameText(option.name, productName) ? productName : `${productName} (${option.name})`;
 }
@@ -125,14 +125,14 @@ function lineLabel(productName: string, option: PosSellOption): string {
  */
 export function sellQtyProblem(productName: string, option: PosSellOption, qty: number, allowNegativeStock: boolean, baseUnit: string): string | null {
   const label = lineLabel(productName, option);
-  if (option.kind === 'packed' && Math.abs(qty - Math.round(qty)) >= 0.001) return `${label}: poore packs mein bikta hai (1, 2, 3...).`;
+  if (option.kind === 'packed' && Math.abs(qty - Math.round(qty)) >= 0.001) return `${label}: sells in whole packs only (1, 2, 3...).`;
   if (allowNegativeStock) return null;
   const need = option.kind === 'packed' ? qty : cleanQty(qty * option.contains);
   if (need <= option.pileLeft + STOCK_SLACK) return null;
   const inCart = cleanQty(option.pile - option.pileLeft) > 0;
-  if (option.available <= 0) return `${label}: stock khatam${inCart ? ' — jo tha woh cart mein hai' : ''}.`;
+  if (option.available <= 0) return `${label}: out of stock${inCart ? ' — what was left is in the cart' : ''}.`;
   const unitName = option.kind === 'loose' ? baseUnit : option.name;
-  return `${label}: sirf ${formatQty(option.available, 3)} ${unitName} baqi hai${inCart ? ' (cart ke baad)' : ''}.`;
+  return `${label}: only ${formatQty(option.available, 3)} ${unitName} left${inCart ? ' (after the cart)' : ''}.`;
 }
 
 export interface PileLine {
@@ -218,13 +218,13 @@ export function pileShortages(lines: PileLine[], stockOf: (itemId: string) => { 
   });
 }
 
-/** "Anday loose: 30 pcs chahiye, 20 hain" for a shortage message. */
+/** "Eggs loose: need 30 pcs, have 20 pcs" for a shortage message. */
 export function shortageText(row: PileShortage, item: { name?: string; unit?: string; variants?: { id: string; name?: string }[] } | undefined): string {
   const name = item?.name || 'Product';
   if (row.pileId === 'loose') {
     const unit = item?.unit || '';
-    return `${name} loose: ${formatQty(row.need, 3)} ${unit} chahiye, ${formatQty(row.have, 3)} ${unit} hai`.replace(/\s+/g, ' ').trim();
+    return `${name} loose: need ${formatQty(row.need, 3)} ${unit}, have ${formatQty(row.have, 3)} ${unit}`.replace(/\s+/g, ' ').trim();
   }
   const pack = item?.variants?.find(v => v.id === row.pileId)?.name || 'pack';
-  return `${name} (${pack}): ${formatQty(row.need, 3)} chahiye, ${formatQty(row.have, 3)} hain`;
+  return `${name} (${pack}): need ${formatQty(row.need, 3)}, have ${formatQty(row.have, 3)}`;
 }

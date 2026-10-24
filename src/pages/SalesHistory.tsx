@@ -532,11 +532,11 @@ const SalesHistory: React.FC = () => {
       if (!isApprover && (!canReturn || settings.security?.returnNeedsApproval)) {
         const approvedBy = await requestApproval({
           permission: 'approvals:return',
-          title: 'Return ke liye manager approval',
+          title: 'Manager approval for return',
           reason: `Bill ${returnModalSale.bill_number || ''} — ${finalReason}`,
         });
         if (!approvedBy) return;
-        showToast(`Return ${approvedBy} ne approve kiya.`, 'success');
+        showToast(`Return approved by ${approvedBy}.`, 'success');
       }
 
       setIsProcessingReturn(true);
@@ -745,7 +745,7 @@ const SalesHistory: React.FC = () => {
                   All Invoices ({sales.length})
                 </QuickFilter>
                 <QuickFilter active={filterMode === 'Credit'} onClick={() => updateFilters({ mode: 'Credit' })}>
-                  Credit / Khata
+                  Credit
                 </QuickFilter>
                 <QuickFilter active={filterMode === 'Online'} onClick={() => updateFilters({ mode: 'Online' })}>
                   Online
