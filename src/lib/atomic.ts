@@ -32,20 +32,27 @@ export const adjustSupplierBalance = (supplierId: string, delta: number) =>
     p_delta: roundCurrency(delta)
   });
 
+/**
+ * Moves stock piles by a difference (never writes an absolute number). A delta that is not a finite
+ * number is refused here: NaN would reach Postgres as null and silently move nothing, or fail the
+ * whole call. Packs whose delta rounds to 0 are left out, so they keep their key untouched.
+ */
 export const adjustItemStock = (
   itemId: string,
   looseDelta: number,
   variantDeltas?: Record<string, number>
-) =>
-  supabase.rpc('adjust_item_stock', {
+) => {
+  const deltas = Object.entries(variantDeltas || {});
+  if (!Number.isFinite(Number(looseDelta)) || deltas.some(([, v]) => !Number.isFinite(Number(v)))) {
+    return Promise.resolve({ data: null, error: new Error('Stock ki tabdeeli ghalat number hai; kuch save nahi hua.') });
+  }
+  const packs = deltas.map(([k, v]) => [k, roundQuantity(v)] as const).filter(([, v]) => v !== 0);
+  return supabase.rpc('adjust_item_stock', {
     p_item_id: itemId,
     p_loose_delta: roundQuantity(looseDelta),
-    p_variant_deltas: variantDeltas
-      ? Object.fromEntries(
-          Object.entries(variantDeltas).map(([k, v]) => [k, roundQuantity(v)])
-        )
-      : null
+    p_variant_deltas: packs.length ? Object.fromEntries(packs) : null
   });
+};
 
 import { normalizeTransactionTimestamp } from './formatters';
 

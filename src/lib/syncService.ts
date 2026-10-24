@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { getOperatorSession } from './operatorAuth';
 import { saleItemSnapshot } from './saleSnapshot';
+import { saleLineMove } from './saleStockMove';
 import { db, OutboxActionType, generateUUID, roundCurrency, roundQuantity } from './db';
 import { loadRead, withDeadline } from './loadRequest';
 import { isPermanentSyncError, readyToRetry } from './syncErrors';
@@ -426,6 +427,12 @@ class SyncService {
             }
           }
 
+          // The server now reads the bill's own lines (pos_sync_order_effects, 20261024106000); these
+          // stock lines are what an older server moves, worked out by the same rule (saleLineMove).
+          const lineIds = [...new Set((order.items || []).map((item: any) => item.itemId || item.id).filter(Boolean))] as string[];
+          const cached = lineIds.length ? await db.catalog_cache.bulkGet(lineIds) : [];
+          const catalogById = new Map(cached.filter(Boolean).map(item => [item!.id, item!]));
+
           const { error: effectsError } = await loadRead(supabase.rpc('pos_sync_order_effects', {
             p_payload: {
               order_id: order.id,
@@ -442,13 +449,12 @@ class SyncService {
               drawer_id: order.drawer_id || null,
               cashier_id: order.cashier_id || null,
               items: (order.items || []).map((item: any) => {
-                const fromBase = item.deductFromBase === true;
-                const contains = Number(item.stockDeduction) > 0 ? Number(item.stockDeduction) : 1;
+                const move = saleLineMove(item, catalogById.get(item.itemId || item.id) || null);
                 return {
                   item_id: item.itemId || item.id,
                   name: item.name,
-                  qty: roundQuantity(fromBase ? (Number(item.qty) || 0) * contains : (item.qty || 0)),
-                  variant_id: fromBase ? null : (item.variantId || null)
+                  qty: roundQuantity(move.stockQty),
+                  variant_id: move.fromBase ? null : (move.variantId || null)
                 };
               })
             }

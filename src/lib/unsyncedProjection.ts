@@ -1,4 +1,5 @@
 import { db, LocalCatalogItem, LocalCustomer, LocalOrder, LocalOutboxItem, roundCurrency, roundQuantity } from './db';
+import { addMove, saleLineMove } from './saleStockMove';
 
 /**
  * Server snapshot + local journal.
@@ -457,10 +458,12 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
     }))
   ];
 
+  // Each unsynced bill line moves the pile the server will move for it (saleLineMove: the bill's
+  // snapshot, the catalog for old lines without a flag, loose for a pack the product no longer has).
+  const catalogById = new Map<string, any>((bases.items || []).map(item => [item.id, item]));
   const inventory = bases.inventory
     ? bases.inventory.map(inv => {
-        let quantity = roundQuantity(Number(inv.quantity) || 0);
-        const variant_stocks = { ...(inv.variant_stocks || {}) };
+        const move = { loose: roundQuantity(Number(inv.quantity) || 0), packs: { ...(inv.variant_stocks || {}) } as Record<string, number> };
         for (const order of work.orders) {
           if (order.status === 'Returned' || effectsOnServer(order)) continue;
           for (const line of order.items || []) {
@@ -468,16 +471,10 @@ export function projectLedger(bases: LedgerBases, work: UnsyncedWork): LedgerBas
             // By id only; "id or name" could also move a second row that shares the name.
             const matches = lineId ? (inv.item_id === lineId || inv.id === lineId) : inv.name === line.name;
             if (!matches) continue;
-            const qty = roundQuantity(Number(line.qty) || 0);
-            if (line.variantId && line.deductFromBase !== true) {
-              variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - qty);
-            } else {
-              const contains = line.deductFromBase === true ? (Number(line.stockDeduction) || 1) : 1;
-              quantity = roundQuantity(quantity - (qty * contains));
-            }
+            addMove(move, saleLineMove(line, catalogById.get(inv.item_id) || null), -1);
           }
         }
-        return { ...inv, quantity, variant_stocks };
+        return { ...inv, quantity: move.loose, variant_stocks: move.packs };
       })
     : null;
 

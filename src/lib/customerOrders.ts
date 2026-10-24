@@ -2,8 +2,45 @@ import { supabase } from './supabase';
 import { loadRead } from './loadRequest';
 import { CustomerOrder, CustomerOrderLine } from '../types';
 import { roundCurrency, roundQuantity } from './db';
+import { saleLineMove } from './saleStockMove';
 
 export const orderIsOpen = (order: CustomerOrder) => !['Completed', 'Cancelled'].includes(order.status);
+
+export interface OrderPileNeed {
+  itemId: string;
+  /** 'loose' or the ready-made pack id. */
+  pile: string;
+  /** What all the order's lines take from this pile: base units for loose, packs for a pack. */
+  need: number;
+  available: number;
+  short: boolean;
+}
+
+/**
+ * Stock the order needs, pile by pile, with every line added up: 20 loose eggs + 1 dozen take 32
+ * from the loose pile, which one line at a time never shows. Same pile rule as billing
+ * (saleLineMove; checkout_customer_order on the server). `shortLines[i]` is true when line i draws
+ * from a pile the order empties.
+ */
+export function orderStockNeeds(
+  lines: Pick<CustomerOrderLine, 'itemId' | 'qty' | 'variantId'>[],
+  items: { id: string; stock?: number | null; variant_stocks?: Record<string, number> | null; variants?: { id: string; quantity_in_base_unit?: number; deduct_from_base?: boolean }[] | null }[]
+): { piles: OrderPileNeed[]; shortLines: boolean[] } {
+  const byKey = new Map<string, OrderPileNeed>();
+  const lineKeys = lines.map(line => {
+    const item = items.find(i => i.id === line.itemId);
+    const move = saleLineMove({ qty: line.qty, variantId: line.variantId }, item ? { variants: item.variants || [] } : null);
+    const pile = move.fromBase ? 'loose' : move.variantId!;
+    const key = `${line.itemId}|${pile}`;
+    const available = pile === 'loose' ? Number(item?.stock) || 0 : Number(item?.variant_stocks?.[pile]) || 0;
+    const entry = byKey.get(key) || { itemId: line.itemId, pile, need: 0, available: roundQuantity(available), short: false };
+    entry.need = roundQuantity(entry.need + move.stockQty);
+    entry.short = entry.need > entry.available + 0.0005;
+    byKey.set(key, entry);
+    return key;
+  });
+  return { piles: [...byKey.values()], shortLines: lineKeys.map(key => byKey.get(key)!.short) };
+}
 /** Pakistan calendar date of an instant, so due/overdue checks match the shop day on any device zone. */
 export const localOrderDate = (date = new Date()) => date.toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' });
 export function orderAmounts(lines: CustomerOrderLine[], discount = 0, advancePaid = 0) {
