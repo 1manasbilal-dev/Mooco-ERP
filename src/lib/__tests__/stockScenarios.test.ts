@@ -353,6 +353,32 @@ describe('stock logs the app has written over time', () => {
     expect(logStockDelta({ difference: 0, notes: 'Variant Audit: Pack of 6 2 → 6 packs', details: { variant_id: 'p6', variant_delta: 4, loose_delta: 0 } })).toEqual({ looseDelta: 0, packDeltas: { p6: 4 } });
   });
 
+  it('reads the pack a shift-closing row names in its id (its loose columns hold that pack count)', () => {
+    const row = (id: string, difference: number) => ({ id, item_id: 'item_dahi_1', difference, old_quantity: 8, new_quantity: 8 + difference, notes: 'Shift Closing (Morning) on 2026-10-02' });
+    expect(logStockDelta(row('log_cnt_close_9_item_dahi_1_v_half', -2))).toEqual({ looseDelta: 0, packDeltas: { v_half: -2 } });
+    expect(logStockDelta(row('log_spoil_close_9_item_dahi_1_v_half', -1))).toEqual({ looseDelta: 0, packDeltas: { v_half: -1 } });
+    expect(logStockDelta(row('log_tea_close_9_item_dahi_1_loose', -0.5))).toEqual({ looseDelta: -0.5, packDeltas: {} });
+    // Customer scrapped returns reuse log_spoil_ but always carry details; details win.
+    expect(logStockDelta({ ...row('log_spoil_item_dahi_1_x', 0), details: { variant_id: 'v_kg', variant_delta: 0, loose_delta: 0 } })).toEqual({ looseDelta: 0, packDeltas: {} });
+    // Any other id is loose as before.
+    expect(logStockDelta(row('log_abc_item_dahi_1_v_half', -2)).looseDelta).toBe(-2);
+  });
+
+  it('posts a shift-closing pack count to that pack in the stock-profit report', () => {
+    const report = buildStockProfitReport({
+      items: [{ id: 'dahi', name: 'Dahi', unit: 'kg', stock: 10, cost_price: 200, variants: [{ id: 'tub', name: 'Tub', quantity_in_base_unit: 0.5 }], variant_stocks: { tub: 4 } }],
+      purchases: [], allocations: [], productionBatches: [], dailySupplyEntries: [], expenses: [], supplierTransactions: [], retailClosings: [], sales: [],
+      materialPurchases: [
+        { id: 'm1', date: '2026-10-01T04:00:00Z', item_id: 'dahi', item_name: 'Dahi', quantity: 10, rate: 200, total_amount: 2000, status: 'Completed' },
+        { id: 'm2', date: '2026-10-01T05:00:00Z', item_id: 'dahi', item_name: 'Dahi', quantity: 6, rate: 100, total_amount: 600, conversion_factor: 0.5, status: 'Completed', details: { variant_id: 'tub', stocked_as: 'packs' } },
+      ],
+      inventoryLogs: [{ id: 'log_cnt_c1_dahi_tub', date: '2026-10-02T15:00:00Z', item_id: 'dahi', item_name: 'Dahi (Tub)', old_quantity: 6, new_quantity: 4, difference: -2, reason: 'Stock Count Correction', notes: 'Shift Closing (Evening) on 2026-10-02' }],
+    }, '2026-10-01', '2026-10-20');
+    expect(report.issues.map(i => i.code)).toEqual([]);
+    expect(report.closingStock).toBe(10 * 200 + 4 * 100);
+    expect(report.stockLoss).toBe(200);
+  });
+
   it('reads a null loose_delta as missing, not as zero', () => {
     expect(logStockDelta({ difference: -3, details: { loose_delta: null } }).looseDelta).toBe(-3);
     expect(logStockDelta({ old_quantity: 10, new_quantity: 7.5 }).looseDelta).toBe(-2.5);

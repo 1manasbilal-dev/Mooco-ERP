@@ -214,17 +214,41 @@ function logNumber(value: unknown): number | undefined {
   return undefined;
 }
 
+/** Shift-closing rows (count, spoilage, wastage, staff tea) name their pile at the end of the id. */
+const CLOSING_LOG_ID = /^log_(cnt|spoil|waste|tea)_/;
+
+/**
+ * The pack a shift-closing row moved, read from its id `log_cnt_<closingId>_<itemId>_<pile>`, or
+ * undefined for a loose row or any other id. Those rows have no details, and for a pack pile their
+ * loose columns hold that pack's count.
+ */
+function closingLogPack(log: { id?: string | null; item_id?: string | null }): string | undefined {
+  const id = String(log.id || '');
+  const itemId = String(log.item_id || '');
+  if (!itemId || !CLOSING_LOG_ID.test(id)) return undefined;
+  const marker = `_${itemId}_`;
+  const at = id.lastIndexOf(marker);
+  if (at < 0) return undefined;
+  const pile = id.slice(at + marker.length);
+  return pile && pile !== 'loose' && pile !== 'base' ? pile : undefined;
+}
+
 /**
  * The pile moves recorded on one inventory_logs row, whatever shape it was written in:
  * `details.variant_deltas` (sales, production, opening stock), `details.variant_id` + `variant_delta`
- * (counts, purchases, returns, write-off) or no details at all (loose only, except the legacy pack
- * audits and day-close counts flagged by `unrecordedPacks`).
+ * (counts, purchases, returns, write-off) or no details at all (loose only, except shift-closing rows
+ * that name a pack in their id, and the legacy pack audits and day-close counts flagged by `unrecordedPacks`).
  */
-export function logStockDelta(log: { difference?: number | null; old_quantity?: number | null; new_quantity?: number | null; notes?: string | null; details?: Record<string, unknown> | null }): LogStockDelta {
+export function logStockDelta(log: { id?: string | null; item_id?: string | null; difference?: number | null; old_quantity?: number | null; new_quantity?: number | null; notes?: string | null; details?: Record<string, unknown> | null }): LogStockDelta {
   const details = (log.details && typeof log.details === 'object' ? log.details : {}) as { loose_delta?: unknown; variant_deltas?: unknown; variant_id?: unknown; variant_delta?: unknown };
   const detailLoose = logNumber(details.loose_delta);
   const structured = detailLoose !== undefined || typeof details.variant_id === 'string' || Boolean(details.variant_deltas && typeof details.variant_deltas === 'object');
   const notes = String(log.notes || '');
+  const closingPack = structured ? undefined : closingLogPack(log);
+  if (closingPack) {
+    const count = cleanQty(logNumber(log.difference) ?? ((logNumber(log.new_quantity) ?? 0) - (logNumber(log.old_quantity) ?? 0)));
+    return { looseDelta: 0, packDeltas: count !== 0 ? { [closingPack]: count } : {} };
+  }
   // Before pack moves rode in details, a pack audit wrote its pack-count change into the loose columns.
   const legacyPackAudit = !structured && /variant audit/i.test(notes);
   // The server day-close count writes the loose delta in the columns and only counts its pack moves in the notes.
