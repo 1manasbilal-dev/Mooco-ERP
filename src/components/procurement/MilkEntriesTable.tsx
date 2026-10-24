@@ -1,4 +1,4 @@
-import React, { memo, useDeferredValue, useMemo, useState } from 'react';
+import { memo, useDeferredValue, useMemo, useState } from 'react';
 import { History, Milk, PencilLine, RotateCcw } from 'lucide-react';
 import { useProgressiveList } from '../../hooks/useProgressiveList';
 import { cn } from '../../lib/cn';

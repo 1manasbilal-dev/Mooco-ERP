@@ -308,7 +308,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
     (hasPermission('suppliers') ? suppliers || [] : []).forEach(s => {
       if (!s) return;
-      const bal = (s as any).pending_balance ?? s.total_due ?? s.balance ?? 0;
+      const bal = s.pending_balance ?? s.balance ?? 0;
       items.push({
         id: `supp-${s.id}`,
         title: s.name || 'Supplier',
@@ -330,10 +330,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       items.push({
         id: `prod-${p.id}`,
         title: p.name || 'Product',
-        subtitle: `${(Array.isArray(p.category) ? p.category.join(', ') : p.category) || 'Product'} • ${formatCurrency((p.price || 0))} / ${p.unit || 'unit'}`,
+        subtitle: `${(Array.isArray(p.category) ? p.category.join(', ') : p.category) || 'Product'} • ${formatCurrency((p.selling_price || 0))} / ${p.unit || 'unit'}`,
         category: 'Products',
         icon: Package,
-        badge: `Rs ${p.price || 0}`,
+        badge: `Rs ${p.selling_price || 0}`,
         badgeColor: 'lime',
         action: () => {
           openTab({ id: 'pos', path: `/pos?product=${encodeURIComponent(p.name || p.id)}` });

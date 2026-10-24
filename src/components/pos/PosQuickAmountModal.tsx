@@ -1,4 +1,4 @@
-import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertCircle, ArrowRight, Check, Minus, Plus, ShoppingCart, X, Zap } from 'lucide-react';
 import { AvailableProduct } from './PosTypes';

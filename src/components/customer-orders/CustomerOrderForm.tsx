@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertCircle, ArrowRight, Banknote, ClipboardCheck, Package, Plus, ShoppingBag, Trash2, User, WifiOff } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useTabs } from '../../context/TabContext';
-import { CustomerOrder, CustomerOrderLine, CustomerOrderPaymentStatus } from '../../types';
+import { CustomerOrder, CustomerOrderLine, CustomerOrderPaymentStatus, ItemDefinition } from '../../types';
 import { generateInvoiceNumber, generateUUID, roundCurrency, roundQuantity } from '../../lib/db';
 import { localOrderDate, orderAmounts, postCustomerOrderAdvance, saveCustomerOrder, unpostedAdvance } from '../../lib/customerOrders';
 import { availableSellUnits, oneUnitLabel, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
@@ -90,7 +90,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
     inventory.forEach(row => { if (!map.has(row.item_id)) map.set(row.item_id, row); });
     return map;
   }, [inventory]);
-  const itemById = useMemo(() => new Map(items.map(item => [item.id, item])), [items]);
+  const itemById = useMemo(() => new Map<string, ItemDefinition>(items.map(item => [item.id, item])), [items]);
 
   const customerOptions: RichSelectOption[] = useMemo(() => {
     return customers

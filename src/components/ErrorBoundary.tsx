@@ -20,19 +20,12 @@ interface State {
 const isChunkLoadError = (error: Error | null) =>
   Boolean(error && /dynamically imported module|Importing a module script failed|Failed to fetch|ChunkLoadError|Loading chunk/i.test(`${error.name} ${error.message}`));
 
-class ErrorBoundary extends (Component as any) {
+class ErrorBoundary extends Component<Props, State> {
   state: State = {
     hasError: false,
     error: null,
     errorInfo: null
   };
-
-  props: Props;
-
-  constructor(props: Props) {
-    super(props);
-    this.props = props;
-  }
 
   public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error, errorInfo: null };

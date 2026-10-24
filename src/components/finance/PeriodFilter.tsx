@@ -1,4 +1,3 @@
-import React from 'react';
 import { Input, SegmentedControl } from '../ui';
 import type { SegmentOption } from '../ui';
 import type { PeriodPreset } from './ledger';

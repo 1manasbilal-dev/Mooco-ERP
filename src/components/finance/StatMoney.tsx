@@ -1,4 +1,3 @@
-import React from 'react';
 import { Money } from '../ui';
 import { useMediaQuery, BREAKPOINTS } from '../../hooks/useMediaQuery';
 import { cn } from '../../lib/cn';

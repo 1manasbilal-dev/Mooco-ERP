@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import { BookOpen, CheckCircle2, History, Plus, Trash2 } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useToast } from '../../context/ToastContext';
