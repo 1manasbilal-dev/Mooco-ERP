@@ -1,8 +1,10 @@
 import type { ReportData, ReportDefinition, ReportRow, Tone } from '../types';
 import {
-  COLOR, dayOf, daysBetween, findItem, groupSum, inRange, isPurchaseVoid, itemCategory, itemStock, lower, n, offsetDate, pct, r2, r3,
-  reportSales, saleLines, sum, topSlices
+  COLOR, dayOf, daysBetween, describeLogMoves, findItem, groupSum, inRange, isPurchaseVoid, itemCategory, itemStock, logMoves, lower, n,
+  offsetDate, packLabel, pct, r2, r3, reportSales, saleLines, sum, topSlices
 } from '../helpers';
+import { sellUnitContains } from '../../sellUnits';
+import { formatBaseQty, pileBreakdown, type StockReading } from '../../stockRules';
 import { AdjustmentReason } from '../../../types';
 import type { InventoryLog, ItemDefinition } from '../../../types';
 
@@ -10,6 +12,13 @@ const isActiveItem = (item: ItemDefinition) => item.isActive !== false;
 
 /** Stock from the live inventory row (shared with the Balance Sheet, so both value stock the same way). */
 const stockOf = (item: ItemDefinition, data: ReportData) => itemStock(data, item);
+
+/** "4 kg loose · 6 × 500 g tub · 2 × 1 kg tub (hidden)": every pile, never different pack sizes added together. */
+const pilesText = (reading: StockReading) => pileBreakdown(reading).join(' · ') || '—';
+
+/** A loose or pack pile still holds a count (hidden packs and old counts included). */
+const holdsStock = (reading: StockReading) =>
+  reading.strayCounts.length > 0 || reading.piles.some(p => (p.kind === 'loose' || p.kind === 'packed') && Math.abs(p.count) > 0.0005);
 
 const matchesCategory = (item: ItemDefinition, category?: string) => {
   if (!category) return true;
@@ -21,28 +30,10 @@ const isSaleProduct = (item: ItemDefinition) => !Array.isArray(item.item_type) |
 
 const typeText = (item: ItemDefinition) => (Array.isArray(item.item_type) ? item.item_type.join(', ') : String(item.item_type || '')) || '—';
 
-/** Base units moved by one log line: loose difference plus any pack deltas at their pack size. */
-function logBaseDelta(log: InventoryLog, item?: ItemDefinition): number {
-  const raw = log as any;
-  const details = raw.details || {};
-  const contains = (id?: string) => {
-    const v = (item?.variants || []).find(x => x.id === id);
-    return v && n(v.quantity_in_base_unit) > 0 ? n(v.quantity_in_base_unit) : 1;
-  };
-  let delta = n(log.difference);
-  const variantId = details.variant_id ?? raw.variant_id;
-  const variantDelta = n(details.variant_delta ?? raw.variant_delta);
-  if (variantId && variantDelta) delta += variantDelta * contains(variantId);
-  const deltas = details.variant_deltas ?? raw.variant_deltas;
-  if (deltas && typeof deltas === 'object') {
-    Object.entries(deltas as Record<string, unknown>).forEach(([id, count]) => { delta += n(count) * contains(id); });
-  }
-  return r3(delta);
-}
-
-/** Log reasons written by purchases, production, milk allocation and bill checkout. They are stock flows, not adjustments. */
+/** Log reasons written by purchases, production, milk allocation, bill checkout and opening stock. They are stock flows, not adjustments. */
 const SALE_REASONS = ['sale', 'pos sale'];
-const FLOW_REASONS = ['allocation', 'production', 'production usage', 'purchase', ...SALE_REASONS];
+const OPENING_REASON = lower(AdjustmentReason.OPENING_STOCK);
+const FLOW_REASONS = ['allocation', 'production', 'production usage', 'purchase', OPENING_REASON, ...SALE_REASONS];
 const isFlowReason = (reason?: string) => FLOW_REASONS.includes(lower(reason));
 /** Reasons that move stock without being a loss to the business. */
 const NOT_LOSS = [lower(AdjustmentReason.SUPPLY_RETURN), lower(AdjustmentReason.PRODUCTION_CANCEL)];
@@ -61,12 +52,11 @@ const REASON_TONES: Record<string, Tone> = {
 
 const isVoidPurchase = isPurchaseVoid;
 
-/** Pack size of a log's pack, or 1 for loose stock. */
+/** Pack size of a log's ready-made pack, or 1 for loose stock (multi-unit returns are saved in base units). */
 const logPackSize = (log: InventoryLog, item?: ItemDefinition) => {
-  const raw = log as any;
-  const packId = raw.details?.variant_id ?? raw.variant_id;
-  const pack = packId ? (item?.variants || []).find(v => v.id === packId) : undefined;
-  return pack && n(pack.quantity_in_base_unit) > 0 ? n(pack.quantity_in_base_unit) : 1;
+  const packId = log.details?.variant_id ?? (log as any).variant_id;
+  const pack = packId ? (item?.variants || []).find(v => v.id === packId && v.deduct_from_base !== true) : undefined;
+  return pack ? sellUnitContains(pack) : 1;
 };
 
 /** Base units of a customer return that was scrapped: it left stock at the sale and never came back. */
@@ -105,8 +95,6 @@ function soldByItem(data: ReportData, from: string, to: string) {
   return map;
 }
 
-const fmtQty = (value: number) => String(r3(value));
-
 export const inventoryReports: ReportDefinition[] = [
   {
     id: 'stock_valuation',
@@ -123,29 +111,39 @@ export const inventoryReports: ReportDefinition[] = [
     build: (data, f) => {
       let missingCost = 0;
       let inactiveHeld = 0;
+      let hiddenHeld = 0;
+      let strayHeld = 0;
+      let unpriced = 0;
       const valued = data.items.filter(item => matchesCategory(item, f.category))
         .map(item => ({ item, sv: stockOf(item, data) }))
         .filter(({ item, sv }) => {
           if (isActiveItem(item)) return true;
-          const holds = Math.abs(sv.looseQty) > 0.0005 || sv.packs.some(p => Math.abs(p.count) > 0.0005);
+          const holds = holdsStock(sv.reading);
           if (holds) inactiveHeld++;
           return holds;
         });
       const rows: ReportRow[] = valued.map(({ item, sv }) => {
+        const { reading } = sv;
         if (sv.costMissing) missingCost++;
-        const packs = sv.packs.filter(p => p.count !== 0).map(p => `${fmtQty(p.count)} × ${p.name}`).join(', ');
-        const profit = r2(sv.retailValue - sv.costValue);
-        const negative = sv.looseQty < 0 || sv.packs.some(p => p.count < 0);
+        if (reading.hiddenPacks.length) hiddenHeld++;
+        if (reading.strayCounts.length) strayHeld++;
+        // Raw and packaging materials usually have no selling price: no retail value, not a loss of their whole cost.
+        const noPrice = sv.retailValue <= 0 && sv.costValue > 0;
+        if (noPrice) unpriced++;
+        const profit = noPrice ? null : r2(sv.retailValue - sv.costValue);
+        const negative = reading.status === 'minus';
+        const loose = reading.piles.find(p => p.kind === 'loose')?.count || 0;
         return {
-          item: isActiveItem(item) ? item.name : `${item.name} (inactive)`, itemId: item.id, category: itemCategory(item), type: typeText(item), unit: item.unit || 'unit',
-          loose: r3(sv.looseQty), packs: packs || '—', total: r3(sv.totalBaseQty), rate: r2(sv.costRate),
-          cost: r2(sv.costValue), retail: r2(sv.retailValue), profit, margin: pct(profit, sv.retailValue),
-          _tone: negative ? 'bad' : sv.costMissing ? 'warn' : undefined,
+          item: isActiveItem(item) ? item.name : `${item.name} (inactive)`, itemId: item.id, category: itemCategory(item), type: typeText(item), unit: reading.unit,
+          loose: r3(loose), piles: pilesText(reading), total: r3(reading.totalBase), sellable: r3(reading.sellableBase), rate: r2(sv.costRate),
+          cost: r2(sv.costValue), retail: noPrice ? null : r2(sv.retailValue), profit, margin: profit === null ? null : pct(profit, sv.retailValue),
+          _tone: negative ? 'bad' : sv.costMissing || reading.strayCounts.length ? 'warn' : undefined,
           _drill: { report: 'item_sales_detail', filters: { itemId: item.id }, label: 'Sales of this item' },
         };
       });
       const cost = sum(rows, r => n(r.cost));
       const retail = sum(rows, r => n(r.retail));
+      const potential = sum(rows, r => n(r.profit));
       const inStock = rows.filter(r => n(r.total) > 0).length;
       const negative = rows.filter(r => r._tone === 'bad').length;
       const pie = topSlices(groupSum(rows, r => String(r.category), r => n(r.cost)));
@@ -153,8 +151,8 @@ export const inventoryReports: ReportDefinition[] = [
       return {
         kpis: [
           { key: 'cost', label: 'Stock at cost', value: cost, format: 'money', tone: 'info' },
-          { key: 'retail', label: 'Stock at retail', value: retail, format: 'money' },
-          { key: 'profit', label: 'Potential profit', value: r2(retail - cost), format: 'money', tone: retail - cost >= 0 ? 'good' : 'bad', hint: `${pct(retail - cost, retail)}% of retail` },
+          { key: 'retail', label: 'Stock at retail', value: retail, format: 'money', hint: unpriced ? 'Items with a selling price' : undefined },
+          { key: 'profit', label: 'Potential profit', value: potential, format: 'money', tone: potential >= 0 ? 'good' : 'bad', hint: `${pct(potential, retail)}% of retail` },
           { key: 'items', label: 'Items in stock', value: inStock, format: 'number' },
           { key: 'negative', label: 'Negative stock', value: negative, format: 'number', tone: negative ? 'bad' : 'good', inverse: true },
         ],
@@ -169,9 +167,10 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'category', label: 'Category' },
             { key: 'type', label: 'Type', hidden: true },
             { key: 'unit', label: 'Unit' },
-            { key: 'loose', label: 'Loose', format: 'qty', signed: true },
-            { key: 'packs', label: 'Packs', wrap: true },
-            { key: 'total', label: 'Total (base)', format: 'qty' },
+            { key: 'loose', label: 'Loose', format: 'qty', signed: true, hidden: true },
+            { key: 'piles', label: 'Stock by pile', wrap: true },
+            { key: 'total', label: 'Total (base)', format: 'qty', signed: true },
+            { key: 'sellable', label: 'Sellable now', format: 'qty', hidden: true },
             { key: 'rate', label: 'Cost rate', format: 'money' },
             { key: 'cost', label: 'Value at cost', format: 'money', total: true },
             { key: 'retail', label: 'Value at retail', format: 'money', total: true },
@@ -184,7 +183,10 @@ export const inventoryReports: ReportDefinition[] = [
         notes: [
           missingCost ? { tone: 'warn' as const, text: `${missingCost} item(s) have stock but no cost price, so they add nothing to stock value. Set cost prices in Product Catalog.` } : null,
           negative ? { tone: 'bad' as const, text: `${negative} item(s) show negative stock. Negative stock is valued at zero. Fix it with a stock count.` } : null,
+          hiddenHeld ? { tone: 'info' as const, text: `${hiddenHeld} item(s) have hidden packs that still hold stock. They are counted and valued, but the POS can't sell them: count them to 0 or show the pack again.` } : null,
+          strayHeld ? { tone: 'warn' as const, text: `${strayHeld} item(s) have an old count on a dozen/tray-type unit or a deleted pack. It is not stock and is not valued: clear it with a stock count.` } : null,
           inactiveHeld ? { tone: 'info' as const, text: `${inactiveHeld} inactive item(s) still hold stock and are included.` } : null,
+          unpriced ? { tone: 'info' as const, text: `${unpriced} item(s) have no selling price (raw or packaging material), so they count at cost only and add nothing to retail value or potential profit.` } : null,
         ].filter((x): x is { tone: 'warn' | 'bad' | 'info'; text: string } => Boolean(x)),
       };
     },
@@ -192,40 +194,47 @@ export const inventoryReports: ReportDefinition[] = [
   {
     id: 'low_stock',
     title: 'Low Stock & Reorder',
-    subtitle: 'Items at or below reorder level, with days of cover and a suggested order',
+    subtitle: 'Products low, out of stock or in minus, with days of cover and a suggested order',
     category: 'inventory',
     icon: 'PackageMinus',
     keywords: ['reorder', 'out of stock', 'shortage', 'kam stock'],
     snapshot: true,
     filters: ['category'],
+    // Same rule as the dashboard card and Inventory: readStock(...).status, active products only.
     build: (data, f) => {
       const from = offsetDate(data.today, -29);
       const sold = soldByItem(data, from, data.today);
       const rows: ReportRow[] = [];
       data.items.filter(isActiveItem).filter(item => matchesCategory(item, f.category)).forEach(item => {
-        const sv = stockOf(item, data);
-        const stock = r3(sv.totalBaseQty);
-        const reorder = n(item.reorder_level);
-        const out = stock <= 0;
-        const low = reorder > 0 && stock <= reorder;
-        if (!low && !(out && isSaleProduct(item))) return;
+        const { reading } = stockOf(item, data);
+        if (reading.status === 'ok') return;
+        const stock = r3(reading.totalBase);
+        const onHand = Math.max(0, stock);
+        const sellable = r3(Math.max(0, reading.sellableBase));
+        const reorder = reading.reorderLevel;
         const avg = r3(n(sold.get(item.id)?.qty) / 30);
-        const shortfall = r3(Math.max(0, reorder - stock));
-        const cover = avg > 0 ? Math.round((Math.max(0, stock) / avg) * 10) / 10 : null;
-        const suggested = r3(Math.max(shortfall, avg * 30 - stock, 0));
-        const status = out ? 'Out' : stock <= reorder / 2 || (cover !== null && cover < 3) ? 'Critical' : 'Low';
+        const shortfall = r3(Math.max(0, reorder - onHand));
+        const cover = avg > 0 ? Math.round((sellable / avg) * 10) / 10 : null;
+        const suggested = r3(Math.max(shortfall, avg * 30 - onHand, 0));
+        const status = reading.status === 'minus' ? 'Minus'
+          : reading.status === 'out' ? 'Out'
+            : stock <= reorder / 2 || (cover !== null && cover < 3) ? 'Critical' : 'Low';
+        const why = reading.status === 'minus' ? 'A pile is below zero: fix it with a stock count'
+          : reading.status === 'out' ? (stock > 0 ? `None of it can be sold now: ${pilesText(reading)}` : 'Nothing on hand')
+            : `At or below reorder level (${formatBaseQty(reorder, reading.unit)})`;
         rows.push({
-          item: item.name, category: itemCategory(item), unit: item.unit || 'unit', stock, reorder, shortfall, avg, cover: cover ?? 'No sales', suggested,
-          cost: r2(suggested * n(item.cost_price)), status,
-          _tone: status === 'Out' ? 'bad' : status === 'Critical' ? 'warn' : undefined,
+          item: item.name, category: itemCategory(item), unit: reading.unit, stock, sellable, piles: pilesText(reading), reorder, shortfall, avg,
+          cover: cover ?? 'No sales', suggested, cost: r2(suggested * n(item.cost_price)), status, why,
+          _tone: status === 'Out' || status === 'Minus' ? 'bad' : status === 'Critical' ? 'warn' : undefined,
           _drill: { report: 'item_sales_detail', filters: { itemId: item.id }, label: 'Sales of this item' },
         });
       });
-      const rank: Record<string, number> = { Out: 0, Critical: 1, Low: 2 };
+      const rank: Record<string, number> = { Minus: 0, Out: 1, Critical: 2, Low: 3 };
       rows.sort((a, b) => rank[String(a.status)] - rank[String(b.status)] || (typeof a.cover === 'number' ? a.cover : 9999) - (typeof b.cover === 'number' ? b.cover : 9999));
       const count = (s: string) => rows.filter(r => r.status === s).length;
       return {
         kpis: [
+          { key: 'minus', label: 'Minus stock', value: count('Minus'), format: 'number', tone: count('Minus') ? 'bad' : 'good', inverse: true },
           { key: 'out', label: 'Out of stock', value: count('Out'), format: 'number', tone: count('Out') ? 'bad' : 'good', inverse: true },
           { key: 'critical', label: 'Critical', value: count('Critical'), format: 'number', tone: count('Critical') ? 'warn' : 'good', inverse: true },
           { key: 'low', label: 'Low', value: count('Low'), format: 'number', inverse: true },
@@ -243,18 +252,21 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'category', label: 'Category', hidden: true },
             { key: 'stock', label: 'Stock', format: 'qty', signed: true },
             { key: 'unit', label: 'Unit' },
+            { key: 'sellable', label: 'Sellable now', format: 'qty', hidden: true },
+            { key: 'piles', label: 'Stock by pile', wrap: true, hidden: true },
             { key: 'reorder', label: 'Reorder level', format: 'qty' },
             { key: 'shortfall', label: 'Shortfall', format: 'qty' },
             { key: 'avg', label: 'Avg daily sale', format: 'qty' },
             { key: 'cover', label: 'Days of cover', align: 'right' },
             { key: 'suggested', label: 'Suggested order', format: 'qty' },
             { key: 'cost', label: 'Order value', format: 'money', total: true },
-            { key: 'status', label: 'Status', format: 'badge', tones: { Out: 'bad', Critical: 'warn', Low: 'info' } },
+            { key: 'status', label: 'Status', format: 'badge', tones: { Minus: 'bad', Out: 'bad', Critical: 'warn', Low: 'info' } },
+            { key: 'why', label: 'Why', wrap: true },
           ],
           rows,
-          emptyText: 'Nothing is below its reorder level.',
+          emptyText: 'No product is low, out or in minus.',
         }],
-        notes: [{ tone: 'info', text: 'Average daily sale uses the last 30 days. Suggested order covers 30 days of sales, and never less than the shortfall. Items with no reorder level only show here when they are out of stock.' }],
+        notes: [{ tone: 'info', text: 'Same rule as the dashboard and Inventory. Minus: a loose or pack pile is below zero. Out: nothing on hand, or for sale products nothing the POS can sell (hidden packs and loose stock with loose sale off can\'t be sold). Low: total stock, packs included, at or below the reorder level; reorder level 0 means no low alert. Inactive products are left out. Average daily sale uses the last 30 days; days of cover use sellable stock; the suggested order covers 30 days of sales and never less than the shortfall.' }],
       };
     },
   },
@@ -269,11 +281,14 @@ export const inventoryReports: ReportDefinition[] = [
     filters: ['itemId'],
     build: (data, f) => {
       const rows: ReportRow[] = [];
+      let unknownPacks = 0;
       data.inventoryLogs.forEach(log => {
         if (!inRange(log.date, f) || isFlowReason(log.reason)) return;
         if (f.itemId && log.item_id !== f.itemId) return;
         const item = findItem(data.items, log.item_id, log.item_name);
-        const diff = logBaseDelta(log, item);
+        const moves = logMoves(log, item);
+        if (moves.unknownPackDelta) unknownPacks++;
+        const diff = moves.baseDelta;
         const value = r2(diff * n(item?.cost_price));
         // A scrapped customer return changes no stock today (it left at the sale), but the goods are lost.
         const scrapped = scrappedBaseQty(log, item);
@@ -283,9 +298,11 @@ export const inventoryReports: ReportDefinition[] = [
         const isLoss = lostStock || scrapped > 0;
         rows.push({
           date: log.date, item: item?.name || log.item_name || 'Item', unit: item?.unit || '', reason: log.reason || 'Not given',
-          old: r3(n(log.old_quantity)), new: r3(n(log.new_quantity)), diff, value,
-          loss: isLoss ? r2(stockLoss + scrappedLoss) : 0, notes: log.notes || '',
-          _tone: isLoss ? 'bad' : undefined,
+          change: describeLogMoves(moves, item),
+          // Pack rows saved pack counts (or nothing useful) in these columns, so they only show for loose-only rows.
+          old: moves.looseColumns ? r3(n(log.old_quantity)) : null, new: moves.looseColumns ? r3(n(log.new_quantity)) : null,
+          diff, value, loss: isLoss ? r2(stockLoss + scrappedLoss) : 0, notes: log.notes || '',
+          _tone: isLoss ? 'bad' : moves.unknownPackDelta ? 'warn' : undefined,
         });
       });
       const loss = sum(rows, r => n(r.loss));
@@ -310,10 +327,11 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'date', label: 'Date / time', format: 'datetime' },
             { key: 'item', label: 'Item' },
             { key: 'reason', label: 'Reason', format: 'badge', tones: REASON_TONES },
-            { key: 'old', label: 'Old qty', format: 'qty' },
-            { key: 'new', label: 'New qty', format: 'qty' },
+            { key: 'change', label: 'Change by pile', wrap: true },
+            { key: 'old', label: 'Loose before', format: 'qty', hidden: true },
+            { key: 'new', label: 'Loose after', format: 'qty', hidden: true },
             { key: 'diff', label: 'Change (base)', format: 'qty', signed: true },
-            { key: 'unit', label: 'Unit', hidden: true },
+            { key: 'unit', label: 'Unit' },
             { key: 'value', label: 'Value at cost', format: 'money', total: true, signed: true },
             { key: 'loss', label: 'Loss', format: 'money', total: true, hidden: true },
             { key: 'notes', label: 'Notes', wrap: true },
@@ -321,7 +339,10 @@ export const inventoryReports: ReportDefinition[] = [
           rows,
           emptyText: 'No stock adjustments in this period.',
         }],
-        notes: [{ tone: 'info', text: 'Sales, purchases, production and milk allocation entries are left out (see Item Movement Summary). Value uses today\'s cost price. Supplier returns are not counted as loss. Scrapped customer returns count as loss at cost, though they do not change stock.' }],
+        notes: [
+          { tone: 'info' as const, text: 'Sales, purchases, production, milk allocation and opening stock entries are left out (see Item Movement Summary). Change (base) adds loose stock and each pack × its size. Value uses today\'s cost price. Supplier returns are not counted as loss. Scrapped customer returns count as loss at cost, though they do not change stock.' },
+          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} old pack count change(s) did not save which pack was counted, so they add nothing to Change (base) or value.` }] : []),
+        ],
       };
     },
   },
@@ -341,17 +362,18 @@ export const inventoryReports: ReportDefinition[] = [
       const days = daysBetween(f.from, f.to);
       const rows: ReportRow[] = [];
       data.items.filter(isActiveItem).filter(item => matchesCategory(item, f.category)).forEach(item => {
-        if (Array.isArray(item.item_type) && item.item_type.length && !item.item_type.includes('Sale product')) return;
+        if (!isSaleProduct(item)) return;
         const sv = stockOf(item, data);
-        if (sv.totalBaseQty <= 0) return;
+        const stock = r3(sv.reading.totalBase);
+        if (stock <= 0) return;
         const sold = r3(n(inRangeSold.get(item.id)?.qty));
         const last = allSold.get(item.id)?.last || '';
-        const status = sold <= 0 ? 'Dead' : sold < sv.totalBaseQty * 0.2 ? 'Slow' : 'Moving';
+        const status = sold <= 0 ? 'Dead' : sold < stock * 0.2 ? 'Slow' : 'Moving';
         const avg = sold / days;
         rows.push({
-          item: item.name, category: itemCategory(item), unit: item.unit || 'unit', stock: r3(sv.totalBaseQty), sold,
+          item: item.name, category: itemCategory(item), unit: sv.reading.unit, stock, piles: pilesText(sv.reading), sold,
           last: last || null, since: last ? daysBetween(last, data.today) - 1 : 'Never',
-          cover: avg > 0 ? Math.round(sv.totalBaseQty / avg) : 'No sales', value: r2(sv.costValue), status,
+          cover: avg > 0 ? Math.round(stock / avg) : 'No sales', value: r2(sv.costValue), status,
           _tone: status === 'Dead' ? 'bad' : status === 'Slow' ? 'warn' : undefined,
           _drill: { report: 'item_sales_detail', filters: { itemId: item.id }, label: 'Sales of this item' },
         });
@@ -380,6 +402,7 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'category', label: 'Category', hidden: true },
             { key: 'stock', label: 'Stock', format: 'qty' },
             { key: 'unit', label: 'Unit' },
+            { key: 'piles', label: 'Stock by pile', wrap: true, hidden: true },
             { key: 'sold', label: 'Sold in period', format: 'qty' },
             { key: 'last', label: 'Last sale', format: 'date' },
             { key: 'since', label: 'Days since sale', align: 'right' },
@@ -390,7 +413,7 @@ export const inventoryReports: ReportDefinition[] = [
           rows,
           emptyText: 'No sale products in stock.',
         }],
-        notes: [{ tone: 'info', text: 'Dead: no sale in the period. Slow: sold less than 20% of the stock now on hand. Raw and packaging materials are left out.' }],
+        notes: [{ tone: 'info', text: 'Dead: no sale in the period. Slow: sold less than 20% of the stock now on hand. Stock is loose plus every pack × its size (hidden packs too), valued like Stock Valuation. Raw and packaging materials are left out.' }],
       };
     },
   },
@@ -403,13 +426,16 @@ export const inventoryReports: ReportDefinition[] = [
     keywords: ['stock movement', 'stock ledger', 'in out', 'aamad kharch'],
     filters: ['itemId', 'category'],
     build: (data, f) => {
-      type Move = { purchased: number; produced: number; allocated: number; sold: number; used: number; adjusted: number };
+      type Move = { opening: number; purchased: number; produced: number; allocated: number; sold: number; used: number; adjusted: number };
       const map = new Map<string, Move>();
       const get = (id: string) => {
         let row = map.get(id);
-        if (!row) { row = { purchased: 0, produced: 0, allocated: 0, sold: 0, used: 0, adjusted: 0 }; map.set(id, row); }
+        if (!row) { row = { opening: 0, purchased: 0, produced: 0, allocated: 0, sold: 0, used: 0, adjusted: 0 }; map.set(id, row); }
         return row;
       };
+      // Pack piles per pack size, straight from the stock logs (every reason), in packs.
+      const packMoves = new Map<string, { itemId: string; packId: string; in: number; out: number }>();
+      let unknownPacks = 0;
       const wanted = (item?: ItemDefinition) => Boolean(item) && (!f.itemId || item!.id === f.itemId) && matchesCategory(item!, f.category);
 
       data.materialPurchases.forEach(p => {
@@ -434,6 +460,14 @@ export const inventoryReports: ReportDefinition[] = [
         if (!inRange(log.date, f)) return;
         const item = findItem(data.items, log.item_id, log.item_name);
         if (!wanted(item)) return;
+        const moves = logMoves(log, item);
+        if (moves.unknownPackDelta) unknownPacks++;
+        Object.entries(moves.packDeltas).forEach(([packId, d]) => {
+          const key = `${item!.id}|${packId}`;
+          const pack = packMoves.get(key) || { itemId: item!.id, packId, in: 0, out: 0 };
+          if (d > 0) pack.in += d; else pack.out -= d;
+          packMoves.set(key, pack);
+        });
         const reason = lower(log.reason);
         if (reason === 'purchase' || reason === 'production') return; // already counted from purchases and batches
         // Bills give "sold" net of refunds and purchase lines are net of supplier returns,
@@ -442,24 +476,37 @@ export const inventoryReports: ReportDefinition[] = [
         const manualAudit = /Loose Stock Audit|Variant Audit/.test(String(log.notes || ''));
         if (!manualAudit && (reason === lower(AdjustmentReason.SALES_RETURN) || reason === lower(AdjustmentReason.SUPPLY_RETURN))) return;
         // A scrapped customer return is netted out of "sold" but never came back to the shelf.
-        const delta = r3(logBaseDelta(log, item) - scrappedBaseQty(log, item));
+        const delta = r3(moves.baseDelta - scrappedBaseQty(log, item));
         const row = get(item!.id);
-        if (reason === 'allocation') row.allocated += delta;
+        if (reason === OPENING_REASON) row.opening += delta;
+        else if (reason === 'allocation') row.allocated += delta;
         else if (reason === lower(AdjustmentReason.PRODUCTION_USAGE)) row.used += delta;
         else row.adjusted += delta;
       });
 
       const rows: ReportRow[] = [...map.entries()].map(([id, m]): ReportRow => {
         const item = findItem(data.items, id)!;
-        const net = m.purchased + m.produced + m.allocated - m.sold + m.used + m.adjusted;
+        const { reading } = stockOf(item, data);
+        const net = m.opening + m.purchased + m.produced + m.allocated - m.sold + m.used + m.adjusted;
         return {
-          item: item.name, category: itemCategory(item), unit: item.unit || 'unit',
-          purchased: r3(m.purchased), produced: r3(m.produced), allocated: r3(m.allocated), sold: r3(m.sold),
-          used: r3(m.used), adjusted: r3(m.adjusted), net: r3(net), stock: r3(stockOf(item, data).totalBaseQty),
+          item: item.name, category: itemCategory(item), unit: reading.unit,
+          opening: r3(m.opening), purchased: r3(m.purchased), produced: r3(m.produced), allocated: r3(m.allocated), sold: r3(m.sold),
+          used: r3(m.used), adjusted: r3(m.adjusted), net: r3(net), stock: r3(reading.totalBase), piles: pilesText(reading),
           _tone: net < 0 ? 'warn' : undefined,
           _drill: { report: 'item_sales_detail', filters: { itemId: id }, label: 'Sales of this item' },
         };
-      }).filter(r => ['purchased', 'produced', 'allocated', 'sold', 'used', 'adjusted'].some(k => n(r[k]) !== 0));
+      }).filter(r => ['opening', 'purchased', 'produced', 'allocated', 'sold', 'used', 'adjusted'].some(k => n(r[k]) !== 0));
+
+      const packRows: ReportRow[] = [...packMoves.values()].map((p): ReportRow => {
+        const item = findItem(data.items, p.itemId)!;
+        const pile = stockOf(item, data).reading.piles.find(x => x.id === p.packId && (x.kind === 'packed' || x.kind === 'orphan'));
+        const pack = (item.variants || []).find(v => v.id === p.packId);
+        return {
+          item: item.name, pack: packLabel(item, p.packId), size: pack && pack.deduct_from_base !== true ? formatBaseQty(sellUnitContains(pack), item.unit || '') : '—',
+          in: r3(p.in), out: r3(p.out), net: r3(p.in - p.out), now: pile ? r3(pile.count) : 0,
+          _tone: pile && pile.count < 0 ? 'bad' : !pack || pack.deduct_from_base === true ? 'warn' : undefined,
+        };
+      }).filter(r => n(r.in) !== 0 || n(r.out) !== 0);
       const top = [...rows].sort((a, b) => (n(b.purchased) + n(b.produced) + n(b.sold)) - (n(a.purchased) + n(a.produced) + n(a.sold))).slice(0, 12);
       return {
         kpis: [
@@ -470,7 +517,7 @@ export const inventoryReports: ReportDefinition[] = [
         ],
         charts: [{
           id: 'flow', title: 'In vs out (base units)', type: 'bar', wide: true, xKey: 'name', format: 'qty',
-          data: top.map(r => ({ name: r.item, in: r3(n(r.purchased) + n(r.produced) + Math.max(0, n(r.allocated))), out: r3(n(r.sold) - Math.min(0, n(r.used))) })),
+          data: top.map(r => ({ name: r.item, in: r3(Math.max(0, n(r.opening)) + n(r.purchased) + n(r.produced) + Math.max(0, n(r.allocated))), out: r3(n(r.sold) - Math.min(0, n(r.used))) })),
           series: [{ key: 'in', label: 'In', color: COLOR.purchase }, { key: 'out', label: 'Out', color: COLOR.sales }],
         }],
         tables: [{
@@ -479,6 +526,7 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'item', label: 'Item' },
             { key: 'category', label: 'Category', hidden: true },
             { key: 'unit', label: 'Unit' },
+            { key: 'opening', label: 'Opening stock', format: 'qty', signed: true },
             { key: 'purchased', label: 'Purchased', format: 'qty' },
             { key: 'produced', label: 'Produced', format: 'qty' },
             { key: 'allocated', label: 'Milk allocated', format: 'qty', signed: true, hidden: true },
@@ -486,12 +534,30 @@ export const inventoryReports: ReportDefinition[] = [
             { key: 'used', label: 'Used in production', format: 'qty', signed: true },
             { key: 'adjusted', label: 'Adjustments', format: 'qty', signed: true },
             { key: 'net', label: 'Net movement', format: 'qty', signed: true },
-            { key: 'stock', label: 'Stock now', format: 'qty' },
+            { key: 'stock', label: 'Stock now', format: 'qty', signed: true },
+            { key: 'piles', label: 'Stock by pile', wrap: true, hidden: true },
           ],
           rows,
           emptyText: 'No stock movement in this period.',
+        }, {
+          id: 'packs', title: 'Pack movement', subtitle: 'Ready-made packs in and out, per pack size (counts, not base units)', showTotals: false,
+          sort: { key: 'out', dir: 'desc' },
+          columns: [
+            { key: 'item', label: 'Item' },
+            { key: 'pack', label: 'Pack' },
+            { key: 'size', label: 'Size' },
+            { key: 'in', label: 'In', format: 'qty' },
+            { key: 'out', label: 'Out', format: 'qty' },
+            { key: 'net', label: 'Net', format: 'qty', signed: true },
+            { key: 'now', label: 'Count now', format: 'qty', signed: true },
+          ],
+          rows: packRows,
+          emptyText: 'No pack moved in this period.',
         }],
-        notes: [{ tone: 'info', text: 'This is a movement summary, not an audited stock ledger. Quantities are in each item\'s base unit. Opening stock is not shown, so net movement need not match stock now.' }],
+        notes: [
+          { tone: 'info' as const, text: 'This is a movement summary, not an audited stock ledger. Quantities are in each item\'s base unit; packs count at their size. Opening stock entries are shown as an intake; stock held before the period is not, so net movement need not match stock now. Pack movement comes from the stock logs (sales saved before 19 Oct 2026 recorded no pack detail).' },
+          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} old pack count change(s) did not save which pack was counted and are left out.` }] : []),
+        ],
       };
     },
   },
