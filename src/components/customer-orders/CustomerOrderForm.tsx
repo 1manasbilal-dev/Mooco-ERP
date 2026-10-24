@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertCircle, ArrowRight, Banknote, ClipboardCheck, Package, Plus, ShoppingBag, Trash2, User, WifiOff } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useTabs } from '../../context/TabContext';
@@ -6,6 +6,7 @@ import { CustomerOrder, CustomerOrderLine, CustomerOrderPaymentStatus, ItemDefin
 import { generateInvoiceNumber, generateUUID, roundCurrency, roundQuantity } from '../../lib/db';
 import { localOrderDate, orderAmounts, postCustomerOrderAdvance, saveCustomerOrder, unpostedAdvance } from '../../lib/customerOrders';
 import { availableSellUnits, oneUnitLabel, sellUnitContains, sellUnitPrice } from '../../lib/sellUnits';
+import { orderPileLines, pileShortages, shortageText, sumByPile } from '../pos/posStock';
 import { formatCurrency, formatQty } from '../../lib/formatters';
 import { cn } from '../../lib/cn';
 import { RichSelect, RichSelectOption } from '../RichSelect';
@@ -81,7 +82,8 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
 
   const catalog = useMemo(() => items.filter(item => item.isActive && item.item_type?.includes('Sale product') && !item.item_type.includes('Packaging material')).flatMap(item => [
     ...(item.allow_loose_sale !== false ? [{ key: `${item.id}|base`, item, variant: undefined, label: `${item.name} · ${item.unit}`, price: item.selling_price }] : []),
-    ...(item.variants || []).filter(variant => variant.isActive).map(variant => ({ key: `${item.id}|${variant.id}`, item, variant, label: `${item.name} · ${oneUnitLabel(variant.name, sellUnitContains(variant), item.unit)}`, price: sellUnitPrice(item.selling_price, sellUnitContains(variant), variant.selling_price) }))
+    // A variant saved without the flag is active, as checkout_customer_order reads it.
+    ...(item.variants || []).filter(variant => variant.isActive !== false).map(variant =>({ key: `${item.id}|${variant.id}`, item, variant, label: `${item.name} · ${oneUnitLabel(variant.name, sellUnitContains(variant), item.unit)}`, price: sellUnitPrice(item.selling_price, sellUnitContains(variant), variant.selling_price) }))
   ]), [items]);
 
   // One lookup table instead of a scan of the whole inventory for every product and line.
@@ -91,6 +93,12 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
     return map;
   }, [inventory]);
   const itemById = useMemo(() => new Map<string, ItemDefinition>(items.map(item => [item.id, item])), [items]);
+  // Loose pile and pack counts; the catalog row's copy stands in when a product has no inventory row yet.
+  const stockOf = useCallback((itemId: string) => {
+    const row = stockByItem.get(itemId);
+    const item = itemById.get(itemId);
+    return { loose: Number(row ? row.quantity : item?.stock) || 0, packs: (row ? row.variant_stocks : item?.variant_stocks) || {} };
+  }, [stockByItem, itemById]);
 
   const customerOptions: RichSelectOption[] = useMemo(() => {
     return customers
@@ -121,8 +129,8 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
   const productOptions: RichSelectOption[] = useMemo(() => {
     const customer = customers.find(c => c.id === draft.customer_id);
     return catalog.map(row => {
-      const stock = stockByItem.get(row.item.id);
-      const available = availableSellUnits(Number(stock?.quantity) || 0, Number(stock?.variant_stocks?.[row.variant?.id || ''] || 0), row.variant);
+      const stock = stockOf(row.item.id);
+      const available = availableSellUnits(stock.loose, Number(stock.packs[row.variant?.id || ''] || 0), row.variant);
       const price = row.variant ? row.price : (customer?.custom_prices?.[row.item.id] ?? row.price);
       const isOutOfStock = available <= 0;
 
@@ -137,7 +145,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
         }
       };
     });
-  }, [catalog, stockByItem, customers, draft.customer_id]);
+  }, [catalog, stockOf, customers, draft.customer_id]);
 
   const amounts = orderAmounts(draft.items || [], Number(draft.discount) || 0, Number(draft.advance_paid) || 0);
   // orderAmounts quietly caps the advance at the order total. Money must never change silently, so an
@@ -249,6 +257,11 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
   };
 
   const lines = draft.items || [];
+  // Stock is judged per pile with every line added up, as checkout_customer_order does at billing:
+  // 2 Dozen + 1 Dozen + 6 loose eggs all come out of the loose pile (42 eggs).
+  const pileLines = orderPileLines(lines, id => itemById.get(id));
+  const pileNeeds = sumByPile(pileLines);
+  const shortages = pileShortages(pileLines, stockOf);
 
   return (
     <OrderDialog
@@ -355,14 +368,30 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
               </Button>
             </div>
 
+            {shortages.length > 0 && (
+              <div role="status" className="mt-3 flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">
+                <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
+                <span>
+                  Stock abhi kam hai — {shortages.map(row => shortageText(row, itemById.get(row.itemId))).join('; ')}.
+                  {' '}Order book ho jayega, lekin bill karne se pehle stock tayyar karein.
+                </span>
+              </div>
+            )}
+
             {lines.length > 0 ? (
               <ul className="mt-3 space-y-2.5">
                 {lines.map((line, index) => {
-                  const stock = stockByItem.get(line.itemId);
+                  const stock = stockOf(line.itemId);
                   const product = itemById.get(line.itemId);
                   const variant = line.variantId ? product?.variants?.find(row => row.id === line.variantId) : undefined;
-                  const available = availableSellUnits(Number(stock?.quantity) || 0, Number(stock?.variant_stocks?.[line.variantId || ''] || 0), variant);
-                  const short = line.qty > available;
+                  const available = availableSellUnits(stock.loose, Number(stock.packs[line.variantId || ''] || 0), variant);
+                  const pile = pileLines[index];
+                  const pileId = pile.fromBase ? 'loose' : (pile.variantId || 'loose');
+                  const pileNeed = pileNeeds.find(row => row.itemId === line.itemId && row.pileId === pileId);
+                  const short = shortages.some(row => row.itemId === line.itemId && row.pileId === pileId);
+                  const sharedNote = pileNeed && pileNeed.lines > 1
+                    ? ` · ${pileNeed.lines} lines milkar ${formatQty(pileNeed.need, 3)} ${pileId === 'loose' ? (product?.unit || '') : (variant?.name || line.unit)}`
+                    : '';
                   return (
                     <li key={`${line.itemId}-${line.variantId || 'base'}`} className="rounded-control border border-line bg-surface p-3 shadow-e1">
                       <div className="flex items-start justify-between gap-2">
@@ -373,7 +402,7 @@ export default function CustomerOrderForm({ existing, presetCustomerId = '', onC
                           </div>
                           <p className={cn('mt-1 flex items-center gap-1.5 text-[11px] font-medium', short ? 'text-warning-fg' : 'text-fg-subtle')}>
                             <span className={cn('inline-block size-1.5 shrink-0 rounded-full', short ? 'bg-warning' : 'bg-success')} aria-hidden="true" />
-                            {formatQty(available, 3)} {line.unit} available now{variant?.deduct_from_base ? ` · ${oneUnitLabel(variant.name, sellUnitContains(variant), product?.unit || line.unit)}` : ''}{short ? ' · Prepare stock before billing' : ''}
+                            {formatQty(available, 3)} {line.unit} available now{variant?.deduct_from_base ? ` · ${oneUnitLabel(variant.name, sellUnitContains(variant), product?.unit || line.unit)}` : ''}{sharedNote}{short ? ' · Prepare stock before billing' : ''}
                           </p>
                         </div>
                         <IconButton
