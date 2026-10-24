@@ -2,10 +2,14 @@ import React, { Suspense, lazy, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Banknote, CheckCircle2, ChevronDown, ClipboardCheck, LockKeyhole, PackageSearch,
 } from 'lucide-react';
-import { Badge, Button, Field, Modal, Money, SearchInput, Textarea } from '../ui';
+import { Badge, Button, Field, LoadMoreRow, Modal, Money, SearchInput, Textarea } from '../ui';
 import { useDairy } from '../../context/DairyContext';
-import { roundQuantity } from '../../lib/db';
+import { useProgressiveList } from '../../hooks/useProgressiveList';
 import { cn } from '../../lib/cn';
+import { cleanNumber, formatQty } from '../../lib/formatters';
+import { formatBaseQty } from '../../lib/stockRules';
+import { buildStockRows, countPiles, readPileCount, type CountPile } from '../milk-ops/inventoryStock';
+import { CountTotals, PileCountRow, signedQty } from '../milk-ops/StockCountParts';
 import { CheckItem, CountInput, MiniStat, VarianceCallout } from './CashBits';
 import { cashVariance, formatBusinessDate, formatPkDateTime, parseCashInput, useLatest } from './cashFormat';
 import { EMPTY_DAY_STATUS, buildCashClose, computeDayCash, expectedDayCash, indexDays, summarizeDay } from './dayData';
@@ -33,13 +37,19 @@ interface DayCloseDialogProps {
   onOpenTab: (tab: CashTab) => void;
 }
 
-interface StockRow {
-  key: string;
-  label: string;
+/** One product in the stock count: every pile a count can reach, hidden packs and stray counts included. */
+interface StockGroup {
+  itemId: string;
+  name: string;
   unit: string;
-  system: number;
-  variant: boolean;
+  costRate: number;
+  totalBase: number;
+  piles: CountPile[];
+  search: string;
 }
+
+/** Count keys are `<item id>::<pile id>`; the loose pile goes to the server without a variant id. */
+const countKey = (itemId: string, pileId: string) => `${itemId}::${pileId}`;
 
 /** Day close as four steps. Cash and stock closings stay independent; Lock Day needs every blocker cleared. */
 const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onClose, run, busyKey, onOpenTab }) => {
@@ -66,30 +76,20 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
     cashRemittances, shiftSessions,
   }) : null), [day, sales, shiftCashEvents, customerTransactions, dailySupplyEntries, expenses, purchases, materialPurchases, supplierTransactions, expenseVendorTransactions, cashRemittances, shiftSessions]);
 
-  // Countable stock: loose stock per item plus each ready-made pack variant (dozen/tray style units are views of the loose pile).
-  const stockRows = useMemo(() => {
-    const byItem = new Map<string, any>(inventory.map((row: any) => [row.item_id, row] as [string, any]));
-    const rows: StockRow[] = [];
-    for (const item of items as any[]) {
-      if (item.isActive === false) continue;
-      const stock = byItem.get(item.id);
-      if (!stock) continue;
-      rows.push({ key: item.id, label: item.name, unit: item.unit || 'units', system: roundQuantity(Number(stock.quantity || 0)), variant: false });
-      const variantStocks = stock.variant_stocks || {};
-      for (const variant of (item.variants || []) as any[]) {
-        const variantId = variant.id || variant.variantId;
-        if (!variantId || variant.isActive === false || variant.deduct_from_base === true) continue;
-        rows.push({
-          key: `${item.id}::${variantId}`,
-          label: `${item.name} — ${variant.name || variant.variant_name || variantId}`,
-          unit: 'packs',
-          system: roundQuantity(Number(variantStocks[variantId] || 0)),
-          variant: true,
-        });
-      }
-    }
-    return rows;
-  }, [items, inventory]);
+  // Countable stock, read with the shared stock rules: loose, every ready-made pack (hidden ones too) and
+  // stray counts left on multi-units or deleted packs, which a count must be able to clear to 0.
+  // Inactive products are listed only while they still hold stock.
+  const stockGroups = useMemo(() => buildStockRows(items, inventory)
+    .filter(row => row.isActive || row.hasStock)
+    .map((row): StockGroup => ({
+      itemId: row.item.id,
+      name: row.item.name,
+      unit: row.reading.unit,
+      costRate: Number(row.item.cost_price) || 0,
+      totalBase: row.reading.totalBase,
+      piles: countPiles(row.reading),
+      search: row.search,
+    })), [items, inventory]);
 
   const [step, setStep] = useState<DayCloseStep>(initialStep);
   const [openingRaw, setOpeningRaw] = useState(() => (dayCash ? String(dayCash.suggestedOpening) : '0'));
@@ -102,6 +102,34 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
   const [notes, setNotes] = useState('');
   const [triedCash, setTriedCash] = useState(false);
 
+  // Every typed count, what it would move per pile and in base units, and its value at cost.
+  const stockCount = useMemo(() => {
+    const entries: { itemId: string; variantId?: string; counted: number }[] = [];
+    const changes: { key: string; group: StockGroup; pile: CountPile; counted: number; diff: number; baseDiff: number }[] = [];
+    let errors = 0;
+    let valueDiff = 0;
+    for (const group of stockGroups) {
+      for (const pile of group.piles) {
+        const key = countKey(group.itemId, pile.id);
+        const read = readPileCount(pile, stockCounts[key]);
+        if (read.error) errors += 1;
+        if (read.counted === null) continue;
+        // Matching counts go to the server too, so the day records that the pile was checked.
+        entries.push({ itemId: group.itemId, variantId: pile.id === 'loose' ? undefined : pile.id, counted: read.counted });
+        if (read.diff === 0) continue;
+        changes.push({ key, group, pile, counted: read.counted, diff: read.diff, baseDiff: read.baseDiff });
+        valueDiff += read.baseDiff * group.costRate;
+      }
+    }
+    return { entries, changes, errors, valueDiff: cleanNumber(valueDiff) };
+  }, [stockGroups, stockCounts]);
+
+  const filteredStock = useMemo(() => {
+    const q = stockQuery.trim().toLowerCase();
+    return q ? stockGroups.filter(group => group.search.includes(q)) : stockGroups;
+  }, [stockGroups, stockQuery]);
+  const stockList = useProgressiveList<StockGroup>(filteredStock, 30, stockQuery);
+
   if (!day || !dayCash || !summary) return null;
 
   const locked = Boolean(isDayLocked?.(day.business_date));
@@ -113,15 +141,9 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
   const variance = counted.valid ? cashVariance(counted.value, expected) : null;
   const noteTotal = denominationTotal(denominations);
 
-  const stockEntries = Object.entries(stockCounts).filter(([, raw]) => String(raw).trim() !== '');
-  const invalidStock = stockEntries.filter(([, raw]) => !(Number.isFinite(Number(raw)) && Number(raw) >= 0)).map(([key]) => key);
-  const stockAdjustments = stockRows.filter(row => {
-    const raw = stockCounts[row.key];
-    return raw !== undefined && String(raw).trim() !== '' && Number.isFinite(Number(raw)) && roundQuantity(Number(raw) - row.system) !== 0;
-  }).length;
-  const filteredStock = stockQuery.trim()
-    ? stockRows.filter(row => row.label.toLowerCase().includes(stockQuery.trim().toLowerCase()))
-    : stockRows;
+  const stockEntries = stockCount.entries;
+  const stockAdjustments = stockCount.changes.length;
+  const stockInvalid = stockCount.errors > 0;
 
   const cashCloseBlocked = status.liveShifts > 0;
   const cashError = triedCash && counted.empty ? 'Cash close se pehle gini hui cash likhein.' : !counted.empty && !counted.valid ? 'Sahi raqam likhein (0 ya zyada).' : undefined;
@@ -158,11 +180,8 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
   };
 
   const closeStock = () => {
-    if (invalidStock.length > 0) return;
-    const entries = stockEntries.map(([key, raw]) => {
-      const [itemId, variantId] = key.split('::');
-      return { itemId, variantId, counted: Number(raw) };
-    });
+    if (stockInvalid) return;
+    const entries = stockEntries;
     void run(`day-stock:${day.id}`, async () => {
       const ok = await actions.current.closeDayStock(day.id, entries);
       if (ok) setStockCounts({});
@@ -213,7 +232,7 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
           <Button
             leftIcon={<PackageSearch />}
             loading={busyKey === `day-stock:${day.id}`}
-            disabled={(anyBusy && busyKey !== `day-stock:${day.id}`) || locked || invalidStock.length > 0}
+            disabled={(anyBusy && busyKey !== `day-stock:${day.id}`) || locked || stockInvalid}
             onClick={closeStock}
           >
             Apply & close stock
@@ -454,41 +473,73 @@ const DayCloseDialog: React.FC<DayCloseDialogProps> = ({ dayId, initialStep, onC
             {stockEntries.length > 0 && <Badge tone="brand">{stockEntries.length} counted</Badge>}
             {stockAdjustments > 0 && <Badge tone="warning">{stockAdjustments} adjustment{stockAdjustments > 1 ? 's' : ''}</Badge>}
           </div>
-          <div className="max-h-[45vh] divide-y divide-line overflow-y-auto rounded-card ring-1 ring-inset ring-line">
+          <div className="max-h-[45vh] overflow-y-auto rounded-card ring-1 ring-inset ring-line">
             {filteredStock.length === 0 ? (
               <p className="px-4 py-6 text-center text-[13px] text-fg-subtle">Koi item nahi mila.</p>
-            ) : filteredStock.map(row => {
-              const raw = stockCounts[row.key] || '';
-              const hasValue = raw.trim() !== '';
-              const invalid = invalidStock.includes(row.key);
-              const diff = hasValue && !invalid ? roundQuantity(Number(raw) - row.system) : null;
-              return (
-                <div key={row.key} className="flex items-center gap-3 px-4 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className={cn('truncate text-[13px] font-semibold', row.variant ? 'pl-3 text-fg-muted' : 'text-fg')}>{row.label}</p>
-                    <p className="text-[11px] text-fg-subtle">System: {row.system} {row.unit}</p>
-                  </div>
-                  {diff !== null && (
-                    <Badge tone={diff === 0 ? 'success' : diff > 0 ? 'info' : 'danger'}>{diff === 0 ? 'Match' : `${diff > 0 ? '+' : ''}${diff}`}</Badge>
-                  )}
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    aria-label={`${row.label} counted`}
-                    aria-invalid={invalid || undefined}
-                    value={raw}
-                    disabled={locked || Boolean(day.stock_closed_at)}
-                    onChange={event => setStockCounts(prev => ({ ...prev, [row.key]: event.target.value }))}
-                    placeholder="—"
-                    className={cn('ds-control h-9 w-24 shrink-0 rounded-lg border bg-surface px-2 text-right text-[13px] font-bold tabular-nums text-fg outline-none focus:border-brand-accent focus:ring-4 focus:ring-ring/20 disabled:bg-surface-2', invalid ? 'border-danger' : 'border-line')}
-                  />
-                </div>
-              );
-            })}
+            ) : (
+              <ul className="divide-y divide-line">
+                {stockList.visibleItems.map(group => {
+                  const disabled = locked || Boolean(day.stock_closed_at);
+                  const setCount = (pileId: string) => (value: string) => setStockCounts(prev => ({ ...prev, [countKey(group.itemId, pileId)]: value }));
+                  if (group.piles.length === 1) {
+                    const pile = { ...group.piles[0], name: group.name };
+                    return (
+                      <PileCountRow
+                        key={group.itemId}
+                        pile={pile}
+                        baseUnit={group.unit}
+                        idPrefix={`dayclose-${group.itemId}`}
+                        value={stockCounts[countKey(group.itemId, pile.id)] || ''}
+                        onChange={setCount(pile.id)}
+                        showError
+                        disabled={disabled}
+                      />
+                    );
+                  }
+                  return (
+                    <li key={group.itemId}>
+                      <p className="flex items-baseline justify-between gap-2 bg-surface-2/70 px-3 pb-1 pt-2 text-[13px] font-semibold text-fg">
+                        <span className="truncate">{group.name}</span>
+                        <span className="shrink-0 text-[11px] font-medium tabular-nums text-fg-subtle">Kul {formatBaseQty(group.totalBase, group.unit)}</span>
+                      </p>
+                      <ul className="divide-y divide-line/60 pl-2">
+                        {group.piles.map(pile => (
+                          <PileCountRow
+                            key={pile.id}
+                            pile={pile}
+                            baseUnit={group.unit}
+                            idPrefix={`dayclose-${group.itemId}`}
+                            value={stockCounts[countKey(group.itemId, pile.id)] || ''}
+                            onChange={setCount(pile.id)}
+                            showError
+                            disabled={disabled}
+                          />
+                        ))}
+                      </ul>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <LoadMoreRow sentinelRef={stockList.sentinelRef} hiddenCount={stockList.hiddenCount} onShowMore={stockList.showMore} onShowAll={stockList.showAll} />
           </div>
-          {invalidStock.length > 0 && <p className="text-xs font-semibold text-danger-fg">Stock count 0 ya zyada number hona chahiye.</p>}
-          <p className="text-xs text-fg-subtle">Khali chhorna = koi adjustment nahi. Gini hui value system se mukhtalif ho to inventory log ke sath adjustment apply hogi.</p>
+          {stockInvalid && <p className="text-xs font-semibold text-danger-fg">Kuch ginti theek nahi: 0 ya zyada likhein, packs poore number mein, purani ginti sirf 0.</p>}
+          {stockAdjustments > 0 && (
+            <div className="space-y-2">
+              <CountTotals changes={stockAdjustments} baseDiff={0} valueDiff={stockCount.valueDiff} />
+              <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] tabular-nums text-fg-subtle" aria-label="Badalne wali ginti">
+                {stockCount.changes.map(change => (
+                  <li key={change.key} className="flex justify-between gap-3">
+                    <span className="truncate">{change.group.name}{change.group.piles.length > 1 ? ` — ${change.pile.name}` : ''}: {formatQty(change.pile.system, 3)} → {formatQty(change.counted, 3)} {change.pile.unitLabel}</span>
+                    <span className={cn('shrink-0 font-semibold', change.baseDiff > 0 ? 'text-success-fg' : change.baseDiff < 0 ? 'text-danger-fg' : 'text-fg-subtle')}>
+                      {change.pile.kind === 'stray' ? 'clear' : `${signedQty(change.baseDiff)} ${change.group.unit}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <p className="text-xs text-fg-subtle">Khali chhorna = koi adjustment nahi. Hidden packs aur purani ginti bhi yahan gini ja sakti hai. Farq wali har pile inventory log ke sath adjust hogi.</p>
         </div>
       )}
 
