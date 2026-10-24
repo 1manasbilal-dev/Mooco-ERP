@@ -26,7 +26,9 @@ import { db, generateUUID, generateInvoiceNumber, LocalOrder, LocalOrderItem, Lo
 import { actionLock } from '../lib/actionLock';
 import { loadRead, withDeadline } from '../lib/loadRequest';
 import { saleItemSnapshot } from '../lib/saleSnapshot';
-import { averageCostAfterIntake, saleLineStock, stockOnHandBase } from '../lib/sellUnits';
+import { addMove, saleLineMove } from '../lib/saleStockMove';
+import { checkItemSetupChange } from '../lib/itemSetupRules';
+import { averageCostAfterIntake, stockOnHandBase } from '../lib/sellUnits';
 import { syncService } from '../lib/syncService';
 import { getOperatorSession, hasStoredOperatorSession, operatorSignIn, operatorSignOut, sessionOperatorId, type OperatorLoginRequest } from '../lib/operatorAuth';
 import { isPermanentSyncError } from '../lib/syncErrors';
@@ -328,7 +330,8 @@ interface DairyContextType {
   allocateFromRetailStock: (items: any[], destination: string, details: any) => Promise<boolean>;
   setAllocations: React.Dispatch<React.SetStateAction<AllocationEntry[]>>;
 
-  addItem: (item: Omit<ItemDefinition, 'id'>) => Promise<boolean>;
+  /** Resolves to the new product's id (so the create form can call setOpeningStock), or false. */
+  addItem: (item: Omit<ItemDefinition, 'id'>) => Promise<string | false>;
   updateItem: (id: string, updates: Partial<ItemDefinition>) => Promise<boolean>;
   deleteItem: (id: string) => Promise<boolean>;
   reorderItems: (orderedItems: { id: string; sort_order: number }[]) => Promise<boolean>;
@@ -2402,15 +2405,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           : (shiftToUse?.account_id || shiftToUse?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash')?.id || null);
       }
 
-      const snapshotCart = cart.map((line: any) => {
+      // Each line's pile is decided once, here, and saved on the bill: the server (pos_sync_order_effects),
+      // the offline projection and returns all read this snapshot. A pack line with no flag is read like
+      // saleLineStock (the catalog decides), never silently as a pack count.
+      const lineMoves = cart.map((line: any) => saleLineMove(line, findLineItem<ItemDefinition>(items, line) || null));
+      const snapshotCart = cart.map((line: any, index: number) => {
         const catalogItem = findLineItem<ItemDefinition>(items, line);
         const baseCost = Number(line.cost_price || catalogItem?.cost_price || 0);
         const vId = line.variantId;
-        const variant = vId && catalogItem ? (catalogItem.variants || []).find(v => v.id === vId) : undefined;
-        const factor = variant ? (Number(variant.quantity_in_base_unit) || 1) : (Number(line.stockDeduction) || 1);
+        const move = lineMoves[index];
+        const stockFlags = vId && vId !== 'loose'
+          ? { deductFromBase: move.fromBase, stockDeduction: move.contains }
+          : {};
         // 4 decimals: a per-gram or per-ml cost rounded to paisa would turn into 0 or drift several percent.
-        const unitCost = Math.round((vId && vId !== 'loose' ? baseCost * factor : baseCost) * 10000) / 10000;
-        return { ...line, cost_price: unitCost > 0 ? unitCost : undefined };
+        const unitCost = Math.round((vId && vId !== 'loose' ? baseCost * move.contains : baseCost) * 10000) / 10000;
+        return { ...line, ...stockFlags, cost_price: unitCost > 0 ? unitCost : undefined };
       });
 
       const saleData = {
@@ -2479,50 +2488,36 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       try {
       setSales(prev => [saleData, ...prev]);
 
-      const updatesMap: Record<string, { looseDeduction: number, variantDeductions: Record<string, number>, logDetails: string[], name: string }> = {};
-      for (const item of cart) {
+      // The same piles the server will move for this bill (saleLineMove), per product.
+      const updatesMap: Record<string, { loose: number; packs: Record<string, number> }> = {};
+      cart.forEach((item: any, index: number) => {
          const lineId = lineItemId(item);
          const inventoryItem = lineId ? inventory.find(i => i.item_id === lineId) : inventory.find(i => i.name === item.name);
-         if (inventoryItem) {
-             const parentId = inventoryItem.item_id!;
-             if (!updatesMap[parentId]) {
-                 updatesMap[parentId] = { looseDeduction: 0, variantDeductions: {}, logDetails: [], name: inventoryItem.name };
-             }
-             if (item.variantId && item.deductFromBase !== true) {
-                 updatesMap[parentId].variantDeductions[item.variantId] = (updatesMap[parentId].variantDeductions[item.variantId] || 0) + item.qty;
-             } else {
-                 const contains = item.deductFromBase === true ? (Number(item.stockDeduction) || 1) : 1;
-                 updatesMap[parentId].looseDeduction += (Number(item.qty) || 0) * contains;
-             }
-             updatesMap[parentId].logDetails.push(`${item.qty} x ${item.name}`);
-         }
-      }
+         if (!inventoryItem?.item_id) return;
+         const parentId = inventoryItem.item_id;
+         if (!updatesMap[parentId]) updatesMap[parentId] = { loose: 0, packs: {} };
+         addMove(updatesMap[parentId], lineMoves[index], -1);
+      });
 
-      for (const [parentId, data] of Object.entries(updatesMap)) {
-        setInventory(prev => prev.map(i => {
-          if (i.item_id === parentId) {
-            const newLooseStock = roundQuantity((i.quantity || 0) - data.looseDeduction);
-            const newVariantStocks = { ...(i.variant_stocks || {}) };
-            for (const [vId, qty] of Object.entries(data.variantDeductions)) {
-              newVariantStocks[vId] = roundQuantity((newVariantStocks[vId] || 0) - (qty as number));
-            }
-            return { ...i, quantity: newLooseStock, variant_stocks: newVariantStocks };
-          }
-          return i;
-        }));
-
-        setItems(prev => prev.map(item => {
-          if (item.id === parentId) {
-            const newLooseStock = roundQuantity((item.stock || 0) - data.looseDeduction);
-            const newVariantStocks = { ...(item.variant_stocks || {}) };
-            for (const [vId, qty] of Object.entries(data.variantDeductions)) {
-              newVariantStocks[vId] = roundQuantity((newVariantStocks[vId] || 0) - (qty as number));
-            }
-            return { ...item, stock: newLooseStock, variant_stocks: newVariantStocks };
-          }
-          return item;
-        }));
-      }
+      const applyMoves = (loose: number, packs: Record<string, number> | undefined, data: { loose: number; packs: Record<string, number> }) => {
+        const nextPacks = { ...(packs || {}) };
+        for (const [vId, delta] of Object.entries(data.packs)) {
+          nextPacks[vId] = roundQuantity((Number(nextPacks[vId]) || 0) + delta);
+        }
+        return { loose: roundQuantity((Number(loose) || 0) + data.loose), packs: nextPacks };
+      };
+      setInventory(prev => prev.map(i => {
+        const data = i.item_id ? updatesMap[i.item_id] : undefined;
+        if (!data) return i;
+        const next = applyMoves(i.quantity, i.variant_stocks, data);
+        return { ...i, quantity: next.loose, variant_stocks: next.packs };
+      }));
+      setItems(prev => prev.map(item => {
+        const data = updatesMap[item.id];
+        if (!data) return item;
+        const next = applyMoves(item.stock || 0, item.variant_stocks, data);
+        return { ...item, stock: next.loose, variant_stocks: next.packs };
+      }));
 
       if (customer.id && dueAmount > 0) {
         const saleShift = shiftToUse;
@@ -2561,7 +2556,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const addItem = async (item: Omit<ItemDefinition, 'id'>) => {
+  const addItem = async (item: Omit<ItemDefinition, 'id'>): Promise<string | false> => {
     try {
       const trimmedName = (item.name || '').trim();
       if (!trimmedName) {
@@ -2574,6 +2569,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const id = `item_${generateUUID()}`;
+      // A new product starts at 0 in every pile; stock arrives through setOpeningStock or a purchase.
       const { item_type, isActive, isSystem, category, sort_order, stock: _stock, variant_stocks: _variantStocks, ...rest } = item as any;
       const dbItem = {
         id,
@@ -2583,13 +2579,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         stock: 0,
         category: Array.isArray(category) ? category[0] : (category || 'Uncategorized'),
         sort_order: sort_order != null ? Number(sort_order) : 999,
-        ...rest
+        ...rest,
+        variant_stocks: {}
       };
       const { error } = await supabase.from('items').insert([dbItem]);
       if (error) throw error;
       showToast("Item added successfully", "success");
       fetchData(['items']);
-      return true;
+      return id;
     } catch(e: any) {
       console.error("Error adding item:", e);
       showToast(`Failed to add item: ${e.message || 'Error'}`, "error");
@@ -2613,13 +2610,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Stock only moves through adjust_item_stock. A catalog form holds a copy taken when it opened,
       // so writing it back would erase every sale made since then.
       const { item_type, isActive, isSystem, category, sort_order, stock: _stock, variant_stocks: _variantStocks, ...rest } = updates;
-      const current = items.find(i => i.id === id);
-      if (current && rest.unit !== undefined && String(rest.unit).trim() !== String(current.unit || '').trim()) {
-        const looseStock = Number((inventory.find(inv => inv.item_id === id)?.quantity) ?? (current as any).stock ?? 0);
-        const packedStock = Object.values(current.variant_stocks || {}).some(v => Math.abs(Number(v) || 0) > 0.0001);
-        if (Math.abs(looseStock) > 0.0001 || packedStock) {
-          showToast(`"${current.name}" ka stock abhi ${current.unit} mein hai. Base unit badalne se pehle stock 0 karein, warna purana stock naye unit mein ghalat parha jayega.`, "warning");
-          return false;
+      // A base unit or pack size can't change while stock is held in it (docs/stock-model.md). Checked
+      // against the server row: the screen copy can be older than the last sale.
+      let setupNotice: string | undefined;
+      if (rest.unit !== undefined || rest.variants !== undefined) {
+        const { data: liveItem, error: liveError } = await supabase.from('items').select('name, unit, stock, variant_stocks, variants').eq('id', id).maybeSingle();
+        if (liveError) throw liveError;
+        if (liveItem) {
+          const check = checkItemSetupChange(liveItem, { unit: rest.unit, variants: rest.variants });
+          if (check.error) {
+            showToast(check.error, "warning");
+            return false;
+          }
+          setupNotice = check.notice;
         }
       }
       const dbUpdates: any = { ...rest };
@@ -2635,7 +2638,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       
       const { error } = await supabase.from('items').update(dbUpdates).eq('id', id);
       if (error) throw error;
-      showToast("Item updated successfully", "success");
+      showToast(setupNotice || "Item updated successfully", setupNotice ? "info" : "success");
       fetchData(['items']);
       return true;
     } catch(e: any) {
@@ -2644,23 +2647,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return false;
     }
   };
-  const deleteItem = async (id: string) => {
-    try {
-      const item = items.find(i => i.id === id);
-      if (item?.isSystem || ['item_buffalo_milk', 'item_cow_milk', 'item_mixed_milk'].includes(id) || ['Buffalo Milk', 'Cow Milk', 'Mixed Milk'].includes(item?.name || '')) {
-        showToast("System milk varieties cannot be deleted! You can deactivate them in catalog to disable selling and purchasing.", "warning");
-        return false;
-      }
-      const { error } = await supabase.from('items').delete().eq('id', id);
-      if (error) throw error;
-      showToast("Product deleted successfully", "success");
-      fetchData(['items']);
-      return true;
-    } catch(e: any) {
-      showToast(`Failed to delete product: ${e.message || 'Error'}`, "error");
-      return false;
-    }
-  };
+  // Same rule as the delete dialog: a product with stock in any pile, history or a recipe using it is
+  // never hard-deleted (this used to delete straight away, stock and all).
+  const deleteItem = async (id: string) => safeDeleteItem(id, 'hard_delete');
 
   const reorderItems = async (orderedItems: { id: string; sort_order: number }[]) => {
     try {
@@ -4261,52 +4250,85 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
   
+  // Stock counts and opening stock change real stock on the server, so they need the right, a connection
+  // and open books. The log is dated now; details.business_date is the Pakistan business day it belongs to.
+  const guardStockWrite = (what: string, moduleKey = 'inventory', action = 'edit'): boolean => {
+    if (!requireRight(moduleKey, action, what)) return false;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Stock badalne ke liye internet zaroori hai. Connection aane par dobara karein.', 'warning');
+      return false;
+    }
+    return guardOpenPeriod(getBusinessDate());
+  };
+
+  // Mirrors a stock move on both screen copies (Inventory reads `inventory`, POS and catalog read `items`).
+  const mirrorStockMove = (itemId: string, looseDelta: number, packDeltas: Record<string, number>) => {
+    const movePacks = (stocks?: Record<string, number>) => Object.entries(packDeltas)
+      .reduce((acc, [id, d]) => ({ ...acc, [id]: roundQuantity((Number(acc[id]) || 0) + d) }), { ...(stocks || {}) } as Record<string, number>);
+    setInventory(prev => prev.map(i => i.item_id !== itemId ? i : { ...i, quantity: roundQuantity((i.quantity || 0) + looseDelta), variant_stocks: movePacks(i.variant_stocks) }));
+    setItems(prev => prev.map(i => i.id !== itemId ? i : { ...i, stock: roundQuantity((Number(i.stock) || 0) + looseDelta), variant_stocks: movePacks(i.variant_stocks) }));
+  };
+
+  // A stock count on one pile: loose, a ready-made pack (hidden ones too), or a stray count left on a
+  // dozen/tray or a deleted pack, which can only be cleared to 0 (docs/stock-model.md).
   const adjustStock = async (itemId: string, newQty: number, reason: AdjustmentReason | string, notes?: string, variantId: string = 'loose') => {
      try {
-        const invItem = inventory.find(i => i.id === itemId);
+        if (!guardStockWrite('stock count badalne')) return false;
+        const target = roundQuantity(Number(newQty));
+        if (!Number.isFinite(Number(newQty)) || target < 0) {
+          showToast('Count 0 ya us se zyada number hona chahiye.', 'warning');
+          return false;
+        }
+        const invItem = inventory.find(i => i.id === itemId || i.item_id === itemId);
         if (!invItem || !invItem.item_id) return false;
 
         const { data: currentItem, error } = await supabase.from('items').select('*').eq('id', invItem.item_id).single();
         if (error || !currentItem) return false;
 
-        const variantDef = variantId && variantId !== 'loose' ? (currentItem.variants || []).find((v: any) => v.id === variantId) : undefined;
-        if (variantId && variantId !== 'loose' && variantDef?.deduct_from_base === true) {
-          showToast(`${variantDef.name} main stock ka hissa hai, iska alag count nahi hota. ${currentItem.unit || 'base unit'} mein loose stock count karein.`, "warning");
+        const isPack = Boolean(variantId && variantId !== 'loose');
+        const variantDef = isPack ? ((currentItem.variants || []) as any[]).find((v: any) => v.id === variantId) : undefined;
+        const isStray = isPack && (!variantDef || variantDef.deduct_from_base === true);
+        if (isStray && target !== 0) {
+          showToast(variantDef
+            ? `${variantDef.name} main stock ka hissa hai, iska alag count nahi hota. ${currentItem.unit || 'base unit'} mein loose stock count karein; purana count sirf 0 ho sakta hai.`
+            : 'Ye pack ab product mein nahi hai; is ka purana count sirf 0 kiya ja sakta hai.', "warning");
           return false;
         }
-        const isPack = Boolean(variantId && variantId !== 'loose');
         const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
-        const oldQty = isPack ? roundQuantity(Number((currentItem.variant_stocks || {})[variantId]) || 0) : oldLoose;
-        const diff = roundQuantity((Number(newQty) || 0) - oldQty);
+        const oldQty = isPack ? roundQuantity(Number(((currentItem.variant_stocks || {}) as Record<string, number>)[variantId]) || 0) : oldLoose;
+        const diff = roundQuantity(target - oldQty);
         if (diff === 0) return true;
 
         // Move by the difference so a sale syncing at the same moment is not overwritten.
-        const { error: updateError } = isPack
-          ? await adjustItemStock(invItem.item_id, 0, { [variantId]: diff })
-          : await adjustItemStock(invItem.item_id, diff);
+        const packDeltas: Record<string, number> = isPack ? { [variantId]: diff } : {};
+        const looseDelta = isPack ? 0 : diff;
+        const { error: updateError } = await adjustItemStock(invItem.item_id, looseDelta, isPack ? packDeltas : undefined);
         if (updateError) throw updateError;
+        mirrorStockMove(invItem.item_id, looseDelta, packDeltas);
 
-        setInventory(prev => prev.map(i => i.item_id !== invItem.item_id ? i : isPack
-          ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [variantId]: roundQuantity((i.variant_stocks?.[variantId] || 0) + diff) } }
-          : { ...i, quantity: roundQuantity((i.quantity || 0) + diff) }));
-
+        const packLabel = variantDef?.name || 'Old pack';
         const auditNote = isPack
-          ? `Variant Audit: ${variantDef?.name || variantId} ${oldQty} → ${roundQuantity(oldQty + diff)} packs`
+          ? `${isStray ? 'Stray count cleared' : 'Variant Audit'}: ${packLabel} ${oldQty} → ${target} packs`
           : 'Loose Stock Audit';
-        // Loose columns stay loose; a pack count change rides in details so reports post it to the pack pile.
-        await supabase.from('inventory_logs').insert([{ 
-            id: `log_${generateUUID()}`, date: new Date().toISOString(), item_id: invItem.item_id, 
-            item_name: invItem.name,
+        // Loose columns stay loose; a pack count change rides in details.variant_deltas (one log shape).
+        const { error: logError } = await supabase.from('inventory_logs').insert([{
+            id: `log_${generateUUID()}`, date: normalizeTransactionTimestamp(), item_id: invItem.item_id,
+            item_name: currentItem.name || invItem.name,
             old_quantity: oldLoose,
-            new_quantity: isPack ? oldLoose : roundQuantity(oldLoose + diff),
-            difference: isPack ? 0 : diff, 
+            new_quantity: roundQuantity(oldLoose + looseDelta),
+            difference: looseDelta,
             reason, notes: notes ? `${notes} (${auditNote})` : auditNote,
-            details: isPack ? { variant_id: variantId, variant_delta: diff, loose_delta: 0 } : { loose_delta: diff }
+            details: { loose_delta: looseDelta, variant_deltas: packDeltas, business_date: getBusinessDate() }
         }]);
-        
+        if (logError) showToast('Stock count lag gaya, lekin history log save nahi hua.', 'warning');
+
         fetchData(STOCK);
         return true;
-     } catch(err) { console.error(err); return false; }
+     } catch(err) {
+        console.error(err);
+        showToast('Stock count save nahi hua: ' + getErrorMessage(err), 'error');
+        return false;
+     }
   };
 
   // Opening stock: the way to put stock on a product without a purchase (new product, first count).
@@ -4314,9 +4336,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // call, and one log with reason Opening Stock records all piles so reports treat it as an intake.
   const setOpeningStock = async (itemId: string, piles: OpeningStockPiles, notes?: string): Promise<boolean> => {
     try {
+      if (!guardStockWrite('opening stock lagane')) return false;
+      const targets = [piles.loose, ...Object.values(piles.packs || {})].filter(t => t !== undefined);
+      if (targets.some(t => !Number.isFinite(Number(t)) || Number(t) < 0)) {
+        showToast('Opening stock 0 ya us se zyada number hona chahiye.', 'warning');
+        return false;
+      }
       const { data: currentItem, error } = await supabase.from('items').select('*').eq('id', itemId).single();
       if (error || !currentItem) { showToast('Product nahi mila.', 'error'); return false; }
-      const variants: any[] = currentItem.variants || [];
+      const variants: any[] = (currentItem.variants || []) as any[];
       const oldLoose = roundQuantity(Number(currentItem.stock) || 0);
       const looseDelta = piles.loose === undefined ? 0 : roundQuantity((Number(piles.loose) || 0) - oldLoose);
       const packDeltas: Record<string, number> = {};
@@ -4326,22 +4354,18 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           showToast(`${variant?.name || variantId} ka alag stock nahi hota; loose ${currentItem.unit || ''} mein likhein.`, 'warning');
           return false;
         }
-        const delta = roundQuantity((Number(target) || 0) - (Number((currentItem.variant_stocks || {})[variantId]) || 0));
+        const delta = roundQuantity((Number(target) || 0) - (Number(((currentItem.variant_stocks || {}) as Record<string, number>)[variantId]) || 0));
         if (delta !== 0) packDeltas[variantId] = delta;
       }
       if (looseDelta === 0 && Object.keys(packDeltas).length === 0) return true;
       const { error: updateError } = await adjustItemStock(itemId, looseDelta, Object.keys(packDeltas).length ? packDeltas : undefined);
       if (updateError) throw updateError;
-      setInventory(prev => prev.map(i => i.item_id !== itemId ? i : {
-        ...i,
-        quantity: roundQuantity((i.quantity || 0) + looseDelta),
-        variant_stocks: Object.entries(packDeltas).reduce((acc, [id, d]) => ({ ...acc, [id]: roundQuantity((acc[id] || 0) + d) }), { ...(i.variant_stocks || {}) } as Record<string, number>),
-      }));
+      mirrorStockMove(itemId, looseDelta, packDeltas);
       const { error: logError } = await supabase.from('inventory_logs').insert([{
-        id: `log_${generateUUID()}`, date: new Date().toISOString(), item_id: itemId, item_name: currentItem.name,
+        id: `log_${generateUUID()}`, date: normalizeTransactionTimestamp(), item_id: itemId, item_name: currentItem.name,
         old_quantity: oldLoose, new_quantity: roundQuantity(oldLoose + looseDelta), difference: looseDelta,
         reason: AdjustmentReason.OPENING_STOCK, notes: notes || 'Opening stock',
-        details: { loose_delta: looseDelta, variant_deltas: packDeltas },
+        details: { loose_delta: looseDelta, variant_deltas: packDeltas, business_date: getBusinessDate() },
       }]);
       if (logError) showToast('Stock set ho gaya, lekin log save nahi hua.', 'warning');
       fetchData(STOCK);
@@ -4480,84 +4504,72 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const itemDef = findLineItem<ItemDefinition>(items, item);
 
         if (itemDef) {
+          // The sold line's snapshot decides the pile, as on the server (process_sales_return).
           const soldLine: any = (sale.items || []).find((l: any) => (l.itemId || l.id) === itemDef.id && (l.variantId || undefined) === (variantId || undefined)) || {};
           const given: any = item;
-          const move = saleLineStock({
+          const move = saleLineMove({
             qty,
             variantId,
-            isLoose: given.isLoose ?? soldLine.isLoose,
-            stockDeduction: given.stockDeduction ?? soldLine.stockDeduction,
-            deductFromBase: given.deductFromBase ?? soldLine.deductFromBase
+            isLoose: soldLine.isLoose ?? given.isLoose,
+            stockDeduction: soldLine.stockDeduction ?? given.stockDeduction,
+            deductFromBase: soldLine.deductFromBase ?? given.deductFromBase
           }, itemDef);
           const packId = move.variantId;
           const returnQty = move.stockQty;
           const invRow = inventory.find(inv => inv.item_id === itemDef.id);
           const currentStock = roundQuantity(invRow?.quantity ?? (itemDef as any).stock ?? 0);
-          const currentVarStock = packId ? roundQuantity((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0) : 0;
-          const packDetails = (delta: number) => packId ? { variant_id: packId, variant_delta: delta, loose_delta: 0 } : { loose_delta: delta };
-          const applyLocal = (delta: number) => {
-            setInventory(prev => prev.map(inv => {
-              if (inv.item_id !== itemDef.id) return inv;
-              if (packId) return { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) + delta) } };
-              return { ...inv, quantity: roundQuantity((inv.quantity || 0) + delta) };
-            }));
-            // POS and Items read the catalog row, so mirror the move there too.
-            setItems(prev => prev.map(i => {
-              if (i.id !== itemDef.id) return i;
-              if (packId) return { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packId]: roundQuantity((Number(i.variant_stocks?.[packId]) || 0) + delta) } };
-              return { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + delta) } as any;
-            }));
-          };
-          const lineLabel = packId ? `${qty} x ${item.name}` : `${returnQty} ${itemDef.unit || ''}`.trim();
+          // Loose columns hold the loose move only; a pack move rides in details.variant_deltas.
+          const logShape = (delta: number) => ({
+            old_quantity: currentStock,
+            new_quantity: roundQuantity(currentStock + (packId ? 0 : delta)),
+            difference: packId ? 0 : delta,
+            details: { loose_delta: packId ? 0 : delta, variant_deltas: packId && delta !== 0 ? { [packId]: delta } : {}, sale_id: sale.id }
+          });
+          const applyLocal = (delta: number) => mirrorStockMove(itemDef.id, packId ? 0 : delta, packId ? { [packId]: delta } : {});
+          const lineLabel = packId || move.contains !== 1 ? `${qty} x ${item.name}` : `${returnQty} ${itemDef.unit || ''}`.trim();
 
           if (isReplacement) {
             // Exchange / replacement: the fresh unit leaves the same pile the sale used.
             stockMoves.push({ item_id: itemDef.id, variant_id: packId || null, delta: -returnQty });
             localStockMoves.push(() => applyLocal(-returnQty));
 
-            inventoryLogRows.push(...[{
+            inventoryLogRows.push({
               id: `log_rep_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
               item_name: itemDef.name,
-              old_quantity: packId ? currentVarStock : currentStock,
-              new_quantity: roundQuantity((packId ? currentVarStock : currentStock) - returnQty),
-              difference: packId ? 0 : -returnQty,
+              ...logShape(-returnQty),
               reason: AdjustmentReason.SPOILAGE,
-              notes: `Customer Replacement: ${lineLabel} spoiled item returned and a fresh one issued for Invoice #${sale.bill_number}`,
-              details: packDetails(-returnQty)
-            }]);
+              notes: `Customer Replacement: ${lineLabel} spoiled item returned and a fresh one issued for Invoice #${sale.bill_number}`
+            });
           } else if (isSpoiledScrap) {
-            // Spoiled / defective item discarded (log only, stock already left at sale).
-            inventoryLogRows.push(...[{
+            // Spoiled / defective item discarded (log only, stock already left at sale). The pack id
+            // stays in details so reports can size the scrapped packs.
+            const shape = logShape(0);
+            inventoryLogRows.push({
               id: `log_spoil_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
               item_name: itemDef.name,
-              old_quantity: currentStock,
-              new_quantity: currentStock,
-              difference: 0,
+              ...shape,
+              details: { ...shape.details, scrapped_qty: returnQty, ...(packId ? { variant_id: packId } : {}) },
               reason: AdjustmentReason.SPOILAGE,
-              notes: `Customer Return (Scrapped Spoilage): ${lineLabel} from #${sale.bill_number} discarded`,
-              details: { ...packDetails(0), scrapped_qty: returnQty }
-            }]);
+              notes: `Customer Return (Scrapped Spoilage): ${lineLabel} from #${sale.bill_number} discarded`
+            });
           } else {
             // Good item restocked to the pile it came from.
             stockMoves.push({ item_id: itemDef.id, variant_id: packId || null, delta: returnQty });
             localStockMoves.push(() => applyLocal(returnQty));
 
-            inventoryLogRows.push(...[{
+            inventoryLogRows.push({
               id: `log_ret_${generateUUID()}`,
               date: returnTimestamp,
               item_id: itemDef.id,
               item_name: itemDef.name,
-              old_quantity: packId ? currentVarStock : currentStock,
-              new_quantity: roundQuantity((packId ? currentVarStock : currentStock) + returnQty),
-              difference: packId ? 0 : returnQty,
+              ...logShape(returnQty),
               reason: AdjustmentReason.SALES_RETURN,
-              notes: `Returned to counter stock from Invoice #${sale.bill_number}: ${lineLabel} (${returnReason})`,
-              details: packDetails(returnQty)
-            }]);
+              notes: `Returned to counter stock from Invoice #${sale.bill_number}: ${lineLabel} (${returnReason})`
+            });
           }
         }
       }
@@ -4637,6 +4649,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           restock_action: restockOption,
           refund_amount: calculatedRefundAmount,
           returned_items: newReturnedItems,
+          // The server works out the moves and logs itself from the bill (20261024107000); these are
+          // what an older server applies. `restock` tells it whether the items go back on the shelf.
+          restock: !isReplacement && !isSpoiledScrap,
           stock_moves: stockMoves,
           logs: inventoryLogRows,
           khata: khataPart,
@@ -4665,7 +4680,14 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         restock_action: restockOption,
         returned_items: updatedReturnedItems
       } : s));
-      localStockMoves.forEach(apply => apply());
+      // The server reports the moves it applied; mirror exactly those (an older server reports none).
+      const serverMoves: Array<{ item_id: string; loose_delta: number; variant_deltas: Record<string, number> }> | undefined =
+        Array.isArray(returnResult?.stock_moves) ? returnResult.stock_moves : undefined;
+      if (serverMoves) {
+        serverMoves.forEach(m => mirrorStockMove(m.item_id, Number(m.loose_delta) || 0, m.variant_deltas || {}));
+      } else {
+        localStockMoves.forEach(apply => apply());
+      }
       if (khataPart) {
         setCustomers(prev => prev.map(c => c.id === sale.customer_id ? { ...c, balance: roundCurrency((c.balance || 0) - khataPart.amount) } : c));
       }
@@ -4919,93 +4941,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               }
           }
 
-          // Adjust live loose and variant stock to the count without double-logging explicit spoilage/wastage.
-          for (const item of (data.items || [])) {
-              const itemDef = items.find(i => i.name.toLowerCase() === item.product_name.toLowerCase() || i.id === item.product_id);
-              if (itemDef) {
-                  const targetVariant = item.variant_id && item.variant_id !== 'loose' ? item.variant_id : 'loose';
-                  const spoilageQty = roundQuantity(Number(item.spoilage_qty) || 0);
-                  const wastageQty = roundQuantity(Number(item.wastage_qty) || 0);
-                  const internalUseQty = roundQuantity(Number(item.internal_use_qty) || 0);
-                  const explicitLossTotal = roundQuantity(spoilageQty + wastageQty + internalUseQty);
-                  const physicalQty = roundQuantity(Number(item.physical_qty) || 0);
-
-                  const { data: currentItem } = await supabase.from('items').select('*').eq('id', itemDef.id).maybeSingle();
-                  if (currentItem) {
-                      const oldQty = targetVariant !== 'loose'
-                        ? roundQuantity((currentItem.variant_stocks || {})[targetVariant] || 0)
-                        : roundQuantity(currentItem.stock || 0);
-                      const totalDiff = roundQuantity(physicalQty - oldQty);
-                      if (targetVariant !== 'loose') {
-                          const newVariantStocks = { ...(currentItem.variant_stocks || {}), [targetVariant]: physicalQty };
-                          await supabase.from('items').update({ variant_stocks: newVariantStocks }).eq('id', itemDef.id);
-                          setInventory(prev => prev.map(i => i.item_id === itemDef.id ? { ...i, variant_stocks: newVariantStocks } : i));
-                      } else {
-                          await supabase.from('items').update({ stock: physicalQty }).eq('id', itemDef.id);
-                          setInventory(prev => prev.map(i => i.item_id === itemDef.id ? { ...i, quantity: physicalQty } : i));
-                      }
-
-                      // Log only the residual unexplained count difference as Stock Count Correction so explicit spoilage/wastage is not double-counted
-                      const residualDiff = roundQuantity(totalDiff + explicitLossTotal);
-                      if (Math.abs(residualDiff) > 0.0001) {
-                          await supabase.from('inventory_logs').insert([{ 
-                              id: `log_cnt_${closingId}_${itemDef.id}_${targetVariant}`, 
-                              date: new Date().toISOString(), 
-                              item_id: itemDef.id, 
-                              item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
-                              old_quantity: oldQty, 
-                              new_quantity: roundQuantity(oldQty + residualDiff), 
-                              difference: residualDiff, 
-                              reason: 'Stock Count Correction', 
-                              notes: `Shift Closing (${shiftName}) on ${data.date}`
-                          }]);
-                      }
-                  }
-
-                  // Log dedicated Loss/Wastage inventory entries for reporting
-                  if (spoilageQty > 0) {
-                      await supabase.from('inventory_logs').insert([{ 
-                          id: `log_spoil_${closingId}_${itemDef.id}_${targetVariant}`, 
-                          date: new Date().toISOString(), 
-                          item_id: itemDef.id, 
-                          item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
-                          old_quantity: item.system_qty, 
-                          new_quantity: item.physical_qty, 
-                          difference: -spoilageQty, 
-                          reason: 'Spoilage / Wastage', 
-                          notes: `Kharab/Sour Milk - Shift Closing (${shiftName}) on ${data.date}`
-                      }]);
-                  }
-
-                  if (wastageQty > 0) {
-                      await supabase.from('inventory_logs').insert([{ 
-                          id: `log_waste_${closingId}_${itemDef.id}_${targetVariant}`, 
-                          date: new Date().toISOString(), 
-                          item_id: itemDef.id, 
-                          item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
-                          old_quantity: item.system_qty, 
-                          new_quantity: item.physical_qty, 
-                          difference: -wastageQty, 
-                          reason: 'Spoilage / Wastage', 
-                          notes: `Boiling/Measurement Loss - Shift Closing (${shiftName}) on ${data.date}`
-                      }]);
-                  }
-
-                  if (internalUseQty > 0) {
-                      await supabase.from('inventory_logs').insert([{ 
-                          id: `log_tea_${closingId}_${itemDef.id}_${targetVariant}`, 
-                          date: new Date().toISOString(), 
-                          item_id: itemDef.id, 
-                          item_name: item.variant_name ? `${item.product_name} (${item.variant_name})` : item.product_name, 
-                          old_quantity: item.system_qty, 
-                          new_quantity: item.physical_qty, 
-                          difference: -internalUseQty, 
-                          reason: 'Internal Consumption', 
-                          notes: `Staff Tea / Internal Usage - Shift Closing (${shiftName}) on ${data.date}`
-                      }]);
-                  }
-              }
-          }
+          // Stock is not touched here. This used to write the counted numbers straight onto items.stock /
+          // variant_stocks (absolute), erasing every sale synced since the screen loaded, and its loss rows moved
+          // nothing. Counts go through the day-close stock count or an Inventory audit, which move each pile by
+          // its difference. Nothing in the app calls this path today (closeShiftSession is unused).
 
           const closingDetails = {
               shift: shiftName,
@@ -5089,11 +5028,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       const cart = validItems.map(item => {
         const itemDef = items.find(i => i.id === item.itemId || i.name.toLowerCase() === item.name.toLowerCase());
-        const variantDef = itemDef?.variants?.find(v => v.id === item.variantId);
-        const deductFromBase = !variantDef || variantDef.deduct_from_base === true;
-        const baseFactor = Number(variantDef?.quantity_in_base_unit) || 1;
+        // Same pile rule as every bill (saleLineMove): no snapshot here, so the catalog decides.
+        const move = saleLineMove({ qty: item.autoSaleQty, variantId: item.variantId }, itemDef || null);
+        const deductFromBase = move.fromBase;
         // stockDeduction means base units in ONE sold unit everywhere (sync, projection, reports).
-        const stockDeduction = roundQuantity(baseFactor);
+        const stockDeduction = roundQuantity(move.contains);
 
         return {
           id: item.itemId,
@@ -5174,36 +5113,13 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       noteLocalWrite();
 
       setSales(prev => [saleData, ...prev]);
-      setInventory(prev => prev.map(inv => {
-        let quantity = roundQuantity(inv.quantity || 0);
-        const variant_stocks = { ...(inv.variant_stocks || {}) };
-        for (const line of cart) {
-          const lineId = lineItemId(line);
-          if (lineId ? inv.item_id !== lineId : inv.name !== line.name) continue;
-          if (line.variantId && !line.deductFromBase) {
-            variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
-          } else {
-            quantity = roundQuantity(quantity - (Number(line.qty) || 0) * (Number(line.stockDeduction) || 1));
-          }
-        }
-        return { ...inv, quantity, variant_stocks };
-      }));
-      setItems(prev => prev.map(item => {
-        let next = item;
-        for (const line of cart) {
-          const lineId = lineItemId(line);
-          if (lineId ? item.id !== lineId : item.name !== line.name) continue;
-          const variant_stocks = { ...(next.variant_stocks || {}) };
-          let stock = roundQuantity(next.stock || 0);
-          if (line.variantId && !line.deductFromBase) {
-            variant_stocks[line.variantId] = roundQuantity((Number(variant_stocks[line.variantId]) || 0) - line.qty);
-          } else {
-            stock = roundQuantity(stock - (Number(line.qty) || 0) * (Number(line.stockDeduction) || 1));
-          }
-          next = { ...next, stock, variant_stocks };
-        }
-        return next;
-      }));
+      const closingMoves: Record<string, { loose: number; packs: Record<string, number> }> = {};
+      for (const line of cart) {
+        if (!line.itemId) continue;
+        closingMoves[line.itemId] = closingMoves[line.itemId] || { loose: 0, packs: {} };
+        addMove(closingMoves[line.itemId], saleLineMove(line, items.find(i => i.id === line.itemId) || null), -1);
+      }
+      Object.entries(closingMoves).forEach(([itemId, move]) => mirrorStockMove(itemId, move.loose, move.packs));
       if (receiptAccountId && totalAmount > 0) {
         setAccounts(prev => prev.map(a => a.id === receiptAccountId ? { ...a, balance: (a.balance || 0) + totalAmount } : a));
       }
@@ -6416,9 +6332,16 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
     try {
       if (!counts || counts.length === 0) return { adjusted: 0, skipped: 0, no_change: 0 };
+      // Every pile can be counted: loose, ready-made packs (hidden too), and stray counts on a
+      // dozen/tray or deleted pack, which the server only lets go to 0 (dayclose_stock_count).
+      const bad = counts.find(entry => !entry.itemId || !Number.isFinite(Number(entry.counted)) || Number(entry.counted) < 0);
+      if (bad) {
+        showToast('Har count 0 ya us se zyada number hona chahiye.', 'warning');
+        return null;
+      }
       const payload = counts.map(entry => ({
         item_id: entry.itemId,
-        variant_id: entry.variantId || null,
+        variant_id: entry.variantId && entry.variantId !== 'loose' ? entry.variantId : null,
         counted: roundQuantity(entry.counted)
       }));
       const { data, error } = await supabase.rpc('dayclose_stock_count', {
@@ -8138,7 +8061,17 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const isSystem = item?.isSystem || ['item_buffalo_milk', 'item_cow_milk', 'item_mixed_milk'].includes(id) || ['Buffalo Milk', 'Cow Milk', 'Mixed Milk'].includes(name);
       const inv = inventory.find(i => i.item_id === id);
       // Ready-made packs are stock too: 0 kg loose with 40 jars on the shelf is not an empty item.
-      const stock = stockOnHandBase(Number(inv?.quantity ?? (item as any)?.stock ?? 0), inv?.variant_stocks || item?.variant_stocks, item?.variants);
+      const looseNow = Number(inv?.quantity ?? (item as any)?.stock ?? 0);
+      const packsNow = (inv?.variant_stocks || item?.variant_stocks || {}) as Record<string, number>;
+      const stock = stockOnHandBase(looseNow, packsNow, item?.variants);
+      // Hard delete needs every pile at 0, a minus pile too (it is still a stock record to settle);
+      // 0.0004 left over from rounding counts as 0.
+      const STOCK_EPS = 0.0005;
+      const pilesHeld = [
+        ...(Math.abs(looseNow) > STOCK_EPS ? [`${roundQuantity(looseNow)} ${item?.unit || 'units'} loose`] : []),
+        ...(item?.variants || []).filter(v => v.deduct_from_base !== true && Math.abs(Number(packsNow[v.id]) || 0) > STOCK_EPS)
+          .map(v => `${roundQuantity(Number(packsNow[v.id]) || 0)} × ${v.name}`),
+      ];
       const salesCount = sales.filter(s => s.items?.some(it => it.itemId === id)).length;
       const purCount = materialPurchases.filter(m => m.item_id === id).length;
       const logCount = inventoryLogs.filter(l => l.item_id === id).length;
@@ -8151,15 +8084,15 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (recipesUsing.length > 0) {
         blockingReasons.push(`Item is required as recipe ingredient for: ${recipesUsing.join(', ')}.`);
       }
-      if (stock > 0) {
-        blockingReasons.push(`Item has ${stock} ${item?.unit || 'units'} in current stock, packs included (Valuation at cost: Rs ${(stock * (item?.cost_price || 0)).toLocaleString()}).`);
+      if (pilesHeld.length > 0) {
+        blockingReasons.push(`Item still has stock: ${pilesHeld.join(', ')}${stock > STOCK_EPS ? ` (Valuation at cost: Rs ${roundCurrency(stock * (item?.cost_price || 0)).toLocaleString()})` : ''}. Write it off or count it to 0 first.`);
       }
       if (hasHistory && recipesUsing.length === 0) {
         blockingReasons.push(`Item has ${salesCount} sales bills and ${purCount} material purchases in history.`);
       }
 
       return {
-        canHardDelete: !isSystem && !hasHistory && stock === 0 && recipesUsing.length === 0,
+        canHardDelete: !isSystem && !hasHistory && pilesHeld.length === 0 && recipesUsing.length === 0,
         canDeactivate: recipesUsing.length === 0,
         hasHistory,
         balance: 0,
@@ -8398,6 +8331,7 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (!item) return false;
 
       if (action === 'write_off_spoilage') {
+        if (!guardStockWrite('stock write-off karne', 'items', 'delete')) return false;
         // Loose stock AND ready packs leave the shelf: writing off only the loose pile left the packs
         // sellable (and counted) on a discontinued item. Read from the server, not the screen copy.
         const { data: stockRow, error: stockReadError } = await supabase.from('items').select('stock, variant_stocks').eq('id', id).single();
@@ -8410,33 +8344,21 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
         const looseOff = loose > 0 ? loose : 0;
         if (looseOff > 0 || Object.keys(packDeltas).length > 0) {
+          // Every positive pile goes to 0 by its difference (a sale syncing meanwhile is kept), one log
+          // row in the one log shape. Stray counts on a dozen/tray or deleted pack are cleared too;
+          // reports value them at nothing (logBaseDelta skips ids that are not ready-made packs).
           const { error: writeOffError } = await adjustItemStock(id, -looseOff, Object.keys(packDeltas).length ? packDeltas : undefined);
           if (writeOffError) throw writeOffError;
-          const now = new Date().toISOString();
-          const logRows = [
-            ...(looseOff > 0 ? [{
-              id: `log_sp_${generateUUID()}`, date: now, item_id: id, item_name: item.name,
-              old_quantity: loose, new_quantity: 0, difference: -looseOff, reason: AdjustmentReason.SPOILAGE,
-              notes: 'Stock written off to spoilage prior to item discontinuation',
-              details: { loose_delta: -looseOff }
-            }] : []),
-            ...Object.entries(packDeltas).map(([variantId, delta]) => ({
-              id: `log_sp_${generateUUID()}`, date: now, item_id: id,
-              item_name: `${item.name} (${(item.variants || []).find(v => v.id === variantId)?.name || 'Pack'})`,
-              old_quantity: loose, new_quantity: loose, difference: 0, reason: AdjustmentReason.SPOILAGE,
-              notes: `${-delta} pack(s) written off to spoilage prior to item discontinuation`,
-              details: { variant_id: variantId, variant_delta: delta, loose_delta: 0 }
-            }))
-          ];
-          const { error: logError } = await supabase.from('inventory_logs').insert(logRows);
+          const packNames = Object.entries(packDeltas)
+            .map(([variantId, delta]) => `${-delta} × ${(item.variants || []).find(v => v.id === variantId)?.name || 'old pack'}`);
+          const { error: logError } = await supabase.from('inventory_logs').insert([{
+            id: `log_sp_${generateUUID()}`, date: normalizeTransactionTimestamp(), item_id: id, item_name: item.name,
+            old_quantity: loose, new_quantity: roundQuantity(loose - looseOff), difference: -looseOff, reason: AdjustmentReason.SPOILAGE,
+            notes: `Stock written off to spoilage prior to item discontinuation${packNames.length ? ` (${packNames.join(', ')})` : ''}`,
+            details: { loose_delta: -looseOff, variant_deltas: packDeltas, business_date: getBusinessDate() }
+          }]);
           if (logError) console.error('[safeDeleteItem] Write-off log not saved:', logError);
-          const clearPacks = (stocks: Record<string, number> | undefined) => {
-            const next = { ...(stocks || {}) };
-            Object.keys(packDeltas).forEach(variantId => { next[variantId] = 0; });
-            return next;
-          };
-          setInventory(prev => prev.map(iv => iv.item_id === id ? { ...iv, quantity: looseOff > 0 ? 0 : iv.quantity, variant_stocks: clearPacks(iv.variant_stocks) } : iv));
-          setItems(prev => prev.map(i => i.id === id ? { ...i, stock: looseOff > 0 ? 0 : (i as any).stock, variant_stocks: clearPacks(i.variant_stocks) } as any : i));
+          mirrorStockMove(id, -looseOff, packDeltas);
         }
         if (!(await updateItem(id, { isActive: false }))) { showToast('Inactive karna save nahi hua. Dobara koshish karein.', 'error'); return false; }
         showToast(`Stock written off to spoilage and "${item.name}" marked Inactive (Discontinued)!`, 'success');
@@ -8456,6 +8378,19 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (!assessment.canHardDelete) {
           showToast(`Cannot permanently delete: ${assessment.blockingReasons[0]}`, 'error');
           return false;
+        }
+        // The screen copy can be older than the last sale or purchase: check the piles on the server too.
+        const { data: liveRow, error: liveError } = await supabase.from('items').select('stock, variant_stocks, variants').eq('id', id).maybeSingle();
+        if (liveError) throw liveError;
+        if (liveRow) {
+          const livePacks = (liveRow.variant_stocks || {}) as Record<string, number>;
+          const liveHeld = Math.abs(Number(liveRow.stock) || 0) > 0.0005
+            || ((liveRow.variants || []) as any[]).some(v => v.deduct_from_base !== true && Math.abs(Number(livePacks[v.id]) || 0) > 0.0005);
+          if (liveHeld) {
+            showToast('Is product mein abhi stock hai (server par). Pehle write-off ya stock count se 0 karein.', 'error');
+            fetchData(STOCK);
+            return false;
+          }
         }
         setItems(prev => prev.filter(i => i.id !== id));
         setInventory(prev => prev.filter(iv => iv.item_id !== id));
