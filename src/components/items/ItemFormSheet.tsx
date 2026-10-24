@@ -440,16 +440,17 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
   /* ---------- Save ---------- */
 
   /**
-   * `addItem` only says whether it worked, so a new product's id is read from the catalog list once
-   * it arrives. On a saved product the offer is re-checked first: stock that arrived while the form
-   * was open (a purchase on another counter) must never be overwritten by an "opening" count.
+   * `addItem` resolves to the new product's id; where it only says `true` (older context), the id is
+   * read from the catalog list once the product arrives. On a saved product the offer is re-checked
+   * first: stock that arrived while the form was open (a purchase on another counter) must never be
+   * overwritten by an "opening" count.
    */
-  const saveOpeningStock = async (savedId: string | null, knownIds: Set<string>) => {
-    if (savedId && !openingOpenRef.current) {
+  const saveOpeningStock = async (knownId: string | null, knownIds: Set<string>) => {
+    if (isEdit && !openingOpenRef.current) {
       showToast('Is dauran stock aa gaya, is liye opening stock save nahi kiya. Inventory mein stock count karein.', 'warning');
       return;
     }
-    const id = savedId || await waitForNewItem(() => itemsRef.current, trimmedName, knownIds);
+    const id = knownId || await waitForNewItem(() => itemsRef.current, trimmedName, knownIds);
     if (!id) {
       showToast('Product save ho gaya, lekin opening stock save nahi hua. Product khol kar dobara likhein.', 'warning');
       return;
@@ -507,11 +508,12 @@ export default function ItemFormSheet({ mode, item, focusOpeningStock, canDelete
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
-      const ok = isEdit && item
+      const saved: unknown = isEdit && item
         ? await updateItem(item.id, finalData)
         : await addItem(finalData as Omit<ItemDefinition, 'id'>);
-      if (ok) {
-        if (wantsOpening) await saveOpeningStock(isEdit && item ? item.id : null, knownIds);
+      if (saved) {
+        const savedId = isEdit && item ? item.id : typeof saved === 'string' ? saved : null;
+        if (wantsOpening) await saveOpeningStock(savedId, knownIds);
         submittingRef.current = false;
         onSaved();
         return;
