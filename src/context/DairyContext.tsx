@@ -26,14 +26,15 @@ import { db, generateUUID, generateInvoiceNumber, LocalOrder, LocalOrderItem, Lo
 import { actionLock } from '../lib/actionLock';
 import { loadRead, withDeadline } from '../lib/loadRequest';
 import { saleItemSnapshot } from '../lib/saleSnapshot';
-import { averageCostAfterIntake, saleLineStock, stockOnHandBase } from '../lib/sellUnits';
+import { saleLineStock, stockOnHandBase } from '../lib/sellUnits';
 import { syncService } from '../lib/syncService';
 import { getOperatorSession, hasStoredOperatorSession, operatorSignIn, operatorSignOut, sessionOperatorId, type OperatorLoginRequest } from '../lib/operatorAuth';
 import { isPermanentSyncError } from '../lib/syncErrors';
 import { moneyRpcMessage, requestIdFor, settleRequest } from '../lib/moneyRpc';
+import { applyInventoryStates, applyItemStates, counterMilkItemFor, itemStatesFrom, materialPurchaseFromRow, materialPurchaseKey, shortMaterialsText } from '../lib/stockInboundRpc';
 import { currentEpoch, emptyBases, mapCatalogCache, noteLocalWrite, projectLedger, readUnsyncedWork, toCustomer, toPosBill } from '../lib/unsyncedProjection';
 import {
-  adjustAccountBalance, adjustSupplierBalance,
+  adjustAccountBalance,
   adjustItemStock, adjustExpenseVendorStats, transferBetweenAccounts,
   procureMilkIntake, recordSupplierPaymentEffects, recordExpenseEffects
 } from '../lib/atomic';
@@ -42,10 +43,10 @@ import { normalizeTransactionTimestamp, getTodayLocalDate } from '../lib/formatt
 import { netPurchaseReturnRefunds, proportionalRefund, salePaidAmount, splitRefund } from '../lib/moneyFlow';
 import { buildStandardUnitGroups, convertQuantity, getAllAvailableUnits } from '../lib/unitConversion';
 import { 
-  PriorityLevel, MilkType, StockType, AllocationStatus, ProductionStage, DestinationType,
+  PriorityLevel, StockType, AllocationStatus, ProductionStage, DestinationType,
   AdjustmentReason, SystemSettings, PurchaseEntry, MaterialPurchaseEntry, Supplier, InventoryItem,
   AllocationEntry, ProductionBatch, POSBill, Customer, DailySupplyEntry, RetailClosingEntry,
-  CustomerTransaction, SupplierTransaction, UnitDefinition, UnitGroup, ItemVariant,
+  CustomerTransaction, SupplierTransaction, UnitDefinition, UnitGroup,
   ItemDefinition, ExpenseEntry, RecurringExpense, ExpenseVendor, ExpenseVendorTransaction,
   InventoryLog, OpeningStockPiles, FinancialAccount, BankTransaction, ManualAccount, JournalEntry,
   AppUser, AppRole, PermissionModule, ShiftSession, DayClosingEntry,
@@ -2690,132 +2691,67 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
   
+  // Pool lines, and for the retail counter the counter milk item's stock (litres converted to its
+  // unit), average cost and stock log, move together in allocate_milk_pool. Each counter line names
+  // the milk item it goes to; a lot with no milk item in L or ml is refused before anything moves.
   const allocateBulkMilk = async (itemsList: { allocationId: string, quantity: number }[], destination: string, details: any) => {
     const lockResult = await actionLock.runExclusive(`allocate_bulk_${destination}`, async () => {
       try {
-        const updatedAllocations = [...allocations];
+        const customUnits = settings.inventory?.customUnits || [];
+        const lines: { allocation_id: string; quantity: number; item_id?: string }[] = [];
 
         // Milk that is not in the pool cannot be allocated: it would appear in counter stock from nowhere.
         for (const item of itemsList) {
           const pool = allocations.find(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
-          if (!pool) continue;
-          const left = pool.remaining_quantity !== null && pool.remaining_quantity !== undefined
-            ? Number(pool.remaining_quantity)
-            : Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0);
-          if (roundQuantity(Number(item.quantity) || 0) > roundQuantity(Math.max(0, left)) + 0.001) {
-            showToast(`Sirf ${roundQuantity(Math.max(0, left))} L doodh baqi hai, ${roundQuantity(Number(item.quantity) || 0)} L allocate nahi ho sakta.`, 'error');
-            return false;
-          }
-        }
-
-        for (const item of itemsList) {
-          const index = updatedAllocations.findIndex(a => a.id === item.allocationId || a.purchase_id === item.allocationId);
-          if (index === -1) continue;
-
-          const allocRecord = updatedAllocations[index];
-          const rawRem = (allocRecord.remaining_quantity !== null && allocRecord.remaining_quantity !== undefined)
-            ? Number(allocRecord.remaining_quantity)
-            : (Number(allocRecord.original_quantity || 0) - Number(allocRecord.allocated_quantity || 0));
-          const currentRemaining = isNaN(rawRem) ? 0 : rawRem;
-          const deductQty = roundQuantity(Number(item.quantity) || 0);
-          const newRemaining = roundQuantity(Math.max(0, currentRemaining - deductQty));
-          const newAllocated = roundQuantity((Number(allocRecord.allocated_quantity) || 0) + deductQty);
-          
-          const isFullyAllocated = newRemaining <= 0.01;
-          const status = isFullyAllocated ? AllocationStatus.FULLY_ALLOCATED : AllocationStatus.PARTIALLY_ALLOCATED;
-          const finalRemaining = isFullyAllocated ? 0 : newRemaining;
-
-          const currentDetails = (allocRecord.details && typeof allocRecord.details === 'object') ? allocRecord.details : {};
-          const prevHistory = Array.isArray(currentDetails.allocation_history) ? currentDetails.allocation_history : [];
-          const updatedHistory = [
-            ...prevHistory,
-            {
-              allocated_at: new Date().toISOString(),
-              quantity: deductQty,
-              destination: destination,
-              rate: allocRecord.average_rate || details?.rate
+          const quantity = roundQuantity(Number(item.quantity) || 0);
+          if (pool) {
+            const left = pool.remaining_quantity !== null && pool.remaining_quantity !== undefined
+              ? Number(pool.remaining_quantity)
+              : Number(pool.original_quantity || 0) - Number(pool.allocated_quantity || 0);
+            if (quantity > roundQuantity(Math.max(0, left)) + 0.001) {
+              showToast(`Sirf ${roundQuantity(Math.max(0, left))} L doodh baqi hai, ${quantity} L allocate nahi ho sakta.`, 'error');
+              return false;
             }
-          ];
-
-          const updatedDetails = {
-            ...currentDetails,
-            allocation_history: updatedHistory,
-            last_allocated_at: new Date().toISOString(),
-            last_destination: destination
-          };
-
-          const destinationToSave = isFullyAllocated 
-            ? (destination as DestinationType)
-            : (allocRecord.destination || (destination as DestinationType));
-
-          const { error: updateError } = await supabase.from('allocations').update({ 
-              remaining_quantity: finalRemaining,
-              allocated_quantity: newAllocated,
-              status: status,
-              destination: destinationToSave,
-              details: updatedDetails
-          }).eq('id', allocRecord.id);
-
-          if (updateError) throw updateError;
-
-          updatedAllocations[index] = {
-              ...allocRecord,
-              remaining_quantity: finalRemaining,
-              allocated_quantity: newAllocated,
-              status: status,
-              destination: destinationToSave,
-              details: updatedDetails
-          };
-
-          if (destination === DestinationType.RETAIL) {
-              const typeLower = (allocRecord.milk_type || 'Mixed').toLowerCase();
-              // Counter milk is the litre-based system item for this milk type, never "Milk Cake" or a kg product.
-              const isLitreItem = (i: ItemDefinition) => ['l', 'ltr', 'liter', 'liters', 'litre', 'litres'].includes(String(i.unit || '').trim().toLowerCase());
-              const itemDef = items.find(i => i.id === `item_${typeLower}_milk`)
-                || items.find(i => isLitreItem(i) && i.name.toLowerCase().includes(typeLower) && i.name.toLowerCase().includes('milk'))
-                || items.find(i => i.id === 'item_mixed_milk')
-                || items.find(i => isLitreItem(i) && /\bmilk\b/i.test(i.name) && !/(powder|shake|flavou?red|condensed|cake)/i.test(i.name));
-
-              if (itemDef) {
-                  const { data: currItem } = await supabase.from('items').select('stock, cost_price, variant_stocks, variants').eq('id', itemDef.id).single();
-                  const currentStock = currItem ? (Number(currItem.stock) || 0) : 0;
-                  const currentCost = currItem ? (Number(currItem.cost_price) || Number(itemDef.cost_price) || 0) : (Number(itemDef.cost_price) || 0);
-                  const newStock = roundQuantity(currentStock + item.quantity);
-                  const incomingRate = Number(allocRecord.average_rate || details?.rate || currentCost) || 0;
-                  const weightedCost = averageCostAfterIntake(stockOnHandBase(currentStock, currItem?.variant_stocks, currItem?.variants), currentCost, item.quantity, item.quantity * incomingRate);
-
-                  // Add the litres as a delta so a counter sale syncing meanwhile is not overwritten.
-                  const { error: counterStockError } = await adjustItemStock(itemDef.id, roundQuantity(item.quantity));
-                  if (counterStockError) throw counterStockError;
-                  if ((weightedCost || currentCost) > 0) {
-                    await supabase.from('items').update({ cost_price: weightedCost || currentCost }).eq('id', itemDef.id);
-                  }
-
-                  setItems(prev => prev.map(i => i.id === itemDef.id ? { ...i, stock: newStock, cost_price: weightedCost || currentCost } : i));
-
-                  syncItemAndInventoryStock(itemDef.id, newStock);
-                  
-                  await supabase.from('inventory_logs').insert([{
-                      id: `log_alloc_${allocRecord.id}_${itemDef.id}_${generateUUID()}`, 
-                      date: new Date().toISOString(),
-                      item_id: itemDef.id, 
-                      item_name: itemDef.name, 
-                      old_quantity: currentStock,
-                      new_quantity: newStock, 
-                      difference: item.quantity, 
-                      reason: 'Allocation', 
-                      notes: `Allocated to Counter from ${allocRecord.supplier_name || 'Milk Tank'} (Purchase #${allocRecord.purchase_id || 'N/A'})`
-                  }]);
-              }
           }
+          let itemId: string | undefined;
+          if (destination === DestinationType.RETAIL) {
+            const counterItem = counterMilkItemFor(items, pool?.milk_type, customUnits);
+            if (!counterItem) {
+              showToast(`${pool?.milk_type || 'Mixed'} doodh ke liye counter ka milk item (L ya ml) nahi mila. Pehle catalog mein milk item banayein.`, 'error');
+              return false;
+            }
+            itemId = counterItem.id;
+          }
+          lines.push({ allocation_id: pool?.id || item.allocationId, quantity, item_id: itemId });
         }
-        
-        setAllocations(updatedAllocations);
+
+        const result = await callMoneyRpc('allocate_milk_pool', `allocate_pool:${destination}:${lines.map(l => `${l.allocation_id}:${l.quantity}`).join('|')}`, requestId => ({
+          p_request_id: requestId,
+          p_payload: { destination, rate: Number(details?.rate) || null, lines }
+        }));
+
+        noteLocalWrite();
+        const savedRows: any[] = Array.isArray(result?.rows) ? result.rows : [];
+        const byId = new Map(savedRows.map(row => [row.id, row]));
+        setAllocations(prev => prev.map(a => {
+          const row = byId.get(a.id);
+          return row ? {
+            ...a,
+            remaining_quantity: roundQuantity(Number(row.remaining_quantity) || 0),
+            allocated_quantity: roundQuantity(Number(row.allocated_quantity) || 0),
+            status: row.status,
+            destination: row.destination,
+            details: row.details
+          } : a;
+        }));
+        const states = itemStatesFrom(result);
+        setItems(prev => applyItemStates(prev, states));
+        setInventory(prev => applyInventoryStates(prev, states));
         fetchData(['allocations', ...STOCK]);
         return true;
       } catch (e) {
         console.error(e);
-        showToast("Allocation failed: " + getErrorMessage(e), "error");
+        showToast("Allocation nahi hui: " + moneyRpcMessage(e), "error");
         return false;
       }
     });
@@ -2956,102 +2892,58 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Lines carry litres (production batches are in litres) unless they name another `unit`; each is
   // converted to the item's own stock unit, so 2 L taken from milk stocked in ml moves 2000 ml, not 2.
+  // take_counter_milk converts, checks every item's loose stock and takes all lines out together.
   const allocateFromRetailStock = async (itemsList: any[], destination: string, _details: any) => {
     const lockResult = await actionLock.runExclusive(`alloc_retail_${destination}`, async () => {
       try {
-          const updatedInventory = [...inventory];
-          const updatedItems = [...items];
           const customUnits = settings.inventory?.customUnits || [];
-
-          const lines: Array<{ def: ItemDefinition; stockQty: number }> = [];
+          const lines: { item_id: string; quantity: number; unit: string }[] = [];
           for (const item of itemsList) {
             const rawId = String(item.itemId || item.id || '');
             const def = findLineItem<ItemDefinition>(items, { ...item, itemId: rawId.startsWith('inv_') ? rawId.slice(4) : rawId || undefined, id: undefined });
-            if (!def) continue;
+            if (!def) {
+              showToast(`Counter item nahi mila (${rawId || 'unknown'}). Page reload karein.`, 'error');
+              return false;
+            }
             const fromUnit = String(item.unit || 'L');
-            const stockQty = convertQuantity(Number(item.quantity) || 0, fromUnit, def.unit || fromUnit, customUnits);
-            if (stockQty === null) {
+            if (convertQuantity(Number(item.quantity) || 0, fromUnit, def.unit || fromUnit, customUnits) === null) {
               showToast(`${def.name}: ${fromUnit} ko ${def.unit} mein badla nahi ja sakta. Ye item yahan allocate nahi ho sakta.`, 'error');
               return false;
             }
-            lines.push({ def, stockQty: roundQuantity(stockQty) });
+            lines.push({ item_id: def.id, quantity: roundQuantity(Number(item.quantity) || 0), unit: fromUnit });
           }
+          if (lines.length === 0) return false;
 
-          // Counter stock cannot be sent out beyond what is on hand (it went negative). Checked for
-          // every line before anything moves, so a short line never leaves earlier lines deducted.
-          const wanted = new Map<string, { name: string; unit: string; qty: number }>();
-          for (const { def, stockQty } of lines) {
-            const prev = wanted.get(def.id);
-            wanted.set(def.id, { name: def.name, unit: def.unit || '', qty: roundQuantity((prev?.qty || 0) + stockQty) });
-          }
-          for (const [itemId, need] of wanted) {
-            const { data: stockRow, error: stockError } = await supabase.from('items').select('stock').eq('id', itemId).single();
-            if (stockError) throw stockError;
-            const onHand = roundQuantity(Number(stockRow?.stock) || 0);
-            if (need.qty > onHand + 0.001) {
-              showToast(`${need.name}: sirf ${onHand} ${need.unit} stock hai, ${need.qty} allocate nahi ho sakta.`, 'error');
-              return false;
-            }
-          }
+          const result = await callMoneyRpc('take_counter_milk', `take_counter:${destination}:${lines.map(l => `${l.item_id}:${l.quantity}:${l.unit}`).join('|')}`, requestId => ({
+            p_request_id: requestId,
+            p_payload: { destination, lines }
+          }));
 
-          let logFailed = false;
-          for (const { def: itemDef, stockQty } of lines) {
-              const targetId = itemDef.id;
-              const { data: currItem } = await supabase.from('items').select('stock, name').eq('id', targetId).single();
-
-              const currentStock = currItem ? roundQuantity(currItem.stock || 0) : roundQuantity((itemDef as any).stock || 0);
-              const deductQty = stockQty;
-              const newStock = roundQuantity(currentStock - deductQty);
-
-              const { error: allocStockError } = await adjustItemStock(targetId, -deductQty);
-              if (allocStockError) throw allocStockError;
-              
-              const idxInv = updatedInventory.findIndex(i => i.item_id === targetId || i.id === `inv_${targetId}`);
-              if (idxInv >= 0) {
-                 updatedInventory[idxInv] = { ...updatedInventory[idxInv], quantity: newStock };
-              }
-
-              const idxItem = updatedItems.findIndex(i => i.id === targetId);
-              if (idxItem >= 0) {
-                 updatedItems[idxItem] = { ...updatedItems[idxItem], stock: newStock };
-              }
-
-              const { error: logError } = await supabase.from('inventory_logs').insert([{
-                  id: `log_alloc_ret_${generateUUID()}`, 
-                  date: new Date().toISOString(), 
-                  item_id: targetId,
-                  item_name: itemDef.name, 
-                  old_quantity: currentStock, 
-                  new_quantity: newStock, 
-                  difference: -deductQty, 
-                  reason: 'Allocation', 
-                  notes: `Leftover Milk Allocated to ${destination}`
-              }]);
-              if (logError) {
-                console.error('[allocateFromRetailStock] Stock log not saved:', logError);
-                logFailed = true;
-              }
-          }
-          setInventory(updatedInventory);
-          setItems(updatedItems);
-          if (logFailed) showToast('Stock nikal gaya, lekin stock history mein entry save nahi hui.', 'warning');
+          noteLocalWrite();
+          const states = itemStatesFrom(result);
+          setItems(prev => applyItemStates(prev, states));
+          setInventory(prev => applyInventoryStates(prev, states));
           fetchData(['allocations', ...STOCK]);
           return true;
-      } catch (e) { 
-        console.error("allocateFromRetailStock error:", e); 
-        return false; 
+      } catch (e) {
+        console.error("allocateFromRetailStock error:", e);
+        showToast('Counter milk allocate nahi hua: ' + moneyRpcMessage(e), 'error');
+        return false;
       }
     });
 
     return lockResult !== null ? lockResult : false;
   };
-  
+
+  // Completion and cancel run on the server in one transaction each (complete_production_batch,
+  // cancel_production_batch): materials, outputs, average cost, stock logs, the milk returned and
+  // the batch status move together. Other stage moves only change the batch row.
   const updateBatchStage = async (batchId: string, newStage: ProductionStage, logMessage?: string, outputData?: { variants: { variantId: string, count: number }[], looseQty: number }) => {
     const lockResult = await actionLock.runExclusive(`update_batch_stage_${batchId}`, async () => {
       try {
         const batchIndex = productionBatches.findIndex(b => b.id === batchId);
         if (batchIndex === -1) return false;
-        
+
         const batch = productionBatches[batchIndex];
 
         // Idempotency: skip if the batch is already in the requested terminal stage.
@@ -3060,354 +2952,76 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           return true;
         }
 
-        // Re-check the database as well, so a concurrent update cannot apply the stage twice.
-        const { data: dbBatch } = await supabase.from('production_batches').select('status').eq('id', batchId).maybeSingle();
-        if (dbBatch && dbBatch.status === newStage) {
-          console.warn(`[Batch DB Idempotency] Batch ${batchId} is already ${newStage} in database. Skipping duplicate.`);
-          return true;
-        }
-
         // Completed stock is already on the shelf and may be sold; cancelling would return the milk a second time.
-        if (newStage === ProductionStage.CANCELLED && (batch.status === ProductionStage.COMPLETED || dbBatch?.status === ProductionStage.COMPLETED)) {
+        if (newStage === ProductionStage.CANCELLED && batch.status === ProductionStage.COMPLETED) {
           showToast("Completed batch cancel nahi ho sakta. Stock adjustment se correction karein.", "warning");
           return false;
+        }
+
+        if (newStage === ProductionStage.COMPLETED || newStage === ProductionStage.CANCELLED) {
+          const completing = newStage === ProductionStage.COMPLETED;
+          const { data: result, error } = completing
+            ? await supabase.rpc('complete_production_batch', {
+                p_batch_id: batchId,
+                p_payload: {
+                  message: logMessage || `Moved to ${newStage}`,
+                  output: outputData ? {
+                    loose_qty: Number(outputData.looseQty) || 0,
+                    packs: (outputData.variants || []).filter(v => v.variantId).map(v => ({ variant_id: v.variantId, count: Number(v.count) || 0 })),
+                  } : null,
+                },
+              })
+            : await supabase.rpc('cancel_production_batch', {
+                p_batch_id: batchId,
+                p_payload: { message: logMessage || 'Batch Cancelled' },
+              });
+          if (error) throw error;
+
+          noteLocalWrite();
+          if (result?.batch) {
+            setProductionBatches(prev => prev.map(b => b.id === batchId ? { ...b, ...result.batch } as ProductionBatch : b));
+          }
+          const states = itemStatesFrom(result);
+          setItems(prev => applyItemStates(prev, states));
+          setInventory(prev => applyInventoryStates(prev, states));
+          if (result?.allocation) {
+            setAllocations(prev => [result.allocation as AllocationEntry, ...prev.filter(a => a.id !== result.allocation.id)]);
+          }
+          if (completing) {
+            const short = shortMaterialsText(result);
+            if (short) showToast(`Batch complete ho gaya, lekin stock kam tha: ${short}. In ka stock minus ho gaya; stock count se theek karein.`, 'warning');
+          } else if (!result?.already_applied) {
+            const counter = roundQuantity(Number(result?.counter_litres) || 0);
+            showToast(`Batch #${batch.batch_number} cancelled. ${roundQuantity(Number(result?.returned_litres) || 0)} L returned${counter > 0 ? ` (${counter} L to counter stock)` : ''}.`, "success");
+          }
+          // No completion toast here: the Production screen announces it.
+          fetchData(['productionBatches', 'allocations', ...STOCK]);
+          return true;
         }
 
         const newLogs = [...(batch.logs || []), { stage: newStage, message: logMessage || `Moved to ${newStage}`, timestamp: new Date().toISOString() }];
         const updatePayload: any = { status: newStage, logs: newLogs };
 
-        if (newStage === ProductionStage.COMPLETED) {
-            updatePayload.completed_date = new Date().toISOString();
-            
-            const variantsList: any[] = outputData?.variants || [];
-            const hasVariants = variantsList.length > 0;
-
-            const variantBaseKg = variantsList.reduce((sum, v) => {
-              const qtyEach = v.base_qty_each !== undefined ? Number(v.base_qty_each) || 0 : (v.total_base_qty ? (Number(v.total_base_qty) || 0) / (Number(v.count) || 1) : 0);
-              const totalBase = v.total_base_qty !== undefined ? Number(v.total_base_qty) || 0 : (qtyEach * (Number(v.count) || 0));
-              return sum + totalBase;
-            }, 0);
-
-            const looseQty = outputData?.looseQty !== undefined 
-              ? (Number(outputData.looseQty) || 0) 
-              : (hasVariants ? 0 : (batch.quantity_output_estimated || (batch.quantity_input ? batch.quantity_input * 0.85 : 0)));
-
-            // Total production output in base units (e.g. 11.5 kg = 0.5 kg loose + 11 kg packaged).
-            let actualTotalOutput = roundQuantity(looseQty + variantBaseKg);
-            // An entered output of zero is a real result (spoilt batch); only a missing entry falls back to the estimate.
-            if (actualTotalOutput <= 0 && !outputData) {
-               actualTotalOutput = roundQuantity(batch.quantity_output_estimated || (batch.quantity_input ? batch.quantity_input * 0.85 : 0));
-            }
-
-            updatePayload.quantity_output_actual = actualTotalOutput;
-            // Keep pack sizes/counts as they were at completion. A later catalog edit
-            // must not change the historical stock-profit report.
-            const costProduct = items.find(i => i.name.trim().toLowerCase() === String(batch.product_name || '').trim().toLowerCase());
-            const recipeInputs = (costProduct?.recipe || []).map(ingredient => {
-              const material = items.find(i => i.id === ingredient.item_id);
-              const scale = costProduct?.recipe_base_quantity ? (batch.quantity_input || 0) / costProduct.recipe_base_quantity : 0;
-              // Recipe amounts may be written in g/ml while the material is stocked in kg/L: deduct in the stock unit.
-              const recipeQty = (Number(ingredient.quantity) || 0) * scale;
-              const stockUnit = material?.unit || ingredient.unit;
-              const inStockUnit = ingredient.unit && stockUnit ? convertQuantity(recipeQty, ingredient.unit, stockUnit, settings.inventory?.customUnits || []) : recipeQty;
-              return { item_id: ingredient.item_id, name: material?.name || ingredient.item_name, quantity: roundQuantity(inStockUnit ?? recipeQty), unit: stockUnit, unit_cost: material?.cost_price || 0 };
-            });
-            const packagingInputs = variantsList.flatMap(v => {
-              const variant = costProduct?.variants?.find(def => def.id === v.variantId);
-              const material = items.find(i => i.id === variant?.packaging_item_id);
-              return variant?.packaging_item_id ? [{ item_id: variant.packaging_item_id, name: material?.name || variant.packaging_item_name, quantity: roundQuantity((Number(v.count) || 0) * (variant.packaging_qty || 0)), unit: material?.unit, unit_cost: material?.cost_price || 0 }] : [];
-            });
-
-            const milkCostTotal = roundCurrency((batch.quantity_input || 0) * (batch.input_cost_per_unit || batch.details?.input_cost_per_unit || 0));
-            const ingredientsCostTotal = roundCurrency(recipeInputs.reduce((s, r) => s + (r.quantity * (r.unit_cost || 0)), 0));
-            const packagingCostTotal = roundCurrency(packagingInputs.reduce((s, p) => s + (p.quantity * (p.unit_cost || 0)), 0));
-            const totalBatchCost = roundCurrency(milkCostTotal + ingredientsCostTotal + packagingCostTotal);
-            const producedUnitCost = actualTotalOutput > 0 ? roundCurrency(totalBatchCost / actualTotalOutput) : (costProduct?.cost_price || 180);
-
-            updatePayload.details = {
-              ...(batch.details || {}),
-              output_breakdown: { loose_qty: hasVariants ? looseQty : actualTotalOutput, variants: variantsList },
-              cost_snapshot: {
-                saved_at: updatePayload.completed_date,
-                milk_cost: milkCostTotal,
-                ingredients: recipeInputs,
-                packaging: packagingInputs,
-                recipe_inputs: recipeInputs,
-                packaging_inputs: packagingInputs,
-                materials_posted: true,
-                external_conversion_cost: 0
-              }
-            };
-            
-            // Deterministic log ID for this batch completion to prevent double-increment
-            const deterministicLogId = `log_prod_${batch.id}`;
-            
-            // Check if log already exists in Supabase (idempotency guard)
-            const { data: existingLog } = await supabase.from('inventory_logs').select('id').eq('id', deterministicLogId).maybeSingle();
-            
-            if (!existingLog) {
-                const allMaterialInputs = [...recipeInputs, ...packagingInputs].filter(inp => inp.item_id && inp.quantity > 0);
-                const matTotalsById = new Map<string, { item_id: string; name: string; quantity: number }>();
-                for (const inp of allMaterialInputs) {
-                  const prev = matTotalsById.get(inp.item_id);
-                  if (prev) {
-                    prev.quantity = roundQuantity(prev.quantity + inp.quantity);
-                  } else {
-                    matTotalsById.set(inp.item_id, { item_id: inp.item_id, name: inp.name, quantity: roundQuantity(inp.quantity) });
-                  }
-                }
-                for (const mat of matTotalsById.values()) {
-                  const { data: matRow } = await supabase.from('items').select('stock, name').eq('id', mat.item_id).maybeSingle();
-                  if (matRow) {
-                    const oldMatStock = Number(matRow.stock) || 0;
-                    const newMatStock = roundQuantity(oldMatStock - mat.quantity);
-                    await adjustItemStock(mat.item_id, -mat.quantity);
-                    setInventory(prev => prev.map(i => i.item_id === mat.item_id ? { ...i, quantity: newMatStock } : i));
-                    setItems(prev => prev.map(i => i.id === mat.item_id ? { ...i, stock: newMatStock } : i));
-                    await supabase.from('inventory_logs').insert([{
-                      id: `log_prod_mat_${batch.id}_${mat.item_id}`,
-                      date: updatePayload.completed_date,
-                      item_id: mat.item_id,
-                      item_name: matRow.name || mat.name,
-                      old_quantity: oldMatStock,
-                      new_quantity: newMatStock,
-                      difference: -mat.quantity,
-                      reason: 'Production Usage',
-                      notes: `Consumed in Batch #${batch.batch_number} (${batch.product_name})`
-                    }]);
-                  }
-                }
-
-                const batchProdName = (batch.product_name || '').trim().toLowerCase();
-                const item = items.find(i => i.name.trim().toLowerCase() === batchProdName) 
-                        || items.find(i => i.name.toLowerCase().includes(batchProdName) || batchProdName.includes(i.name.toLowerCase()));
-
-                if (item) {
-                    const { data: currentItem } = await supabase.from('items').select('stock, variant_stocks, cost_price').eq('id', item.id).single();
-                    const currentStock = currentItem ? (currentItem.stock || 0) : 0;
-                    const currentCostPrice = currentItem ? (Number(currentItem.cost_price) || Number(item.cost_price) || 0) : (Number(item.cost_price) || 0);
-
-                    // Same averaging pool as purchases: loose + packed piles, negatives count as zero.
-                    const existingTotalBase = stockOnHandBase(currentStock, currentItem?.variant_stocks, item?.variants);
-                    const newWacCost = (actualTotalOutput > 0 && totalBatchCost > 0)
-                      ? averageCostAfterIntake(existingTotalBase, currentCostPrice, actualTotalOutput, totalBatchCost)
-                      : currentCostPrice;
-
-                    // Loose stock is updated with ONLY the loose quantity produced (if item has variants, loose stock only gets looseQty)
-                    const looseToAdd = hasVariants ? looseQty : actualTotalOutput;
-                    const newLooseStock = roundQuantity(currentStock + looseToAdd);
-
-                    // Variant stocks are updated with the count of each packaged variant
-                    const variantDeltas: Record<string, number> = {};
-                    if (hasVariants) {
-                        variantsList.forEach(v => {
-                          if (v.variantId) {
-                            variantDeltas[v.variantId] = roundQuantity((variantDeltas[v.variantId] || 0) + (Number(v.count) || 0));
-                          }
-                        });
-                    }
-
-                    const { error: prodStockError } = await adjustItemStock(item.id, looseToAdd, variantDeltas);
-                    if (prodStockError) throw prodStockError;
-                    if (newWacCost > 0) {
-                      await supabase.from('items').update({ cost_price: newWacCost }).eq('id', item.id);
-                    }
-                    const newVariantStocks = currentItem?.variant_stocks ? { ...currentItem.variant_stocks } : {};
-                    Object.entries(variantDeltas).forEach(([vId, qty]) => {
-                      newVariantStocks[vId] = roundQuantity((newVariantStocks[vId] || 0) + qty);
-                    });
-                    
-                    setInventory(prev => prev.map(i => i.item_id === item!.id ? { ...i, quantity: newLooseStock, variant_stocks: newVariantStocks } : i));
-                    setItems(prev => prev.map(i => i.id === item!.id ? { ...i, stock: newLooseStock, variant_stocks: newVariantStocks, cost_price: newWacCost || i.cost_price } : i));
-
-                    const variantLogSummary = hasVariants
-                      ? ` [Packaged: ${variantsList.map(v => `${v.count}x ${v.variant_name}`).join(', ')}]`
-                      : '';
-                    const logNote = `Batch #${batch.batch_number} (${batch.product_name}) Completed: ${looseQty > 0 ? `${looseQty}${item.unit} loose` : ''}${variantLogSummary} (Total: ${actualTotalOutput}${item.unit})`;
-
-                    await supabase.from('inventory_logs').insert([{
-                        id: deterministicLogId, 
-                        date: new Date().toISOString(), 
-                        item_id: item.id, 
-                        item_name: item.name,
-                        old_quantity: currentStock, 
-                        new_quantity: newLooseStock, 
-                        difference: looseToAdd,
-                        reason: 'Production', 
-                        notes: logNote.trim(),
-                        details: { loose_delta: looseToAdd, variant_deltas: variantDeltas, batch_id: batch.id }
-                    }]);
-                } else {
-                    // Create the item in the items master if it does not exist yet.
-                    const newItemId = `item_${batch.product_name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${generateUUID().slice(0, 8)}`;
-                    const initialVariantStocks: Record<string, number> = {};
-                    if (hasVariants) {
-                      variantsList.forEach(v => {
-                        if (v.variantId) initialVariantStocks[v.variantId] = Number(v.count) || 0;
-                      });
-                    }
-                    const newItemPayload: any = {
-                        id: newItemId,
-                        name: batch.product_name,
-                        category: 'Dairy products',
-                        type: ['Sale product', 'Dairy products'],
-                        stock: hasVariants ? looseQty : actualTotalOutput,
-                        cost_price: producedUnitCost > 0 ? producedUnitCost : 180,
-                        selling_price: producedUnitCost > 0 ? roundCurrency(producedUnitCost * 1.25) : 240,
-                        unit: 'kg',
-                        is_active: true,
-                        is_system: false,
-                        source: 'Production',
-                        recipe: [],
-                        variants: [],
-                        variant_stocks: initialVariantStocks
-                    };
-                    await supabase.from('items').insert([newItemPayload]);
-                    
-                    await supabase.from('inventory_logs').insert([{
-                        id: deterministicLogId, 
-                        date: new Date().toISOString(), 
-                        item_id: newItemId, 
-                        item_name: batch.product_name,
-                        old_quantity: 0, 
-                        new_quantity: actualTotalOutput, 
-                        difference: actualTotalOutput,
-                        reason: 'Production', 
-                        notes: `Batch #${batch.batch_number} (${batch.product_name}) Initial Output Stock`
-                    }]);
-                }
-            }
-        } else if (newStage === ProductionStage.CANCELLED) {
-            updatePayload.completed_date = new Date().toISOString(); 
-
-            // Return the input milk to the unallocated pool unless the batch was already cancelled.
-            if (batch.status !== ProductionStage.CANCELLED && batch.quantity_input && batch.quantity_input > 0) {
-                const returnAllocId = `alloc_ret_batch_${batch.id}`;
-
-                // Milk taken from counter stock goes back to counter stock, not into the bulk pool
-                // (that turned retail litres into fresh unallocated milk a second time).
-                const cancelDetails: any = batch.details || {};
-                const retailParts: any[] = Array.isArray(cancelDetails.milk_breakdown)
-                  ? cancelDetails.milk_breakdown.filter((m: any) => m?.source === 'retail' && Number(m.quantity) > 0)
-                  : [];
-                let retailReturned = 0;
-                for (const part of retailParts) {
-                  const rawId = String(part.allocationId || '');
-                  const retailItemId = rawId.startsWith('inv_') ? rawId.slice(4) : rawId;
-                  const retailDef = items.find(i => i.id === retailItemId);
-                  if (!retailDef) continue;
-                  const partQty = roundQuantity(Number(part.quantity) || 0);
-                  // The batch counts litres; the item may be stocked in ml.
-                  const stockQty = roundQuantity(convertQuantity(partQty, 'L', retailDef.unit || 'L', settings.inventory?.customUnits || []) ?? partQty);
-                  // Deterministic log id first: a retry finds it and does not add the litres twice.
-                  const { error: retailLogError } = await supabase.from('inventory_logs').insert([{
-                    id: `log_batch_cancel_${batch.id}_${retailItemId}`,
-                    date: new Date().toISOString(),
-                    item_id: retailItemId,
-                    item_name: retailDef.name,
-                    old_quantity: roundQuantity(Number((retailDef as any).stock) || 0),
-                    new_quantity: roundQuantity((Number((retailDef as any).stock) || 0) + stockQty),
-                    difference: stockQty,
-                    reason: 'Allocation',
-                    notes: `Batch #${batch.batch_number} cancelled: counter milk returned`,
-                    details: { loose_delta: stockQty, batch_id: batch.id }
-                  }]);
-                  if (retailLogError && retailLogError.code !== '23505') throw retailLogError;
-                  if (!retailLogError) {
-                    const { error: retailStockError } = await adjustItemStock(retailItemId, stockQty);
-                    if (retailStockError) {
-                      await supabase.from('inventory_logs').delete().eq('id', `log_batch_cancel_${batch.id}_${retailItemId}`);
-                      throw retailStockError;
-                    }
-                    setItems(prev => prev.map(i => i.id === retailItemId ? { ...i, stock: roundQuantity((Number((i as any).stock) || 0) + stockQty) } as any : i));
-                    setInventory(prev => prev.map(inv => inv.item_id === retailItemId ? { ...inv, quantity: roundQuantity((inv.quantity || 0) + stockQty) } : inv));
-                  }
-                  retailReturned = roundQuantity(retailReturned + partQty);
-                }
-                const poolReturnQty = roundQuantity(Math.max(0, batch.quantity_input - retailReturned));
-
-                // Idempotency check on allocation return
-                const { data: existingAlloc } = await supabase.from('allocations').select('id').eq('id', returnAllocId).maybeSingle();
-                if (!existingAlloc && poolReturnQty > 0) {
-                    // Determine exact return milk type:
-                    // 1. If batch details has explicit milk_type ('Cow' | 'Buffalo' | 'Mixed')
-                    // 2. If milk breakdown contains only Cow -> Cow, only Buffalo -> Buffalo
-                    // 3. If mixed or both Cow & Buffalo -> Mixed
-                    // 4. Check batch logs or product name for Cow/Buffalo
-                    let returnMilkType: MilkType = MilkType.MIXED;
-                    const bDetails = batch.details || (batch as any).details;
-                    const rawType = bDetails?.milk_type || (batch as any).milk_type;
-
-                    if (rawType) {
-                      const lower = String(rawType).toLowerCase();
-                      if (lower.includes('buffalo')) returnMilkType = MilkType.BUFFALO;
-                      else if (lower.includes('cow')) returnMilkType = MilkType.COW;
-                      else returnMilkType = MilkType.MIXED;
-                    } else if (bDetails?.milk_breakdown && Array.isArray(bDetails.milk_breakdown) && bDetails.milk_breakdown.length > 0) {
-                      const types = Array.from(new Set(bDetails.milk_breakdown.map((m: any) => String(m.milkType || '').toLowerCase())));
-                      const hasCow = types.some((t: string) => t.includes('cow'));
-                      const hasBuffalo = types.some((t: string) => t.includes('buffalo'));
-                      if (hasCow && !hasBuffalo) returnMilkType = MilkType.COW;
-                      else if (hasBuffalo && !hasCow) returnMilkType = MilkType.BUFFALO;
-                      else returnMilkType = MilkType.MIXED;
-                    } else {
-                      const logsText = (batch.logs || []).map(l => l.message).join(' ').toLowerCase();
-                      const prodText = (batch.product_name || '').toLowerCase();
-                      if (logsText.includes('cow milk') || prodText.includes('cow')) {
-                        returnMilkType = MilkType.COW;
-                      } else if (logsText.includes('buffalo milk') || prodText.includes('buffalo')) {
-                        returnMilkType = MilkType.BUFFALO;
-                      } else {
-                        returnMilkType = MilkType.MIXED;
-                      }
-                    }
-
-                    const returnRecord: AllocationEntry = {
-                        id: returnAllocId,
-                        purchase_id: `ret_batch_${batch.id}`,
-                        date: new Date().toISOString(),
-                        supplier_name: `Return: Batch #${batch.batch_number} (${batch.product_name})`,
-                        milk_type: returnMilkType,
-                        original_quantity: poolReturnQty,
-                        allocated_quantity: 0,
-                        remaining_quantity: poolReturnQty,
-                        status: AllocationStatus.UNALLOCATED,
-                        average_rate: batch.input_cost_per_unit || 0,
-                        details: { 
-                            returned_from_batch_id: batch.id, 
-                            batch_number: batch.batch_number, 
-                            product_name: batch.product_name,
-                            milk_type: returnMilkType,
-                            cancel_reason: logMessage || 'Batch Cancelled' 
-                        }
-                    };
-
-                    const { error: allocErr } = await supabase.from('allocations').insert([returnRecord]);
-                    // A lost return must not be reported as success: the milk would vanish from the pool.
-                    if (allocErr) throw allocErr;
-
-                    setAllocations(prev => [returnRecord, ...prev]);
-                }
-                showToast(`Batch #${batch.batch_number} cancelled. ${batch.quantity_input} L returned${retailReturned > 0 ? ` (${retailReturned} L to counter stock)` : ''}.`, "success");
-            }
-        }
-
-        const updatedBatch = { ...batch, ...updatePayload };
-        setProductionBatches(prev => {
-            const newList = [...prev];
-            newList[batchIndex] = updatedBatch;
-            return newList;
-        });
-
-        const { error: batchUpdateError } = await supabase.from('production_batches').update(updatePayload).eq('id', batchId);
+        // A plain stage move never overwrites a batch the server already completed or cancelled.
+        const { data: moved, error: batchUpdateError } = await supabase.from('production_batches')
+          .update(updatePayload)
+          .eq('id', batchId)
+          .not('status', 'in', `("${ProductionStage.COMPLETED}","${ProductionStage.CANCELLED}")`)
+          .select('id');
         if (batchUpdateError) throw batchUpdateError;
+        if (!moved || moved.length === 0) {
+          showToast('Ye batch pehle hi complete ya cancel ho chuka hai.', 'warning');
+          fetchData(['productionBatches']);
+          return false;
+        }
+        setProductionBatches(prev => prev.map(b => b.id === batchId ? { ...b, ...updatePayload } : b));
         // No success toast here: the Production screen announces each move and completion itself
         // (two toasts appeared for every stage move).
-        fetchData(['productionBatches', 'allocations', ...STOCK]);
+        fetchData(['productionBatches']);
         return true;
       } catch (e) {
         console.error(e);
-        showToast('Batch update nahi hua: ' + getErrorMessage(e), 'error');
+        showToast('Batch update nahi hua: ' + moneyRpcMessage(e), 'error');
         fetchData(['productionBatches', 'allocations', ...STOCK]);
         return false;
       }
@@ -3420,14 +3034,6 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return updateBatchStage(id, ProductionStage.CANCELLED, `Cancelled: ${reason}`);
   };
   
-  // True when an account is the till of the shift that is open right now.
-  const isActiveDrawerAccount = (accountId?: string | null) => {
-    if (!accountId || activeShiftSession?.status !== 'Active') return false;
-    return accountId === activeShiftSession.account_id
-      || accountId === activeShiftSession.drawer_id
-      || accountId === resolveDrawerAccountId(activeShiftSession.drawer_id);
-  };
-
   // The open drawer's account ids: the money RPCs tag a cash row with the shift only when it moves one of these.
   const activeDrawerAccountIds = (): string[] => {
     if (activeShiftSession?.status !== 'Active') return [];
@@ -3570,6 +3176,9 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Bill line, stock pile, average cost, stock log, cash refund, khata and supplier ledger move
+  // together in return_material_purchase, from the locked bill line; the screen follows its answer.
+  // The goods leave the pile the purchase put them in (the pack it was stocked as, else loose).
   const returnMaterialPurchase = async (purchaseId: string, returnQty?: number, reason: string = 'Material Return to Supplier', refundAs: 'cash' | 'khata' = 'cash'): Promise<boolean> => {
     try {
       const mp = materialPurchases.find(p => p.id === purchaseId);
@@ -3585,210 +3194,58 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
 
       const totalPurchaseQty = mp.quantity || 0;
-      const actualReturnQty = (returnQty !== undefined && returnQty > 0 && returnQty <= totalPurchaseQty) 
-        ? returnQty 
+      const actualReturnQty = (returnQty !== undefined && returnQty > 0 && returnQty <= totalPurchaseQty)
+        ? returnQty
         : totalPurchaseQty;
-      
-      const isFullReturn = actualReturnQty >= totalPurchaseQty;
-      const returnAmount = roundCurrency(actualReturnQty * (mp.rate || 0));
-      const remainingAcceptedQty = Number((totalPurchaseQty - actualReturnQty).toFixed(3));
-      const remainingAcceptedAmount = roundCurrency(remainingAcceptedQty * (mp.rate || 0));
 
-      const returnTimestamp = new Date().toISOString();
-      const prevDetails = ((mp as any).details || {}) as any;
-      const origPaidAmount = Number((mp as any).paid_amount || prevDetails.paid_amount || 0);
-      const paymentAccountId = prevDetails.account_id || (mp as any).account_id;
-      const totalAmount = Number(mp.total_amount || 0) || (totalPurchaseQty * (mp.rate || 0));
-      const paidRatio = totalAmount > 0 ? (origPaidAmount / totalAmount) : 0;
-      // 'khata': the supplier keeps the money and lowers what we owe (or it becomes our advance).
-      const cashRefundAmount = refundAs !== 'khata' && origPaidAmount > 0 && paymentAccountId
-        ? roundCurrency(Math.min(origPaidAmount, returnAmount * paidRatio))
-        : 0;
-      const remainingPaid = roundCurrency(Math.max(0, origPaidAmount - cashRefundAmount));
+      const result = await callMoneyRpc('return_material_purchase', `material_return:${purchaseId}:${actualReturnQty}:${refundAs}:${reason}`, requestId => ({
+        p_purchase_id: purchaseId,
+        p_return_id: requestId,
+        p_payload: {
+          return_qty: actualReturnQty < totalPurchaseQty ? actualReturnQty : null,
+          reason,
+          refund_as: refundAs,
+          business_day_id: activeShiftSession?.business_day_id || null,
+          shift_session_id: activeShiftSession?.id || null,
+          drawer_id: activeShiftSession?.drawer_id || null,
+          cashier_id: activeShiftSession?.user_id || currentUser?.id || null,
+          drawer_account_ids: activeDrawerAccountIds()
+        }
+      }));
 
-      const itemDef = items.find(i => i.id === mp.item_id || i.name.toLowerCase() === mp.item_name.toLowerCase());
-
-      if (isFullReturn) {
-        // Keep the original payment details. Replacing details used to wipe
-        // paid_amount and the drawer account, so the return could not be tied
-        // back to the cash that left.
-        const returnedDetails = {
-          ...prevDetails,
-          returned: true,
-          return_reason: reason,
-          returned_at: returnTimestamp,
-          returned_quantity: (Number(prevDetails.returned_quantity) || 0) + actualReturnQty,
-          original_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
-          original_intake_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
-          original_paid_amount: prevDetails.original_paid_amount ?? origPaidAmount,
-          paid_amount: remainingPaid,
-          account_id: paymentAccountId,
-          cash_refund: roundCurrency((Number(prevDetails.cash_refund) || 0) + cashRefundAmount)
-        };
-        const { error: mpErr } = await supabase.from('material_purchases').update({
-          status: 'Returned',
-          details: returnedDetails
-        }).eq('id', purchaseId);
-
-        if (mpErr) throw mpErr;
-
-        setMaterialPurchases(prev => prev.map(p => p.id === purchaseId ? {
-          ...p,
-          status: 'Returned',
-          paid_amount: remainingPaid,
-          details: returnedDetails
-        } : p));
+      noteLocalWrite();
+      if (result?.already_applied) {
+        showToast('Ye return pehle hi save ho chuka tha.', 'info');
       } else {
-        const partialDetails = {
-          ...prevDetails,
-          partial_returned: true,
-          returned_quantity: (Number(prevDetails.returned_quantity) || 0) + actualReturnQty,
-          original_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
-          original_intake_quantity: prevDetails.original_intake_quantity || prevDetails.original_quantity || totalPurchaseQty,
-          return_reason: reason,
-          base_quantity: roundQuantity(remainingAcceptedQty * (Number(prevDetails.conversion_factor) || 1)),
-          returned_at: returnTimestamp,
-          original_paid_amount: prevDetails.original_paid_amount ?? origPaidAmount,
-          paid_amount: remainingPaid,
-          due_amount: roundCurrency(Math.max(0, remainingAcceptedAmount - remainingPaid)),
-          account_id: paymentAccountId,
-          cash_refund: roundCurrency((Number(prevDetails.cash_refund) || 0) + cashRefundAmount)
-        };
-        const { error: mpErr } = await supabase.from('material_purchases').update({
-          quantity: remainingAcceptedQty,
-          total_amount: remainingAcceptedAmount,
-          status: 'Completed',
-          details: partialDetails
-        }).eq('id', purchaseId);
-
-        if (mpErr) throw mpErr;
-
-        setMaterialPurchases(prev => prev.map(p => p.id === purchaseId ? {
-          ...p,
-          quantity: remainingAcceptedQty,
-          total_amount: remainingAcceptedAmount,
-          paid_amount: remainingPaid,
-          details: partialDetails
-        } : p));
-      }
-
-      if (itemDef) {
-        const returnConversion = Number(prevDetails.conversion_factor) || 1;
-        const actualReturnBaseQty = roundQuantity(actualReturnQty * returnConversion);
-        // Goods leave the pile they were stocked into: ready-made packs go back as packs.
-        const packId: string | undefined = prevDetails.variant_id && (itemDef.variants || []).some(v => v.id === prevDetails.variant_id) ? prevDetails.variant_id : undefined;
-        const invRow = inventory.find(inv => inv.item_id === itemDef.id);
-        const oldLoose = roundQuantity(invRow?.quantity ?? (itemDef as any).stock ?? 0);
-        const oldPack = packId ? roundQuantity((invRow?.variant_stocks || itemDef.variant_stocks || {})[packId] || 0) : 0;
-        const { error: mpStockError } = packId
-          ? await adjustItemStock(itemDef.id, 0, { [packId]: -actualReturnQty })
-          : await adjustItemStock(itemDef.id, -actualReturnBaseQty);
-        if (mpStockError) throw mpStockError;
-        setInventory(prev => prev.map(inv => inv.item_id !== itemDef.id ? inv : packId
-          ? { ...inv, variant_stocks: { ...(inv.variant_stocks || {}), [packId]: roundQuantity((inv.variant_stocks?.[packId] || 0) - actualReturnQty) } }
-          : { ...inv, quantity: roundQuantity((inv.quantity || 0) - actualReturnBaseQty) }));
-        setItems(prev => prev.map(i => i.id !== itemDef.id ? i : packId
-          ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packId]: roundQuantity((Number(i.variant_stocks?.[packId]) || 0) - actualReturnQty) } }
-          : { ...i, stock: roundQuantity((Number((i as any).stock) || 0) - actualReturnBaseQty) } as any));
-
-        // Take the returned goods out of the average at the rate they came in at.
-        const onHandBase = stockOnHandBase(oldLoose, invRow?.variant_stocks || itemDef.variant_stocks, itemDef.variants);
-        const returnedBaseRate = returnConversion > 0 ? (Number(mp.rate) || 0) / returnConversion : 0;
-        const leftBase = onHandBase - actualReturnBaseQty;
-        if (leftBase > 0.0005 && returnedBaseRate > 0 && Number(itemDef.cost_price) > 0) {
-          const revisedCost = Math.round(((onHandBase * Number(itemDef.cost_price) - actualReturnBaseQty * returnedBaseRate) / leftBase) * 10000) / 10000;
-          if (revisedCost > 0) {
-            await supabase.from('items').update({ cost_price: revisedCost }).eq('id', itemDef.id);
-            setItems(prev => prev.map(i => i.id === itemDef.id ? { ...i, cost_price: revisedCost } : i));
-          }
+        if (result?.row) {
+          const row = materialPurchaseFromRow(result.row);
+          setMaterialPurchases(prev => prev.map(p => p.id === purchaseId ? { ...p, ...row } as any : p));
         }
-
-        await supabase.from('inventory_logs').insert([{
-          id: `log_mp_ret_${generateUUID()}`,
-          date: returnTimestamp,
-          item_id: itemDef.id,
-          item_name: itemDef.name,
-          old_quantity: packId ? oldPack : oldLoose,
-          new_quantity: packId ? roundQuantity(oldPack - actualReturnQty) : roundQuantity(oldLoose - actualReturnBaseQty),
-          difference: packId ? 0 : -actualReturnBaseQty,
-          reason: AdjustmentReason.SUPPLY_RETURN,
-          notes: `${isFullReturn ? 'Full' : 'Partial'} Material Return to Supplier: ${actualReturnQty} ${mp.unit} (${reason})`,
-          details: packId
-            ? { variant_id: packId, variant_delta: -actualReturnQty, loose_delta: 0, purchase_id: mp.id }
-            : { loose_delta: -actualReturnBaseQty, purchase_id: mp.id }
-        }]);
-      }
-
-      // A material purchase paid on the spot (cash/bank) refunds the paid amount back to that account.
-      if (cashRefundAmount > 0 && paymentAccountId) {
-          // A failed refund must stop here: continuing would lower the khata by less than the return.
-          const { error: accRefundErr } = await adjustAccountBalance(paymentAccountId, cashRefundAmount);
-          if (accRefundErr) throw accRefundErr;
-          setAccounts(prev => prev.map(a => a.id === paymentAccountId ? { ...a, balance: (a.balance || 0) + cashRefundAmount } : a));
-
-          // Only cash received into the open drawer belongs to this shift's count.
-          const intoActiveDrawer = isActiveDrawerAccount(paymentAccountId);
-          const btxRecord = {
-            id: `btx_mpret_${generateUUID()}`,
-            account_id: paymentAccountId,
-            amount: cashRefundAmount,
-            date: returnTimestamp,
-            type: 'Income',
-            category: 'Purchase Return',
-            description: `Material Return Cash Refund: ${mp.item_name} (${actualReturnQty} ${mp.unit})`,
-            reference_id: mp.id,
-            business_day_id: activeShiftSession?.business_day_id,
-            shift_session_id: intoActiveDrawer ? activeShiftSession?.id : null,
-            drawer_id: intoActiveDrawer ? activeShiftSession?.drawer_id : null,
-            cashier_id: activeShiftSession?.user_id
-          };
-          const { error: mpRefundBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
-          if (mpRefundBtxError) throw mpRefundBtxError;
-          setBankTransactions(prev => [btxRecord as any, ...prev]);
-      }
-
-      // Reverse supplier pending balance by remaining credit portion
-      const creditToReduce = roundCurrency(Math.max(0, returnAmount - cashRefundAmount));
-      if (mp.supplier_id && creditToReduce > 0) {
-        const supplier = suppliers.find(s => s.id === mp.supplier_id);
-        if (supplier) {
-          const newBal = roundCurrency((supplier.pending_balance || 0) - creditToReduce);
-          const { error: mpSuppError } = await adjustSupplierBalance(supplier.id, -creditToReduce);
-          if (mpSuppError) throw mpSuppError;
-          setSuppliers(prev => prev.map(s => s.id === supplier.id ? { ...s, pending_balance: newBal, balance: newBal } : s));
+        const states = itemStatesFrom({ items: result?.item ? { [result.item.id]: result.item } : {} });
+        setItems(prev => applyItemStates(prev, states));
+        setInventory(prev => applyInventoryStates(prev, states));
+        const cashRefundAmount = roundCurrency(Number(result?.cash_refund) || 0);
+        if (cashRefundAmount > 0 && result?.account_id) {
+          setAccounts(prev => prev.map(a => a.id === result.account_id ? { ...a, balance: roundCurrency((a.balance || 0) + cashRefundAmount) } : a));
         }
+        if (result?.supplier_id && result?.supplier_balance !== null && result?.supplier_balance !== undefined) {
+          const newBal = roundCurrency(Number(result.supplier_balance) || 0);
+          setSuppliers(prev => prev.map(s => s.id === result.supplier_id ? { ...s, pending_balance: newBal, balance: newBal } : s));
+        }
+        const returned = Number(result?.return_qty) || actualReturnQty;
+        showToast(
+          result?.is_full
+            ? `Full material purchase of ${returned} ${mp.unit} returned to supplier!`
+            : `Partial return of ${returned} ${mp.unit} returned! ${roundQuantity(Number(result?.remaining_qty) || 0)} ${mp.unit} kept.`,
+          "success"
+        );
       }
-
-      if (mp.supplier_id) {
-        const supplier = suppliers.find(s => s.id === mp.supplier_id);
-        const { error: mpReturnTxError } = await supabase.from('supplier_transactions').insert([{
-          id: `stx_mpret_${generateUUID()}`,
-          supplier_id: supplier ? supplier.id : mp.supplier_id,
-          date: returnTimestamp,
-          type: 'Return',
-          amount: returnAmount,
-          details: {
-            note: `${isFullReturn ? 'Full' : 'Partial'} Material Return: ${actualReturnQty} ${mp.unit} of ${mp.item_name} (${reason})${cashRefundAmount > 0 ? ` (Cash Refunded: Rs ${cashRefundAmount})` : ''}`,
-            purchase_id: mp.id,
-            cash_refund: cashRefundAmount,
-            account_id: paymentAccountId
-          }
-        }]);
-        if (mpReturnTxError) throw mpReturnTxError;
-      }
-
-      showToast(
-        isFullReturn 
-          ? `Full material purchase of ${actualReturnQty} ${mp.unit} returned to supplier!` 
-          : `Partial return of ${actualReturnQty} ${mp.unit} returned! ${remainingAcceptedQty} ${mp.unit} kept.`,
-        "success"
-      );
 
       fetchData(['materialPurchases', 'suppliers', 'supplierTransactions', ...STOCK, ...MONEY_ADDED]);
       return true;
     } catch (err: any) {
       console.error("returnMaterialPurchase error:", err);
-      showToast(`Failed to return material purchase: ${err?.message || 'Error'}`, "error");
+      showToast(`Material wapas nahi hua: ${moneyRpcMessage(err)}`, "error");
       return false;
     }
   };
@@ -3802,7 +3259,11 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return lockResult !== null ? lockResult : false;
   };
 
+  // The whole bill (lines, stock piles, average cost, stock logs, khata, cash and the supplier
+  // ledger) is saved by record_material_purchase in one transaction. The server picks each line's
+  // pile and conversion from the catalog; the screen follows its answer.
   const addBulkMaterialPurchaseUnlocked = async (data: any) => {
+      const key = materialPurchaseKey(data || {});
       try {
           const { supplier_id, date, items: cartItems, purchase_type, paid_amount, payment_mode, account_id } = data;
           if (!guardOpenPeriod(date)) return false;
@@ -3816,9 +3277,10 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           let resolvedTargetAccId: string | undefined = undefined;
           if (effectivePaid > 0) {
             const isCashMode = !payment_mode || payment_mode.toLowerCase().includes('cash');
+            // The drawer's own account: a drawer id is not always an account id.
             resolvedTargetAccId = account_id || (
               isCashMode
-                ? (activeShiftSession?.account_id || activeShiftSession?.drawer_id || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash' && a.isActive !== false)?.id || accounts.find(a => a.isActive !== false)?.id)
+                ? (activeShiftSession?.account_id || resolveDrawerAccountId(activeShiftSession?.drawer_id) || settings.financial?.defaultCashAccountId || accounts.find(a => a.type === 'Cash' && a.isActive !== false)?.id || accounts.find(a => a.isActive !== false)?.id)
                 : (settings.financial?.defaultDigitalAccountId || accounts.find(a => (a.type === 'Bank' || a.type === 'Wallet') && a.isActive !== false)?.id || accounts.find(a => a.isActive !== false)?.id)
             );
             if (!resolvedTargetAccId) {
@@ -3826,198 +3288,55 @@ export const DairyProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
           }
 
-          const lineTotals = cartItems.map((item: any) => roundCurrency((Number(item.quantity) || 0) * (Number(item.rate) || 0)));
-          let paidRemaining = effectivePaid;
-          const linePaids = lineTotals.map((lineTotal: number, index: number) => {
-            if (index === lineTotals.length - 1) return roundCurrency(Math.max(0, paidRemaining));
-            const share = totalBill > 0 ? roundCurrency((lineTotal / totalBill) * effectivePaid) : 0;
-            paidRemaining = roundCurrency(paidRemaining - share);
-            return share;
-          });
-
-          // A purchase line bought in a ready-made pack unit (not a dozen/tray view of loose stock).
-          const packVariants: (ItemVariant | undefined)[] = cartItems.map((item: any) => {
-            const def = items.find(i => i.id === item.item_id);
-            const unitName = String(item.unit || '').trim().toLowerCase();
-            if (!def || !unitName || unitName === String(def.unit || '').trim().toLowerCase()) return undefined;
-            return (def.variants || []).find(v => v.isActive !== false && v.deduct_from_base !== true && String(v.name || '').trim().toLowerCase() === unitName);
-          });
-
-          const createdMaterialIds: string[] = [];
-          for (let index = 0; index < cartItems.length; index++) {
-              const item = cartItems[index];
-              const lineTotal = lineTotals[index];
-              const linePaid = linePaids[index];
-              const lineDue = roundCurrency(Math.max(0, lineTotal - linePaid));
-              const materialId = `mp_${generateUUID()}`;
-              createdMaterialIds.push(materialId);
-
-              const mpEntry = {
-                  id: materialId,
-                  date, 
-                  supplier_id: supplier_id || null, 
-                  item_id: item.item_id, 
-                  item_name: item.item_name,
-                  quantity: item.quantity, 
-                  unit: item.unit, 
-                  rate: item.rate,
-                  total_amount: lineTotal,
-                  paid_amount: linePaid,
-                  due_amount: lineDue,
-                  business_day_id: activeShiftSession?.business_day_id,
-                  shift_session_id: activeShiftSession?.id,
-                  drawer_id: activeShiftSession?.drawer_id,
-                  cashier_id: activeShiftSession?.user_id,
-                  purchase_type, 
-                  status: 'Completed',
-                  details: {
-                    paid_amount: linePaid,
-                    due_amount: lineDue,
-                    payment_mode: linePaid > 0 ? (payment_mode || 'Cash') : undefined,
-                    account_id: linePaid > 0 ? resolvedTargetAccId : undefined,
-                    conversion_factor: Number(item.conversion_factor) || 1,
-                    base_quantity: roundQuantity((Number(item.quantity) || 0) * (Number(item.conversion_factor) || 1)),
-                    base_unit: item.base_unit || item.unit,
-                    variant_id: packVariants[index]?.id,
-                    stocked_as: packVariants[index] ? 'packs' : 'loose'
-                  }
-              };
-
-              const { paid_amount: _linePaid, due_amount: _lineDue, ...materialRow } = mpEntry;
-              // Read the item first: if it cannot be read, nothing for this line is written yet, and a
-              // failed read must never be treated as "0 stock, 0 cost" (that overwrote the average cost).
-              const { data: currItem, error: currItemError } = await supabase.from('items').select('stock, cost_price, variant_stocks, variants').eq('id', item.item_id).single();
-              if (currItemError || !currItem) throw new Error(`${item.item_name}: item ka stock nahi parha ja saka. Bill save nahi hua.`);
-
-              const { error: mpInsertError } = await supabase.from('material_purchases').insert([materialRow]);
-              if (mpInsertError) throw mpInsertError;
-              setMaterialPurchases(prev => [mpEntry as any, ...prev]);
-
-              const currentStock = roundQuantity(currItem.stock);
-              const currentCostPrice = Number(currItem.cost_price) || 0;
-              const conversion = Number(item.conversion_factor) || 1;
-              const stockIncrease = roundQuantity((Number(item.quantity) || 0) * conversion);
-              // Cost is averaged over everything on hand (loose + packed piles), the same pool production uses.
-              const onHandBase = stockOnHandBase(currentStock, currItem?.variant_stocks, currItem?.variants);
-              const newWacCost = averageCostAfterIntake(onHandBase, currentCostPrice, stockIncrease, lineTotal);
-              const packVariantId: string | undefined = packVariants[index]?.id;
-              const packQty = roundQuantity(Number(item.quantity) || 0);
-              const currentPackStock = packVariantId ? roundQuantity(Number(currItem?.variant_stocks?.[packVariantId]) || 0) : 0;
-              const newStock = packVariantId ? currentStock : roundQuantity(currentStock + stockIncrease);
-
-              // A ready-made pack (e.g. Rusk 500g) is stocked as packs, because that is the pile the POS sells from.
-              const { error: mpInStockError } = packVariantId
-                ? await adjustItemStock(item.item_id, 0, { [packVariantId]: packQty })
-                : await adjustItemStock(item.item_id, stockIncrease);
-              if (mpInStockError) throw mpInStockError;
-              if (newWacCost > 0) {
-                await supabase.from('items').update({ cost_price: newWacCost }).eq('id', item.item_id);
-              }
-              setInventory(prev => prev.map(i => i.item_id !== item.item_id ? i : packVariantId
-                ? { ...i, variant_stocks: { ...(i.variant_stocks || {}), [packVariantId]: roundQuantity(currentPackStock + packQty) } }
-                : { ...i, quantity: newStock }));
-              setItems(prev => prev.map(i => i.id !== item.item_id ? i : {
-                ...i,
-                ...(packVariantId
-                  ? { variant_stocks: { ...(i.variant_stocks || {}), [packVariantId]: roundQuantity(currentPackStock + packQty) } }
-                  : { stock: newStock }),
-                cost_price: newWacCost || i.cost_price
-              }));
-
-              const unitNote = conversion !== 1 ? ` (${item.quantity} ${item.unit} = ${stockIncrease} base units${packVariantId ? ', stocked as packs' : ''})` : '';
-              await supabase.from('inventory_logs').insert([{
-                  id: `log_purch_${generateUUID()}`,
-                  date: new Date().toISOString(),
-                  item_id: item.item_id, 
-                  item_name: item.item_name, 
-                  old_quantity: packVariantId ? currentPackStock : currentStock,
-                  new_quantity: packVariantId ? roundQuantity(currentPackStock + packQty) : newStock, 
-                  difference: packVariantId ? 0 : stockIncrease, 
-                  reason: 'Purchase', 
-                  notes: supplier_id 
-                    ? `Vendor: ${supplier_id}${unitNote}`
-                    : `Spot Cash Purchase${unitNote}`,
-                  details: packVariantId
-                    ? { variant_id: packVariantId, variant_delta: packQty, loose_delta: 0, purchase_id: materialId }
-                    : { loose_delta: stockIncrease, purchase_id: materialId }
-              }]);
-          }
-
-          const unpaid = roundCurrency(Math.max(0, totalBill - effectivePaid));
-
-          if (supplier_id && unpaid > 0) {
-              const { data: newSupplierBalance, error: supUnpaidError } = await adjustSupplierBalance(supplier_id, unpaid);
-              if (supUnpaidError) throw supUnpaidError;
-              const newBal = roundCurrency(Number(newSupplierBalance ?? 0));
-              setSuppliers(prev => prev.map(s => s.id === supplier_id ? { ...s, pending_balance: newBal, balance: newBal } : s));
-          }
-
-          if (effectivePaid > 0 && resolvedTargetAccId) {
-            const acc = accounts.find(a => a.id === resolvedTargetAccId);
-            if (acc) {
-              const { error: mpAccError } = await adjustAccountBalance(resolvedTargetAccId, -effectivePaid);
-              if (mpAccError) throw mpAccError;
-              setAccounts(prev => prev.map(a => a.id === resolvedTargetAccId ? { ...a, balance: roundCurrency((a.balance || 0) - effectivePaid) } : a));
-              const supplierName = supplier_id ? (suppliers.find(s => s.id === supplier_id)?.name || 'Supplier') : 'Spot Vendor';
-              const isDrawerMaterialAccount = Boolean(
-                activeShiftSession?.drawer_id &&
-                resolvedTargetAccId &&
-                (resolvedTargetAccId === activeShiftSession.drawer_id || resolvedTargetAccId === resolveDrawerAccountId(activeShiftSession.drawer_id))
-              );
-              const activeDrawerId = isDrawerMaterialAccount ? activeShiftSession?.drawer_id : null;
-              const normalizedMpDate = normalizeTransactionTimestamp(date);
-              const btxRecord = {
-                id: `btx_mp_${generateUUID()}`,
-                account_id: resolvedTargetAccId,
-                amount: effectivePaid,
-                date: normalizedMpDate,
-                type: 'Expense',
-                category: 'Purchase',
-                description: `Material Purchase (${purchase_type}) - ${supplierName}`,
-                reference_id: createdMaterialIds.join(','),
-                business_day_id: activeShiftSession?.business_day_id,
-                shift_session_id: isDrawerMaterialAccount ? activeShiftSession?.id : null,
-                drawer_id: activeDrawerId,
-                cashier_id: activeShiftSession?.user_id
-              };
-              const { error: mpBtxError } = await supabase.from('bank_transactions').insert([btxRecord]);
-              if (mpBtxError) throw mpBtxError;
-              setBankTransactions(prev => [btxRecord as any, ...prev]);
+          const result = await callMoneyRpc('record_material_purchase', key, requestId => ({
+            p_request_id: requestId,
+            p_payload: {
+              supplier_id: supplier_id || null,
+              date: normalizeTransactionTimestamp(date),
+              purchase_type,
+              paid_amount: effectivePaid,
+              payment_mode: payment_mode || 'Cash',
+              account_id: resolvedTargetAccId || null,
+              business_day_id: activeShiftSession?.business_day_id || null,
+              shift_session_id: activeShiftSession?.id || null,
+              drawer_id: activeShiftSession?.drawer_id || null,
+              cashier_id: activeShiftSession?.user_id || currentUser?.id || null,
+              drawer_account_ids: activeDrawerAccountIds(),
+              lines: cartItems.map((item: any) => ({
+                item_id: item.item_id,
+                item_name: item.item_name,
+                quantity: Number(item.quantity) || 0,
+                unit: item.unit,
+                rate: Number(item.rate) || 0,
+              })),
             }
-          }
+          }));
 
-          // If payment was made on the spot for a linked supplier, record payment in supplier_transactions.
-          // supplier_transactions keeps mode/note/account in `details` (the table has no such columns,
-          // so the old top-level insert was rejected). purchase_ids links the one bill payment to every
-          // line, so the statement does not invent a second spot payment per line.
-          if (supplier_id && effectivePaid > 0) {
-            const stxId = `stx_mp_${generateUUID()}`;
-            const normalizedMpDate = normalizeTransactionTimestamp(date);
-            const stxDetails = {
-              mode: payment_mode || 'Cash',
-              note: `Spot Payment for Material Purchase (${cartItems.map((i: any) => `${i.quantity} ${i.unit || ''} ${i.item_name}`).join(', ')})`,
-              account_id: resolvedTargetAccId,
-              purchase_ids: createdMaterialIds,
-              line_paid: Object.fromEntries(createdMaterialIds.map((id, index) => [id, linePaids[index]]))
-            };
-            const { error: stxError } = await supabase.from('supplier_transactions').insert([{
-              id: stxId,
-              supplier_id,
-              date: normalizedMpDate,
-              type: 'Payment',
-              amount: effectivePaid,
-              details: stxDetails
-            }]);
-            if (stxError) throw stxError;
-            setSupplierTransactions(prev => [{ id: stxId, supplier_id, date: normalizedMpDate, type: 'Payment', amount: effectivePaid, ...stxDetails, details: stxDetails } as any, ...prev]);
+          noteLocalWrite();
+          const savedRows: any[] = Array.isArray(result?.rows) ? result.rows : [];
+          if (!result?.already_applied) {
+            const newIds = new Set(savedRows.map(row => row.id));
+            setMaterialPurchases(prev => [...savedRows.map(materialPurchaseFromRow), ...prev.filter(p => !newIds.has(p.id))] as any);
+            const states = itemStatesFrom(result);
+            setItems(prev => applyItemStates(prev, states));
+            setInventory(prev => applyInventoryStates(prev, states));
+            if (result?.supplier_id && result?.supplier_balance !== null && result?.supplier_balance !== undefined) {
+              const newBal = roundCurrency(Number(result.supplier_balance) || 0);
+              setSuppliers(prev => prev.map(s => s.id === result.supplier_id ? { ...s, pending_balance: newBal, balance: newBal } : s));
+            }
+            if (result?.account_id && result?.account_balance !== null && result?.account_balance !== undefined) {
+              setAccounts(prev => prev.map(a => a.id === result.account_id ? { ...a, balance: roundCurrency(Number(result.account_balance) || 0) } : a));
+            }
+          } else {
+            showToast('Ye bill pehle hi save ho chuka tha.', 'info');
           }
 
           fetchData(['materialPurchases', 'suppliers', 'supplierTransactions', ...STOCK, ...MONEY_ADDED]);
           return true;
-      } catch (e: any) { 
-        console.error(e); 
-        showToast(e?.message || 'Error saving material purchase', 'error');
-        return false; 
+      } catch (e: any) {
+        console.error(e);
+        showToast(`Purchase save nahi hui: ${moneyRpcMessage(e)}`, 'error');
+        return false;
       }
   };
 
