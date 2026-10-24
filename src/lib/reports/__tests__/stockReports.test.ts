@@ -176,9 +176,9 @@ const logs: InventoryLog[] = [
   log({ id: 'l2', item_id: 'paneer', reason: 'Stock Count Correction', old_quantity: 3, new_quantity: 3, details: { variant_id: 'tub1kg', variant_delta: 1, loose_delta: 0 } }),
   // no details: loose only
   log({ id: 'l3', item_id: 'cow', reason: 'Internal Consumption', old_quantity: 2500, new_quantity: 2000, difference: -500 }),
-  // old pack audit, product with one pack: the bottle count moved, not kg
+  // old pack audit: a pack count moved, not kg; even with one pack the pack is never guessed
   log({ id: 'l4', item_id: 'badam', reason: 'Data Entry Error', old_quantity: -30, new_quantity: -26, difference: 4, notes: 'Variant Audit' }),
-  // old pack audit, product with two packs: pack unknown
+  // old pack audit, product with two packs
   log({ id: 'l5', item_id: 'paneer', reason: 'Data Entry Error', old_quantity: 10, new_quantity: 8, difference: -2, notes: 'Variant Audit' }),
   // day close, pack pile (no details; the pile is in the row id)
   log({ id: 'log_cnt_close1_paneer_tub500', item_id: 'paneer', reason: 'Stock Count Correction', old_quantity: 9, new_quantity: 6, difference: -3, notes: 'Shift Closing (Morning)' }),
@@ -207,11 +207,14 @@ describe('stock logs are read pile by pile', () => {
   });
 
   it('recovers old pack audits and day-close pack rows that saved no pack details', () => {
-    expect(moves('l4').m).toMatchObject({ looseDelta: 0, packDeltas: { bottle: 4 }, baseDelta: 1, looseColumns: false });
-    expect(moves('l5').m).toMatchObject({ looseDelta: 0, unknownPackDelta: -2, baseDelta: 0 });
-    expect(describeLogMoves(moves('l5').m, paneer)).toBe('−2 packs (pack size not saved)');
+    expect(moves('l4').m).toMatchObject({ looseDelta: 0, packDeltas: {}, unknownPackDelta: 4, packsUnrecorded: true, baseDelta: 0, looseColumns: false });
+    expect(moves('l5').m).toMatchObject({ looseDelta: 0, unknownPackDelta: -2, packsUnrecorded: true, baseDelta: 0 });
+    expect(describeLogMoves(moves('l5').m, paneer)).toBe('−2 packs (which pack not saved)');
     expect(moves('log_cnt_close1_paneer_tub500').m).toMatchObject({ looseDelta: 0, packDeltas: { tub500: -3 }, baseDelta: -1.5 });
     expect(moves('log_cnt_close1_paneer_loose').m).toMatchObject({ looseDelta: 0.25, baseDelta: 0.25, looseColumns: true });
+    // The server day-close count keeps the right loose delta and only counts its pack moves in the notes.
+    const serverDayClose = log({ id: 'dc1', item_id: 'paneer', reason: 'Stock Count Correction', difference: 0.5, notes: 'Day close count · 2 variant adjustment(s)' });
+    expect(logMoves(serverDayClose, paneer)).toMatchObject({ looseDelta: 0.5, baseDelta: 0.5, packDeltas: {} });
   });
 
   it('Stock Adjustments values base moves and leaves flows and opening stock out', () => {
@@ -226,8 +229,8 @@ describe('stock logs are read pile by pile', () => {
     const dayClosePack = byNotes(r => r.notes === 'Shift Closing (Morning)');
     expect(dayClosePack).toMatchObject({ diff: -1.5, change: '−3 × 500 g tub', old: null, new: null });
     expect(byNotes(r => r.item === 'Cow Milk')).toMatchObject({ diff: -500, unit: 'ml', value: -100 });
-    expect(byNotes(r => r.item === 'Badam Doodh')).toMatchObject({ diff: 1, value: 400, change: '+4 × Badam Doodh Bottle' });
-    expect(result.notes!.some(n => n.text.includes('did not save which pack'))).toBe(true);
+    expect(byNotes(r => r.item === 'Badam Doodh')).toMatchObject({ diff: 0, value: 0, change: '+4 packs (which pack not saved)', _tone: 'warn' });
+    expect(result.notes!.some(n => n.text.startsWith('2 older entries moved packs without saving which pack'))).toBe(true);
   });
 
   it('Item Movement shows opening stock as an intake and pack moves per pack size', () => {
@@ -240,7 +243,7 @@ describe('stock logs are read pile by pile', () => {
     const tub = packs.find(r => r.item === 'Paneer' && r.pack === '500 g tub')!;
     expect(tub).toMatchObject({ size: '0.5 kg', in: 6, out: 6, net: 0, now: 6 }); // in: opening 6; out: spoil 2 + day close 3 + sale 1
     expect(packs.find(r => r.pack === '1 kg tub (hidden)')).toMatchObject({ in: 1, out: 0, now: 2 });
-    expect(packs.find(r => r.item === 'Badam Doodh')).toMatchObject({ in: 4, now: -26, _tone: 'bad' });
+    expect(packs.find(r => r.item === 'Badam Doodh')).toBeUndefined(); // its old audit named no pack
   });
 });
 

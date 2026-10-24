@@ -287,7 +287,7 @@ export const inventoryReports: ReportDefinition[] = [
         if (f.itemId && log.item_id !== f.itemId) return;
         const item = findItem(data.items, log.item_id, log.item_name);
         const moves = logMoves(log, item);
-        if (moves.unknownPackDelta) unknownPacks++;
+        if (moves.packsUnrecorded) unknownPacks++;
         const diff = moves.baseDelta;
         const value = r2(diff * n(item?.cost_price));
         // A scrapped customer return changes no stock today (it left at the sale), but the goods are lost.
@@ -302,7 +302,7 @@ export const inventoryReports: ReportDefinition[] = [
           // Pack rows saved pack counts (or nothing useful) in these columns, so they only show for loose-only rows.
           old: moves.looseColumns ? r3(n(log.old_quantity)) : null, new: moves.looseColumns ? r3(n(log.new_quantity)) : null,
           diff, value, loss: isLoss ? r2(stockLoss + scrappedLoss) : 0, notes: log.notes || '',
-          _tone: isLoss ? 'bad' : moves.unknownPackDelta ? 'warn' : undefined,
+          _tone: isLoss ? 'bad' : moves.packsUnrecorded ? 'warn' : undefined,
         });
       });
       const loss = sum(rows, r => n(r.loss));
@@ -341,7 +341,7 @@ export const inventoryReports: ReportDefinition[] = [
         }],
         notes: [
           { tone: 'info' as const, text: 'Sales, purchases, production, milk allocation and opening stock entries are left out (see Item Movement Summary). Change (base) adds loose stock and each pack × its size. Value uses today\'s cost price. Supplier returns are not counted as loss. Scrapped customer returns count as loss at cost, though they do not change stock.' },
-          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} old pack count change(s) did not save which pack was counted, so they add nothing to Change (base) or value.` }] : []),
+          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} older ${unknownPacks === 1 ? 'entry' : 'entries'} moved packs without saving which pack (old pack audits, day-close counts). Those pack moves add nothing to Change (base) or value; the pack is never guessed.` }] : []),
         ],
       };
     },
@@ -461,7 +461,7 @@ export const inventoryReports: ReportDefinition[] = [
         const item = findItem(data.items, log.item_id, log.item_name);
         if (!wanted(item)) return;
         const moves = logMoves(log, item);
-        if (moves.unknownPackDelta) unknownPacks++;
+        if (moves.packsUnrecorded) unknownPacks++;
         Object.entries(moves.packDeltas).forEach(([packId, d]) => {
           const key = `${item!.id}|${packId}`;
           const pack = packMoves.get(key) || { itemId: item!.id, packId, in: 0, out: 0 };
@@ -556,7 +556,7 @@ export const inventoryReports: ReportDefinition[] = [
         }],
         notes: [
           { tone: 'info' as const, text: 'This is a movement summary, not an audited stock ledger. Quantities are in each item\'s base unit; packs count at their size. Opening stock entries are shown as an intake; stock held before the period is not, so net movement need not match stock now. Pack movement comes from the stock logs (sales saved before 19 Oct 2026 recorded no pack detail).' },
-          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} old pack count change(s) did not save which pack was counted and are left out.` }] : []),
+          ...(unknownPacks ? [{ tone: 'warn' as const, text: `${unknownPacks} older ${unknownPacks === 1 ? 'entry' : 'entries'} moved packs without saving which pack (old pack audits, day-close counts); those pack moves are left out.` }] : []),
         ],
       };
     },

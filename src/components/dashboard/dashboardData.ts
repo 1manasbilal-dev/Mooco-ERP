@@ -330,7 +330,8 @@ export function summariseMilkFlow(inventoryLogs: any[], productionBatches: any[]
   const inRange = (value: string | undefined) => { const day = dayKey(value); return day !== '' && day >= period.start && day <= period.end; };
 
   // Counter: milk allocated to the retail counter in the selected range. The log is in the milk
-  // item's own unit (a milk item may be stocked in ml), so it is converted to litres.
+  // item's own unit (a milk item may be stocked in ml), so it is converted to litres; a unit that
+  // doesn't convert (kg, unknown) is left out rather than counted as litres (docs/stock-model.md).
   let counterLogLiters = 0;
   for (const log of inventoryLogs) {
     if (!log.date || log.reason !== 'Allocation' || !inRange(log.date)) continue;
@@ -339,7 +340,7 @@ export function summariseMilkFlow(inventoryLogs: any[], productionBatches: any[]
     const added = Number(log.difference);
     if (!isMilk || !(added > 0)) continue;
     const unit = index?.byId.get(log.item_id)?.unit || 'L';
-    counterLogLiters += convertQuantity(added, unit, 'L') ?? added;
+    counterLogLiters += convertQuantity(added, unit, 'L') ?? 0;
   }
 
   // Production: milk used in processing batches in the selected range.
