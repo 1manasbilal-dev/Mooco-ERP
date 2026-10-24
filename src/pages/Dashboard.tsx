@@ -18,8 +18,8 @@ import {
 } from '../components/dashboard/DashboardCards';
 import {
   clockLabel, comparisonCutoff, comparisonPhrase, cutAtComparison, expenseTotal, indexItems, isCountedSupply, isLiveExpense,
-  isLivePurchase, isLiveSale, lowStockCount, milkLiters, operationalAlerts, orderAlerts, pakistanMinute, recentActivity, rowsBetween,
-  salesNetTotal, shortDay, summariseBalances, summariseExpenses, summariseMilk, summariseMilkFlow, summarisePartyFlows, summariseSales,
+  isLivePurchase, isLiveSale, milkLiters, operationalAlerts, orderAlerts, pakistanMinute, recentActivity, rowsBetween,
+  salesNetTotal, shortDay, stockAlertSummary, summariseBalances, summariseExpenses, summariseMilk, summariseMilkFlow, summarisePartyFlows, summariseSales,
   topProducts, trendFor, unpaidExpenses, type Comparison,
 } from '../components/dashboard/dashboardData';
 import { useDashboardClock } from '../components/dashboard/useDashboardClock';
@@ -141,8 +141,8 @@ const Dashboard: React.FC = () => {
 
   const retailMilk = useMemo(() => getRetailMilkStock(inventory, items), [inventory, items]);
   const balances = useMemo(() => summariseBalances(accounts, cashInTransit, suppliers, customers, expenseVendors), [accounts, cashInTransit, suppliers, customers, expenseVendors]);
-  const milkFlow = useMemo(() => summariseMilkFlow(inventoryLogs, productionBatches, allocations, period), [inventoryLogs, productionBatches, allocations, period]);
-  const lowStock = useMemo(() => lowStockCount(inventory, itemIndex), [inventory, itemIndex]);
+  const milkFlow = useMemo(() => summariseMilkFlow(inventoryLogs, productionBatches, allocations, period, itemIndex), [inventoryLogs, productionBatches, allocations, period, itemIndex]);
+  const stockAlerts = useMemo(() => stockAlertSummary(inventory, itemIndex), [inventory, itemIndex]);
   const unpaid = useMemo(() => unpaidExpenses(expenses), [expenses]);
   const flows = useMemo(() => summarisePartyFlows({
     sales: curSales, purchases: curPurchases, expenses: curExpenses, customerTransactions, supplierTransactions, materialPurchases, expenseVendorTransactions, period,
@@ -201,8 +201,8 @@ const Dashboard: React.FC = () => {
 
   const alerts = useMemo(() => [
     ...(canSeeOrders ? orderAlerts({ orders: serveOrders, error: ordersError, todayKey, inventory, index: itemIndex, canCompleteOrder }) : []),
-    ...operationalAlerts({ unallocatedLiters: milkFlow.unallocated, lowStock, inTransit: balances.inTransit, unpaidExpenses: unpaid }),
-  ], [canSeeOrders, serveOrders, ordersError, todayKey, inventory, itemIndex, canCompleteOrder, milkFlow.unallocated, lowStock, balances.inTransit, unpaid]);
+    ...operationalAlerts({ unallocatedLiters: milkFlow.unallocated, stock: stockAlerts, inTransit: balances.inTransit, unpaidExpenses: unpaid }),
+  ], [canSeeOrders, serveOrders, ordersError, todayKey, inventory, itemIndex, canCompleteOrder, milkFlow.unallocated, stockAlerts, balances.inTransit, unpaid]);
 
   /* ---------------------------------------------------------- drill-down */
 
