@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight, Droplets, Factory, Refrigerator, ShoppingCart, Store, Trash2 } from 'lucide-react';
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
-import { AllocationStatus, DestinationType, type AllocationEntry, type InventoryItem, type ItemDefinition, type PurchaseEntry, type Supplier } from '../types';
+import { AllocationStatus, DestinationType, type AllocationEntry, type PurchaseEntry, type Supplier } from '../types';
 import { cleanNumber, formatCurrency, formatQty } from '../lib/formatters';
 import { getRetailMilkStock } from '../lib/retailMilkStock';
 import { useProgressiveList } from '../hooks/useProgressiveList';
@@ -14,20 +14,13 @@ import {
   CartLine, SourceRow, cartLineError, displaySourceName, type CartItem, type MilkSource, type SourceEntry,
 } from '../components/milk-ops/AllocationRows';
 import { PoolSummary } from '../components/milk-ops/PoolSummary';
-import { formatPkDay, isLitreUnit, parseQty, qtyInputValue, remainingOf } from '../components/milk-ops/milkOps';
+import { formatPkDay, parseQty, qtyInputValue, remainingOf } from '../components/milk-ops/milkOps';
 
 const AllocateQtyModal = lazy(() => import('../components/milk-ops/AllocateQtyModal'));
 
 const TERMINAL_STATUSES: string[] = [AllocationStatus.FULLY_ALLOCATED, AllocationStatus.ALLOCATED_FOR_SUPPLY, AllocationStatus.COMPLETED];
 const sourceFromSearch = (search: string): MilkSource => (new URLSearchParams(search).get('source') === 'retail' ? 'retail' : 'fresh');
 const defaultDestination = (source: MilkSource) => (source === 'retail' ? DestinationType.PRODUCTION : DestinationType.RETAIL);
-
-const milkTypeFromName = (name: string) => {
-  const lower = name.toLowerCase();
-  if (lower.includes('buffalo')) return 'Buffalo';
-  if (lower.includes('cow')) return 'Cow';
-  return 'Mixed';
-};
 
 const Allocation: React.FC = () => {
   const { allocations, purchases, allocateBulkMilk, allocateFromRetailStock, createBatch, discardBatch, trimBatchToSource, items, inventory, suppliers, canPerform } = useDairy();
@@ -102,30 +95,27 @@ const Allocation: React.FC = () => {
     }];
   }), [allocations, purchasesById, suppliersById]);
 
-  // Loose counter milk in litres. Same rule as the dashboard's counter stock, so shakes, ghee,
-  // packs and kg items never show up as milk; ml stock is left out because batches are in litres.
-  const retailEntries = useMemo<SourceEntry[]>(() => {
-    const inventoryById = new Map<string, InventoryItem>(inventory.map(row => [row.id, row]));
-    const itemsById = new Map<string, ItemDefinition>(items.map(item => [item.id, item]));
-    return getRetailMilkStock(inventory, items).rows.flatMap(row => {
-      const stock = inventoryById.get(row.id);
-      if (!stock || !isLitreUnit(stock.unit) || !(Number(stock.quantity) > 0)) return [];
-      const itemId = stock.item_id || (row.id.startsWith('inv_') ? row.id.replace('inv_', '') : row.id);
-      const master = itemsById.get(itemId) || items.find(def => def.name === stock.name);
-      return [{
-        id: itemId,
-        source: 'retail' as const,
-        rawName: stock.name,
-        name: stock.name,
-        isReturn: false,
-        milkType: milkTypeFromName(stock.name),
-        rate: master?.cost_price || stock.price || 0,
-        available: Number(stock.quantity) || 0,
-        partial: false,
-        searchText: stock.name.toLowerCase(),
-      }];
-    });
-  }, [inventory, items]);
+  // Loose counter milk, always in litres: milk stocked in ml shows as litres here and the allocation
+  // converts it back. Same rule as the dashboard's counter stock, so shakes, ghee, packs and kg items
+  // never show up as milk.
+  const retailEntries = useMemo<SourceEntry[]>(() => getRetailMilkStock(inventory, items).rows.flatMap(row => {
+    if (!(row.liters > 0)) return [];
+    const itemId = row.itemId || (row.id.startsWith('inv_') ? row.id.slice(4) : row.id);
+    return [{
+      id: itemId,
+      source: 'retail' as const,
+      rawName: row.name,
+      name: row.name,
+      isReturn: false,
+      milkType: row.milkType,
+      // Per litre. Cost price when set, else the old fallback to the selling rate.
+      rate: row.costRate || row.rate,
+      available: row.liters,
+      stockNote: row.stockUnit === 'ml' ? `${formatQty(row.stockQuantity, 3)} ml stock` : undefined,
+      partial: false,
+      searchText: row.name.toLowerCase(),
+    }];
+  }), [inventory, items]);
 
   const pool = useMemo(() => {
     let remaining = 0;
@@ -154,22 +144,15 @@ const Allocation: React.FC = () => {
     }
     return map;
   }, [allocations]);
-  const counterStockById = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of inventory) {
-      const qty = Number(row.quantity) || 0;
-      map.set(row.id, qty);
-      if (row.item_id) map.set(row.item_id, qty);
-    }
-    return map;
-  }, [inventory]);
+  // Counter litres per milk item (ml stock already converted), so a 2,500 ml item allows 2.5 L, not 2,500 L.
+  const counterLitresById = useMemo(() => new Map<string, number>(retailEntries.map(entry => [entry.id, entry.available])), [retailEntries]);
   const availableFor = useCallback((line: Pick<CartItem, 'allocationId' | 'source'>) => {
     if (line.source === 'fresh') {
       const lot = allocationsById.get(line.allocationId);
       return lot ? remainingOf(lot) : 0;
     }
-    return counterStockById.get(line.allocationId) ?? counterStockById.get(`inv_${line.allocationId}`) ?? 0;
-  }, [allocationsById, counterStockById]);
+    return counterLitresById.get(line.allocationId) ?? 0;
+  }, [allocationsById, counterLitresById]);
 
   const cartQtyById = useMemo(() => new Map<string, number>(cart.map(line => [line.allocationId, parseQty(line.qty)])), [cart]);
 
@@ -222,10 +205,10 @@ const Allocation: React.FC = () => {
     const text = qtyInputValue(litres);
     if (cartQtyById.has(entry.id)) {
       setCart(prev => prev.map(line => (line.allocationId === entry.id ? { ...line, qty: text } : line)));
-      showToast(`Updated ${entry.name} allocation to ${formatQty(litres)} L`, 'success');
+      showToast(`Updated ${entry.name} allocation to ${formatQty(litres, 3)} L`, 'success');
     } else {
       setCart(prev => [...prev, { allocationId: entry.id, qty: text, supplierName: entry.rawName, milkType: entry.milkType, rate: entry.rate, source: entry.source }]);
-      showToast(`Added ${formatQty(litres)} L from ${entry.name} to cart`, 'success');
+      showToast(`Added ${formatQty(litres, 3)} L from ${entry.name} to cart`, 'success');
     }
     setModalEntry(null);
   };
@@ -294,7 +277,7 @@ const Allocation: React.FC = () => {
     for (const line of lines) {
       const left = Math.max(0, availableFor(line));
       if (line.quantity > left + 0.001) {
-        showToast(`${displaySourceName(line.supplierName)}: sirf ${cleanNumber(left)} L baqi hai, ${cleanNumber(line.quantity)} L allocate nahi ho sakta.`, 'error');
+        showToast(`${displaySourceName(line.supplierName)}: sirf ${formatQty(left, 3)} L baqi hai, ${formatQty(line.quantity, 3)} L allocate nahi ho sakta.`, 'error');
         return;
       }
     }
@@ -333,7 +316,8 @@ const Allocation: React.FC = () => {
       }
 
       const freshItems = lines.filter(line => line.source === 'fresh').map(line => ({ allocationId: line.allocationId, quantity: line.quantity }));
-      const retailItems = lines.filter(line => line.source === 'retail').map(line => ({ itemId: line.allocationId, quantity: line.quantity, rate: line.rate }));
+      // Litres; the counter item may be stocked in ml and is converted when its stock moves.
+      const retailItems = lines.filter(line => line.source === 'retail').map(line => ({ itemId: line.allocationId, quantity: line.quantity, unit: 'L', rate: line.rate }));
 
       let freshDeducted = false;
       let retailDeducted = false;
@@ -354,7 +338,7 @@ const Allocation: React.FC = () => {
       if (success) {
         setCart([]);
         setSelectedProduct('');
-        showToast(`Successfully allocated ${formatQty(totalVolume)} L to ${destination}`, 'success');
+        showToast(`Successfully allocated ${formatQty(totalVolume, 3)} L to ${destination}`, 'success');
         setMobileTab('source');
       } else if (anyDeducted) {
         // Lines that already left stock must leave the cart too, or confirming again allocates them twice.
@@ -383,7 +367,7 @@ const Allocation: React.FC = () => {
         <PoolSummary className="col-span-2" remaining={pool.remaining} allocated={pool.allocated} inCart={totals.fresh} lots={freshEntries.length} />
         <StatCard
           label="Counter milk"
-          value={`${formatQty(counterLitres)} L`}
+          value={`${formatQty(counterLitres, 3)} L`}
           icon={<Refrigerator />}
           tone="info"
           hint={`${retailEntries.length} ${retailEntries.length === 1 ? 'item' : 'items'}`}
@@ -391,7 +375,7 @@ const Allocation: React.FC = () => {
         />
         <StatCard
           label="Allocation cart"
-          value={`${formatQty(totals.volume)} L`}
+          value={`${formatQty(totals.volume, 3)} L`}
           icon={<ShoppingCart />}
           tone="brand"
           hint={cart.length > 0 ? `Avg ${formatCurrency(cleanNumber(totals.averageRate, 1))}/L` : 'Khali'}
@@ -443,7 +427,7 @@ const Allocation: React.FC = () => {
               <EmptyState
                 icon={<Refrigerator />}
                 title={searchQuery ? 'Koi item nahi mila' : 'Counter par milk stock nahi hai'}
-                description={searchQuery ? 'Search badal kar dekhein.' : 'Litre wale milk items ka POS stock yahan nazar aata hai.'}
+                description={searchQuery ? 'Search badal kar dekhein.' : 'Counter par loose doodh (L ya ml wale milk items) ka stock yahan litres mein nazar aata hai.'}
               />
             )
           ) : (
@@ -492,7 +476,7 @@ const Allocation: React.FC = () => {
             <dl className="grid grid-cols-3 gap-2">
               <div className="min-w-0">
                 <dt className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Total</dt>
-                <dd className="mt-1 text-xl font-bold leading-none tabular-nums text-fg">{formatQty(totals.volume)}<span className="ml-0.5 text-xs font-semibold text-fg-subtle">L</span></dd>
+                <dd className="mt-1 text-xl font-bold leading-none tabular-nums text-fg">{formatQty(totals.volume, 3)}<span className="ml-0.5 text-xs font-semibold text-fg-subtle">L</span></dd>
               </div>
               <div className="min-w-0">
                 <dt className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Avg cost</dt>
@@ -545,7 +529,7 @@ const Allocation: React.FC = () => {
 
             <div className="space-y-2">
               <Button size="lg" fullWidth loading={isSubmitting} disabled={!canConfirm} rightIcon={<ArrowRight />} onClick={handleProcessAllocation}>
-                {isSubmitting ? 'Processing...' : `Confirm allocation${totals.volume > 0 ? ` · ${formatQty(totals.volume)} L` : ''}`}
+                {isSubmitting ? 'Processing...' : `Confirm allocation${totals.volume > 0 ? ` · ${formatQty(totals.volume, 3)} L` : ''}`}
               </Button>
               {blockReason && <p className="text-center text-xs font-semibold text-warning-fg" role="status">{blockReason}</p>}
             </div>
@@ -556,7 +540,7 @@ const Allocation: React.FC = () => {
       {mobileTab === 'source' && cart.length > 0 && (
         <div className="sticky bottom-3 z-10 flex items-center justify-between gap-3 rounded-card border border-line bg-surface p-3 shadow-e2 animate-fade-up lg:hidden">
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold tabular-nums text-fg">{cart.length} {cart.length === 1 ? 'line' : 'lines'} · {formatQty(totals.volume)} L</p>
+            <p className="truncate text-sm font-bold tabular-nums text-fg">{cart.length} {cart.length === 1 ? 'line' : 'lines'} · {formatQty(totals.volume, 3)} L</p>
             <p className="text-xs tabular-nums text-fg-subtle">Avg {formatCurrency(cleanNumber(totals.averageRate, 1))}/L</p>
           </div>
           <Button size="md" rightIcon={<ArrowRight />} onClick={() => setMobileTab('cart')}>Review cart</Button>
