@@ -3,11 +3,15 @@ import { PencilLine, RotateCcw } from 'lucide-react';
 import { useDairy } from '../../context/DairyContext';
 import { useToast } from '../../context/ToastContext';
 import { roundCurrency } from '../../lib/db';
+import { AlertTriangle } from 'lucide-react';
+import { cn } from '../../lib/cn';
 import { formatQty } from '../../lib/formatters';
+import { formatBaseQty } from '../../lib/stockRules';
 import { Button, Field, Input, Modal, Money, Select } from '../ui';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { PillGroup } from './ProcurementUI';
 import { settlementOf } from './procurementData';
+import { purchaseQtyText, returnQtyProblem, type PurchasePile } from './purchaseStock';
 
 export const MILK_ENTRY_ERROR = 'Data Entry Error / Cancel Intake';
 
@@ -30,6 +34,11 @@ export interface ReturnRequest {
   supplierName: string;
   /** Opened from "Correct entry": a full return as a data-entry error, then the slip goes back into the form. */
   correct?: boolean;
+  /**
+   * Supplies lines: the pile the purchase went to (a return takes from the same pile), that pile's
+   * stock now in the line's unit (null when the product is gone), and how much went back already.
+   */
+  material?: { pile: PurchasePile; onHand: number | null; returned: number };
 }
 
 /**
@@ -54,10 +63,22 @@ const ReturnPurchaseModal: React.FC<{
   const busyRef = useRef(false);
 
   if (!request) return null;
-  const { entry, maxQty, supplierName } = request;
+  const { entry, maxQty, supplierName, material } = request;
   const numQty = parseFloat(qty);
   const isFull = numQty >= maxQty - 0.0005;
   const canRefill = isMilk && reason === MILK_ENTRY_ERROR && isFull;
+  const unit = isMilk ? 'L' : entry.unit;
+  // Supplies: checked as the user types, in the line's own unit (half a pack can't go back).
+  const qtyProblem = material && qty.trim() !== '' ? returnQtyProblem(numQty, maxQty, material.pile, unit) : '';
+  const pile = material?.pile;
+  const typedQty = Number.isFinite(numQty) && numQty > 0 ? numQty : 0;
+  const pileAfter = material && material.onHand !== null ? material.onHand - typedQty : null;
+  // A pile reading in the line's unit: packs as a count, loose in the base unit (and in the line's unit when it differs).
+  const pileAmount = (amount: number) => {
+    if (!pile || pile.kind === 'pack') return `${formatQty(amount, 3)} × ${unit}`;
+    const base = formatBaseQty(amount * pile.factor, pile.baseUnit);
+    return pile.factor === 1 ? base : `${base} (${formatQty(amount, 3)} ${unit})`;
+  };
 
   const { amount: entryTotal, paid: entryPaid } = settlementOf(entry);
   const billTotal = entryTotal || (Number(entry.quantity || 0) * Number(entry.rate || 0));
@@ -71,6 +92,10 @@ const ReturnPurchaseModal: React.FC<{
     // Enter pressed twice submits before the disabled button re-renders; a second return would
     // refund and lower the khata again.
     if (busy || busyRef.current) return;
+    if (material) {
+      const problem = returnQtyProblem(numQty, maxQty, material.pile, unit);
+      if (problem) { showToast(problem, 'warning'); return; }
+    }
     if (!Number.isFinite(numQty) || numQty <= 0) {
       showToast('Please enter a valid return quantity greater than 0', 'warning');
       return;
@@ -98,7 +123,6 @@ const ReturnPurchaseModal: React.FC<{
   };
 
   const reasons = isMilk ? MILK_REASONS : MATERIAL_REASONS;
-  const unit = isMilk ? 'L' : entry.unit;
 
   return (
     <Modal
@@ -120,12 +144,20 @@ const ReturnPurchaseModal: React.FC<{
           <span className="text-right font-bold tabular-nums text-fg">
             {isMilk
               ? `${formatQty(entry.quantity)} L · ${entry.milk_type} · ${entry.shift}`
-              : `${formatQty(entry.quantity)} ${entry.unit} · ${entry.item_name}`}
+              : `${purchaseQtyText(Number(entry.quantity) || 0, entry.unit, pile || { kind: 'loose' })} · ${entry.item_name}`}
             {' · '}<Money amount={entryTotal} />
+            {material && material.returned > 0 && <span className="block text-[11px] font-semibold text-fg-subtle">{purchaseQtyText(material.returned, unit, material.pile)} pehle wapas ho chuka</span>}
           </span>
         </div>
 
-        <Field label="Return quantity" required hint={<>Max <b className="tabular-nums text-fg">{formatQty(maxQty)} {unit}</b> (jo abhi production mein nahi gaya)</>}>
+        <Field
+          label="Return quantity"
+          required
+          error={qtyProblem || undefined}
+          hint={material
+            ? <>Max <b className="tabular-nums text-fg">{pileAmount(maxQty)}</b> — is purchase ka jo abhi wapas nahi hua</>
+            : <>Max <b className="tabular-nums text-fg">{formatQty(maxQty)} {unit}</b> (jo abhi production mein nahi gaya)</>}
+        >
           {control => (
             <div className="flex items-center gap-1.5">
               <div className="min-w-0 flex-1">
@@ -141,6 +173,38 @@ const ReturnPurchaseModal: React.FC<{
             </div>
           )}
         </Field>
+
+        {material && pile && (
+          <div className="space-y-1.5 rounded-control bg-surface-2 px-3 py-2.5 text-xs ring-1 ring-inset ring-line" aria-label="Stock jahan se return hoga">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-fg-subtle">Kis stock se niklega</span>
+              <span className="text-right font-bold text-fg">{pile.name}</span>
+            </div>
+            {material.onHand !== null && pileAfter !== null && (
+              <>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-fg-subtle">Abhi stock</span>
+                  <span className="text-right font-semibold tabular-nums text-fg-muted">{pileAmount(material.onHand)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-fg-subtle">Return ke baad</span>
+                  <span className={cn('text-right font-bold tabular-nums', pileAfter < -0.0005 ? 'text-danger-fg' : 'text-fg')}>{pileAmount(pileAfter)}</span>
+                </div>
+                {pileAfter < -0.0005 && (
+                  <p className="flex items-start gap-1.5 font-semibold text-warning-fg">
+                    <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />
+                    Itna stock maujood nahi (kuch istemal ya bik chuka). Return ke baad yeh stock minus mein dikhega — pehle stock check kar lein.
+                  </p>
+                )}
+              </>
+            )}
+            {pile.note && (
+              <p className="flex items-start gap-1.5 font-semibold text-warning-fg">
+                <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" /> {pile.note}
+              </p>
+            )}
+          </div>
+        )}
 
         <Field label="Reason" required>
           {control => (
@@ -180,7 +244,7 @@ const ReturnPurchaseModal: React.FC<{
 
         <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
           <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="danger" loading={busy} leftIcon={<RotateCcw />}>
+          <Button type="submit" variant="danger" loading={busy} disabled={Boolean(qtyProblem) || maxQty <= 0} leftIcon={<RotateCcw />}>
             {busy ? 'Processing…' : request.correct ? 'Return & theek karein' : 'Confirm return'}
           </Button>
         </div>
