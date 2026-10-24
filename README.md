@@ -60,6 +60,8 @@ Migrations live in `supabase/migrations/` and are applied in filename order with
 
 The `operator-login` Edge Function exchanges a PIN login for a Supabase Auth session. All tables and business RPCs require an active operator session. See [docs/security.md](docs/security.md).
 
+A second project, **Mooco ERP Test** (`qsztaanbendzbhddwied`), has the same schema and no business data. Cloud sessions and branch previews use it; try new migrations there before live.
+
 ## Offline behaviour
 
 POS sales and new customers are written to IndexedDB first and synced in the background with retries, a dead-letter queue and a cross-tab lock. Order side effects (stock, cash, khata) are applied by the idempotent `pos_sync_order_effects` RPC, so retries never double-post. Other modules require a connection.
@@ -67,6 +69,8 @@ POS sales and new customers are written to IndexedDB first and synced in the bac
 ## Deployment
 
 Pushing to `main` runs the GitHub Actions workflow in `.github/workflows/deploy.yml`, which builds the app and uploads `dist/` to Hostinger over FTP. The workflow needs these repository secrets: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD`.
+
+Every other pushed branch gets a Cloudflare Pages preview at `https://<branch>.mooco-erp.pages.dev`, built against the test project. Setup and the daily cloud-session flow: [docs/cloud-setup.md](docs/cloud-setup.md).
 
 ## Documentation
 
@@ -77,3 +81,4 @@ Pushing to `main` runs the GitHub Actions workflow in `.github/workflows/deploy.
 - [Stock-based profit](docs/stock-profit.md): how the actual profit report is calculated
 - [Security](docs/security.md): operator sessions and database access model
 - [QA checklist](docs/qa-checklist.md): manual test plan by workflow
+- [Cloud setup](docs/cloud-setup.md): cloud sessions, test database and branch previews (Roman Urdu)
