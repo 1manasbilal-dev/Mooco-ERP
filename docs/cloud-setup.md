@@ -74,3 +74,23 @@ Kaam PC par laana ho to: `git pull`, ya session ke menu se **Open in → Termina
 - Test database mein asli data nahi hai. Login ke liye neeche wala hissa dekhein.
 
 ## Test database mein login
+
+Test database mein 5 roles (Owner, Manager, Cashier, Procurement, Production) aur settings ki row
+pehle se maujood hain. Sirf apna owner login banana hai, ek dafa:
+
+1. [Supabase dashboard](https://supabase.com/dashboard) → **Mooco ERP Test** → **SQL Editor**.
+2. Neeche wali SQL paste karein, `1234` ki jagah apna 4–10 digit ka test PIN likhein, **Run** dabayein:
+
+   ```sql
+   insert into public.app_users (id, name, username, role_id, pin_salt, pin_hash)
+   select 'user_owner', 'Owner', 'owner', 'role_super_admin', s,
+          encode(extensions.digest(s || '1234', 'sha256'), 'hex')
+   from (select encode(extensions.gen_random_bytes(16), 'hex') s) x;
+   ```
+3. Preview link par `owner` aur yeh PIN se login karein. Pehle login par Auth user khud ban jata hai.
+
+Baqi log (cashier waghera) app ke andar **User management** se banayein. POS ya cash test karne hon
+to pehle app mein ek bank/cash account bana lein.
+
+Edge functions (`operator-login`, `mooco-insights-read`) test project par bhi lag chuke hain aur
+koi alag secret nahi mangte.
