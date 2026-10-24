@@ -47,12 +47,12 @@ export const PoolSummary = memo(function PoolSummary({ remaining, allocated, inC
 
       <div className="flex flex-wrap items-end gap-x-4 gap-y-1">
         <p className={cn('text-4xl font-bold leading-none tracking-tight tabular-nums sm:text-[44px]', isEmpty ? 'text-fg' : 'text-warning-fg')}>
-          {formatQty(left)}
+          {formatQty(left, 3)}
           <span className="ml-1 text-lg font-semibold text-fg-subtle">L</span>
         </p>
         {cart > 0 && (
           <p className="pb-1 text-sm font-medium text-fg-muted">
-            Is allocation ke baad <span className="font-bold tabular-nums text-fg">{formatQty(after)} L</span> baqi
+            Is allocation ke baad <span className="font-bold tabular-nums text-fg">{formatQty(after, 3)} L</span> baqi
           </p>
         )}
       </div>
@@ -62,7 +62,7 @@ export const PoolSummary = memo(function PoolSummary({ remaining, allocated, inC
           <div
             className="flex h-2.5 overflow-hidden rounded-full bg-surface-3"
             role="img"
-            aria-label={`Open lots: ${formatQty(done)} L allocate ho chuka, ${formatQty(cart)} L cart mein, ${formatQty(after)} L baqi`}
+            aria-label={`Open lots: ${formatQty(done, 3)} L allocate ho chuka, ${formatQty(cart, 3)} L cart mein, ${formatQty(after, 3)} L baqi`}
           >
             <span className="h-full bg-fg-faint/45 transition-[width] duration-200 ease-out-expo" style={{ width: pct(done, total) }} />
             <span className="h-full bg-brand-accent transition-[width] duration-200 ease-out-expo" style={{ width: pct(cart, total) }} />
@@ -84,7 +84,7 @@ function LegendItem({ dot, label, value }: { dot: string; label: string; value: 
     <div className="flex items-center gap-1.5">
       <span className={cn('size-2 rounded-full', dot)} aria-hidden="true" />
       <dt>{label}</dt>
-      <dd className="font-semibold tabular-nums text-fg-muted">{formatQty(value)} L</dd>
+      <dd className="font-semibold tabular-nums text-fg-muted">{formatQty(value, 3)} L</dd>
     </div>
   );
 }

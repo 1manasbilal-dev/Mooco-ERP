@@ -20,8 +20,10 @@ export interface SourceEntry {
   milkType: string;
   /** Cost per litre. */
   rate: number;
-  /** Litres that can be allocated right now. */
+  /** Litres that can be allocated right now (counter milk stocked in ml is converted). */
   available: number;
+  /** Counter milk kept in another unit: its own stock figure, e.g. "2,500 ml stock". */
+  stockNote?: string;
   /** Fresh lots: collected litres. */
   original?: number;
   partial: boolean;
@@ -57,7 +59,7 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
       <button
         type="button"
         onClick={() => onOpen(entry)}
-        aria-label={`${entry.name}: ${formatQty(entry.available)} L baqi. ${inCart ? 'Cart qty badlein' : 'Cart mein dalein'}`}
+        aria-label={`${entry.name}: ${formatQty(entry.available, 3)} L baqi. ${inCart ? 'Cart qty badlein' : 'Cart mein dalein'}`}
         className={cn(
           'group flex w-full cursor-pointer items-center gap-3 rounded-control border px-3 py-3 text-left transition-[border-color,background-color] duration-150 sm:px-4',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -67,7 +69,7 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <p className="truncate text-sm font-semibold text-fg">{entry.name}</p>
-            {inCart && <Badge tone="brand" variant="solid">{formatQty(inCartQty)} L cart mein</Badge>}
+            {inCart && <Badge tone="brand" variant="solid">{formatQty(inCartQty, 3)} L cart mein</Badge>}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-fg-subtle">
             {entry.source === 'retail' ? (
@@ -79,6 +81,12 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
             )}
             {entry.partial && <Badge tone="info">Partial</Badge>}
             <span className="tabular-nums">{formatCurrency(entry.rate)}/L</span>
+            {entry.stockNote && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums">{entry.stockNote}</span>
+              </>
+            )}
             {entry.day && (
               <>
                 <span aria-hidden="true">·</span>
@@ -91,11 +99,11 @@ export const SourceRow = memo(function SourceRow({ entry, inCartQty, onOpen }: S
         <div className="shrink-0 text-right">
           <p className="text-[11px] font-semibold text-fg-subtle">Baqi</p>
           <p className="text-lg font-bold leading-tight tabular-nums text-fg">
-            {formatQty(entry.available)}
+            {formatQty(entry.available, 3)}
             <span className="ml-0.5 text-xs font-semibold text-fg-subtle">L</span>
           </p>
           {entry.partial && entry.original !== undefined && (
-            <p className="text-[11px] tabular-nums text-fg-subtle">of {formatQty(entry.original)} L</p>
+            <p className="text-[11px] tabular-nums text-fg-subtle">of {formatQty(entry.original, 3)} L</p>
           )}
         </div>
 
@@ -125,7 +133,7 @@ interface CartLineProps {
 export const cartLineError = (line: CartItem, available: number) => {
   const qty = parseQty(line.qty);
   if (!(qty > 0)) return 'Qty likhein';
-  if (qty > Math.max(0, available) + 0.001) return `Sirf ${formatQty(Math.max(0, available))} L baqi hai`;
+  if (qty > Math.max(0, available) + 0.001) return `Sirf ${formatQty(Math.max(0, available), 3)} L baqi hai`;
   return '';
 };
 
@@ -144,7 +152,7 @@ export const CartLine = memo(function CartLine({ line, available, onQtyChange, o
             <span className="truncate">{name}</span>
           </p>
           <p className="mt-0.5 text-xs tabular-nums text-fg-subtle">
-            {isRetail ? 'Counter milk' : line.milkType} · {formatCurrency(line.rate)}/L · Max {formatQty(Math.max(0, available))} L
+            {isRetail ? 'Counter milk' : line.milkType} · {formatCurrency(line.rate)}/L · Max {formatQty(Math.max(0, available), 3)} L
           </p>
         </div>
         <IconButton

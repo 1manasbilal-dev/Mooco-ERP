@@ -3,11 +3,6 @@ import type { AllocationEntry } from '../../types';
 
 // Shared helpers for the milk operations screens (Allocation, Production, Inventory).
 
-const LITRE_UNITS = new Set(['l', 'ltr', 'ltrs', 'liter', 'liters', 'litre', 'litres']);
-
-/** True for a stock unit that is already litres, so its quantity can go straight into a milk batch. */
-export const isLitreUnit = (unit?: string | null) => LITRE_UNITS.has(String(unit || '').trim().toLowerCase());
-
 /** Litres still in a collection lot. Same rule the allocation step uses: remaining, else original minus allocated. */
 export const remainingOf = (lot: Pick<AllocationEntry, 'remaining_quantity' | 'original_quantity' | 'allocated_quantity'>) => {
   const raw = lot.remaining_quantity !== null && lot.remaining_quantity !== undefined

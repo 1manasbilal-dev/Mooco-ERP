@@ -22,13 +22,14 @@ export default function AllocateQtyModal({ entry, cartQty, onSubmit, onRemove, o
   const [text, setText] = useState(() => qtyInputValue(cartQty ?? max));
   const [touched, setTouched] = useState(false);
   const qty = parseQty(text);
-  const error = !(qty > 0) ? 'Qty 0 se zyada likhein.' : qty > max + 0.001 ? `Sirf ${formatQty(max)} L baqi hai.` : '';
+  const error = !(qty > 0) ? 'Qty 0 se zyada likhein.' : qty > max + 0.001 ? `Sirf ${formatQty(max, 3)} L baqi hai.` : '';
 
   const presets = [
     { label: '5 L', value: 5 },
     { label: '10 L', value: 10 },
-    { label: 'Aadha', value: Math.round((max / 2) * 100) / 100 },
-    { label: `Sab (${formatQty(max)} L)`, value: max },
+    // Rounded down to 3 decimals so half never asks for more than is there.
+    { label: 'Aadha', value: Math.floor((max / 2) * 1000) / 1000 },
+    { label: `Sab (${formatQty(max, 3)} L)`, value: max },
   ].filter((preset, index, list) => preset.value > 0 && preset.value <= max + 0.001 && list.findIndex(p => p.value === preset.value) === index);
 
   const submit = (event?: React.FormEvent) => {
@@ -80,7 +81,8 @@ export default function AllocateQtyModal({ entry, cartQty, onSubmit, onRemove, o
           </div>
           <div className="min-w-0 text-right">
             <dt className="text-fg-subtle">Baqi</dt>
-            <dd className="mt-1 text-sm font-bold tabular-nums text-fg">{formatQty(max)} L</dd>
+            <dd className="mt-1 text-sm font-bold tabular-nums text-fg">{formatQty(max, 3)} L</dd>
+            {entry.stockNote && <dd className="mt-0.5 text-[11px] tabular-nums text-fg-subtle">{entry.stockNote}</dd>}
           </div>
         </dl>
 

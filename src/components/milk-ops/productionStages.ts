@@ -1,6 +1,7 @@
 import { CheckSquare, Cpu, Play } from 'lucide-react';
 import { PriorityLevel, ProductionStage, type ProductionBatch } from '../../types';
 import type { Tone } from '../ui';
+import { formatQty } from '../../lib/formatters';
 
 /** The three working columns of the production board, in order. */
 export const BOARD_STAGES = [
@@ -42,3 +43,14 @@ export function batchYield(output: number, inputLitres: number, target: number) 
   const tone: Tone = ofTarget === null ? 'neutral' : ofTarget >= 95 ? 'success' : ofTarget >= 85 ? 'warning' : 'danger';
   return { perLitre, ofTarget, tone };
 }
+
+/** The same two yield labels (with their explanation) on the batch sheet and in history. */
+export const YIELD_COPY = {
+  perLitre: { label: 'Yield / litre', hint: '1 litre doodh se kitna maal bana' },
+  ofTarget: { label: 'Target ka %', hint: 'Batch ke target (andaza output) ka kitna hissa bana' },
+} as const;
+
+export const formatYieldPerLitre = (perLitre: number | null, unit: string) =>
+  perLitre === null ? '—' : `${formatQty(perLitre, 3)} ${unit}/L`;
+
+export const formatOfTarget = (ofTarget: number | null) => (ofTarget === null ? '—' : `${formatQty(ofTarget, 1)}%`);
