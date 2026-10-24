@@ -13,6 +13,7 @@ import { cn } from '../../lib/cn';
 import { roundCurrency } from '../../lib/db';
 import { cleanQty, formatCurrency, formatQty, normalizeTransactionTimestamp } from '../../lib/formatters';
 import { formatBaseQty, pileBreakdown, readStock, STOCK_STATUS_LABEL, type StockReading, type StockStatus } from '../../lib/stockRules';
+import { convertQuantity } from '../../lib/unitConversion';
 import {
   Badge, Button, Card, confirmAction, controlClass, EmptyState, IconButton, Input, Money, StatCard, TBody, TD, TH, THead, TR, Table,
 } from '../ui';
@@ -139,16 +140,16 @@ const SuppliesPurchase: React.FC = () => {
     return { bills: bills.size, lines: rows.length, amount, paid };
   }, [materialPurchases, today]);
 
-  // Raw milk is bought on the Milk Collection screen. Only milk items measured by volume are left out
-  // here, so milk powder (kg) and milk pouches/bottles (packaging) can still be bought.
+  // Milk is bought on the Milk Collection screen. Only milk measured by volume is left out here, so
+  // milk powder (kg) and milk pouches/bottles (packaging, pcs) can still be bought.
   const purchasableItems = useMemo(() => items.filter((i: any) => {
     if (i.isActive === false || (i.source !== 'Supplier' && i.source !== 'Both')) return false;
     const types: string[] = i.item_type || [];
     if (!types.some(t => t === 'Raw material' || t === 'Packaging material' || t === 'Sale product')) return false;
     if ((i.category || []).some((c: string) => String(c).toLowerCase().includes('milk'))) return false;
-    const isRawMilk = String(i.name || '').toLowerCase().includes('milk') && types.includes('Raw material') && ['l', 'ml', 'liter', 'litre'].includes(String(i.unit || '').toLowerCase());
-    return !isRawMilk;
-  }), [items]);
+    const isLiquidMilk = String(i.name || '').toLowerCase().includes('milk') && convertQuantity(1, String(i.unit || ''), 'L', customUnits || []) !== null;
+    return !isLiquidMilk;
+  }), [items, customUnits]);
 
   const readingById = useMemo(() => {
     const map = new Map<string, StockReading>();
