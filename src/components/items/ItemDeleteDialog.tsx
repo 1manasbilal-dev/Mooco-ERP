@@ -5,7 +5,8 @@ import type { ItemDefinition } from '../../types';
 import { Button, Modal, Money } from '../ui';
 import { cn } from '../../lib/cn';
 import { formatQty } from '../../lib/formatters';
-import { sellUnitContains } from '../../lib/sellUnits';
+import type { StockPile } from '../../lib/sellUnits';
+import { formatBaseQty, pileBreakdown, readStock } from '../../lib/stockRules';
 
 interface Props {
   item: ItemDefinition;
@@ -52,19 +53,23 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
   // Read once when the dialog opens, so the choice does not change under the user's finger.
   const assessment = useMemo(() => getDeleteAssessment('item', item.id), []); // eslint-disable-line react-hooks/exhaustive-deps
   const details = (assessment.details || {}) as { isSystem?: boolean; recipesUsing?: string[]; salesCount?: number; purCount?: number };
-  const stock = Number(assessment.stock) || 0;
   const recipesUsing = details.recipesUsing || [];
 
-  // Write-off only clears loose stock (safeDeleteItem), so ready-made packs must be counted out first.
-  const packsOnShelf = useMemo(() => {
+  // Live piles, read with the shared rules (docs/stock-model.md) so this dialog, the catalog and Inventory agree.
+  const reading = useMemo(() => {
     const inv = inventory?.find(i => i.item_id === item.id);
-    const counts = (inv?.variant_stocks || item.variant_stocks || {}) as Record<string, number>;
-    return (item.variants || [])
-      .filter(v => v.deduct_from_base !== true)
-      .map(v => ({ name: v.name, count: Number(counts[v.id]) || 0, contains: sellUnitContains(v) }))
-      .filter(p => Math.abs(p.count) > 0.0001);
+    const loose = Number(inv?.quantity ?? item.stock ?? 0) || 0;
+    return readStock(item, loose, (inv?.variant_stocks || item.variant_stocks) as Record<string, number> | undefined);
   }, [inventory, item]);
-  const looseStock = stock - packsOnShelf.reduce((sum, p) => sum + p.count * p.contains, 0);
+  // Write-off (safeDeleteItem) zeroes every pile above 0: loose, each ready-made pack (hidden ones too) and stray counts.
+  const toClear = reading.piles.filter(p => p.kind !== 'multi' && p.count > 0);
+  const hasStock = toClear.some(p => p.kind === 'loose' || p.kind === 'packed');
+  const minusPiles = reading.piles.filter(p => (p.kind === 'loose' || p.kind === 'packed') && p.count < 0);
+  const pileRow = (p: StockPile): [string, React.ReactNode] => {
+    if (p.kind === 'loose') return ['Loose', formatBaseQty(p.count, reading.unit)];
+    if (p.kind === 'orphan') return [`Purana count: ${p.name}`, formatQty(p.count, 3)];
+    return [`${p.name}${p.isActive ? '' : ' (hidden)'}`, `${formatQty(p.count, 3)} × ${formatBaseQty(p.contains, reading.unit)} = ${formatBaseQty(p.baseQty, reading.unit)}`];
+  };
 
   const run = async (action: Action) => {
     if (busyRef.current) return;
@@ -126,39 +131,30 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
     );
   }
 
-  if (stock > 0) {
-    const value = Math.max(0, looseStock) * (Number(item.cost_price) || 0)
-      + packsOnShelf.reduce((sum, p) => sum + Math.max(0, p.count) * p.contains * (Number(item.cost_price) || 0), 0);
-    const blockedByPacks = packsOnShelf.some(p => p.count > 0);
+  if (hasStock) {
     return (
       <Modal
         {...common}
         icon={<DialogIcon tone="warning"><AlertTriangle /></DialogIcon>}
         title="Stock abhi baqi hai"
-        description="Stock wala product seedha delete karne se stock value ka hisaab bigar jata hai. Write off karne se stock spoilage mein jayega aur product inactive ho jayega. Agar stock bechna hai to wapas jayen."
+        description="Stock wala product seedha delete karne se stock value ka hisaab bigar jata hai. Write off karne se neeche ka har stock 0 ho kar spoilage mein jayega aur product inactive ho jayega. Agar stock bechna hai to wapas jayen."
         footer={<>
           {cancel()}
-          <Button
-            variant="danger"
-            leftIcon={<PackageX />}
-            loading={busy === 'write_off_spoilage'}
-            disabled={blockedByPacks}
-            onClick={() => run('write_off_spoilage')}
-          >
+          <Button variant="danger" leftIcon={<PackageX />} loading={busy === 'write_off_spoilage'} onClick={() => run('write_off_spoilage')}>
             Write off karein
           </Button>
         </>}
       >
         <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Yeh stock 0 hoga</p>
           <Facts rows={[
-            ['Loose stock', `${formatQty(looseStock, 3)} ${item.unit}`],
-            ...packsOnShelf.map(p => [p.name, `${formatQty(p.count, 3)} packs`] as [string, React.ReactNode]),
-            ['Value at cost', <Money key="v" amount={value} />],
+            ...toClear.map(pileRow),
+            ['Value at cost', <Money key="v" amount={reading.costValue} />],
           ]} />
-          {blockedByPacks && (
+          {minusPiles.length > 0 && (
             <p className="flex items-start gap-2 rounded-control bg-warning-soft px-3 py-2 text-xs font-medium text-warning-fg">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              Ready-made packs ka stock write off yahan se nahi hota. Pehle Inventory mein packs count karke 0 karein.
+              Minus stock ({minusPiles.map(p => pileRow(p).join(' ')).join(', ')}) write off se theek nahi hota. Usko Inventory mein stock count se 0 karein.
             </p>
           )}
         </div>
@@ -166,7 +162,7 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
     );
   }
 
-  if (assessment.hasHistory || stock < 0) {
+  if (assessment.hasHistory || reading.status === 'minus') {
     return (
       <Modal
         {...common}
@@ -184,7 +180,7 @@ export default function ItemDeleteDialog({ item, onClose, onDone }: Props) {
       >
         <Facts rows={[
           ['Product', item.name],
-          ['Current stock', `${formatQty(stock, 3)} ${item.unit}`],
+          ['Current stock', pileBreakdown(reading).join(' · ') || formatBaseQty(0, reading.unit)],
           ['History', `${details.salesCount || 0} bills · ${details.purCount || 0} purchases`],
         ]} />
       </Modal>
