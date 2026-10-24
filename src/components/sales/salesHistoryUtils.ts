@@ -1,5 +1,5 @@
 import type { POSBill } from '../../types';
-import { isDateOnlyOrMidnight } from '../../lib/formatters';
+import { cleanQty, isDateOnlyOrMidnight } from '../../lib/formatters';
 import { businessDate } from '../../lib/dashboardAnalytics';
 
 export interface ReturnItemSelection {
@@ -22,6 +22,41 @@ export interface ReturnItemSelection {
   isLoose?: boolean;
   /** Pre-packed lines go back in whole packs. */
   wholeOnly?: boolean;
+}
+
+/** Where a returned line's stock goes back to (or a replacement is taken from). */
+export interface ReturnPile {
+  kind: 'loose' | 'pack';
+  /** "loose stock" or "500 g tub pack stock". */
+  name: string;
+  /** Stock moved for the given quantity: base units for loose, packs for a pack. Null when an old bill has no pack size. */
+  amount: number | null;
+  unit: string;
+}
+
+/**
+ * The pile a bill line returns to, read from the bill's own snapshot (docs/stock-model.md, "Sales return"):
+ * a ready-made pack line (wholeOnly) goes back to its pack count; loose and multi-unit (dozen) lines go
+ * back to loose stock as quantity x pack size.
+ */
+export function returnLinePile(item: ReturnItemSelection, qty: number): ReturnPile {
+  if (item.wholeOnly) {
+    const unit = item.unit || 'pack';
+    return { kind: 'pack', name: `${unit} pack stock`, amount: cleanQty(qty), unit };
+  }
+  const base = item.baseUnit || (item.variantId ? '' : item.lineUnit || item.unit || '');
+  const contains = item.variantId && !item.isLoose ? (Number(item.stockDeduction) > 0 ? Number(item.stockDeduction) : null) : 1;
+  return {
+    kind: 'loose',
+    name: 'loose stock',
+    amount: contains === null ? null : cleanQty(qty * contains),
+    unit: base,
+  };
+}
+
+/** The return posts as spoilage (no stock back) when chosen, or when the reason itself says spoiled / defective. */
+export function returnIsScrap(restockOption: 'restock' | 'scrap_spoilage', finalReason: string): boolean {
+  return restockOption === 'scrap_spoilage' || /spoil|defect|kharab/i.test(finalReason);
 }
 
 export type SaleDateTime = { date: string; time: string };
