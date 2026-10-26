@@ -101,6 +101,7 @@ const SHORTCUTS = [
   { key: 'Enter', action: 'Open the first product in search' },
   { key: '↓', action: 'Move from search to the product cards' },
   { key: 'F4', action: 'Customer search / select' },
+  { key: 'F7', action: 'Voice sale: start / stop the microphone' },
   { key: 'F8', action: 'Hold / park the bill' },
   { key: 'F9', action: 'Confirm sale and complete payment' },
   { key: 'Esc', action: 'Close the open dialog or list' },

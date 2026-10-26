@@ -29,6 +29,8 @@ interface PosProductGridProps {
   mobileTab: 'catalog' | 'cart';
   showSearch: boolean;
   showCategories: boolean;
+  /** Shown at the end of the search row (the voice sale mic). Keep it memoised: the grid is. */
+  searchAction?: React.ReactNode;
 }
 
 /** Loose items, packs and products with cash shortcuts open quick entry; anything else adds one unit. */
@@ -53,7 +55,8 @@ export const PosProductGrid = memo(function PosProductGrid({
   addToCart,
   mobileTab,
   showSearch,
-  showCategories
+  showCategories,
+  searchAction
 }: PosProductGridProps) {
   const catalog = useRef<HTMLElement>(null);
   const handleSelect = (product: AvailableProduct) => {
@@ -75,33 +78,38 @@ export const PosProductGrid = memo(function PosProductGrid({
         mobileTab === 'catalog' ? 'flex' : 'hidden',
       )}
     >
-      <div data-has-filters={showSearch || showCategories} className="pos-catalog-filters z-10 flex shrink-0 flex-col gap-2.5 border-b border-line bg-surface p-3">
+      <div data-has-filters={showSearch || showCategories || Boolean(searchAction)} className="pos-catalog-filters z-10 flex shrink-0 flex-col gap-2.5 border-b border-line bg-surface p-3">
         <div className="hidden items-baseline justify-between gap-2 px-0.5 lg:flex">
           <h2 className="text-[15px] font-bold tracking-tight text-fg">Choose a product</h2>
           <span className="text-xs text-fg-subtle">Tap to set amount or quantity</span>
         </div>
 
-        {showSearch && (
-          <SearchInput
-            ref={productSearchInputRef}
-            className="pos-search"
-            aria-label="Search products"
-            placeholder="Search products by name..."
-            shortcut="F2"
-            autoComplete="off"
-            value={searchProduct}
-            onChange={setSearchProduct}
-            onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                const product = findFirstMatch(event.currentTarget.value);
-                if (product) handleSelect(product);
-              } else if (event.key === 'ArrowDown') {
-                event.preventDefault();
-                catalog.current?.querySelector<HTMLButtonElement>('[data-pos-product]:not(:disabled)')?.focus();
-              }
-            }}
-          />
+        {(showSearch || searchAction) && (
+          <div className="flex items-center gap-2">
+            {showSearch && (
+              <SearchInput
+                ref={productSearchInputRef}
+                className="pos-search flex-1"
+                aria-label="Search products"
+                placeholder="Search products by name..."
+                shortcut="F2"
+                autoComplete="off"
+                value={searchProduct}
+                onChange={setSearchProduct}
+                onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    const product = findFirstMatch(event.currentTarget.value);
+                    if (product) handleSelect(product);
+                  } else if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    catalog.current?.querySelector<HTMLButtonElement>('[data-pos-product]:not(:disabled)')?.focus();
+                  }
+                }}
+              />
+            )}
+            {searchAction}
+          </div>
         )}
 
         {showCategories && validCategories.length > 0 && (

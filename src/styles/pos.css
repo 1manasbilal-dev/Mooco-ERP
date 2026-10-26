@@ -120,3 +120,13 @@
   .pos-workspace *, .pos-quick-dialog * { transition:none !important; }
   .pos-product-card:active:not(:disabled), .pos-product-card:hover:not(:disabled) { transform:none; }
 }
+
+/* Voice sale: the live mic pulses softly so the cashier sees it is still listening. */
+.pos-voice-live { animation:pos-voice-pulse 1.6s ease-out infinite; }
+@keyframes pos-voice-pulse {
+  0% { box-shadow:0 0 0 0 rgb(var(--brand) / .45); }
+  100% { box-shadow:0 0 0 12px rgb(var(--brand) / 0); }
+}
+@media(prefers-reduced-motion:reduce) {
+  .pos-voice-live { animation:none; }
+}

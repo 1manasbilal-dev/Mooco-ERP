@@ -17,6 +17,9 @@ import { PosProductGrid } from '../components/pos/PosProductGrid';
 import { PosCustomerSelect } from '../components/pos/PosCustomerSelect';
 import { PosCart } from '../components/pos/PosCart';
 import { PosPaymentPanel } from '../components/pos/PosPaymentPanel';
+import { PosVoiceButton, PosVoicePanel } from '../components/pos/PosVoicePanel';
+import { usePosVoice } from '../components/pos/usePosVoice';
+import type { PosSellOption } from '../components/pos/posStock';
 import { confirmAction } from '../components/ui/ConfirmDialog';
 import { useManagerApproval } from '../components/ui/ManagerApproval';
 import { Button, Card, Money, Skeleton } from '../components/ui';
@@ -683,6 +686,9 @@ const POS: React.FC = () => {
       setMobileTab('cart');
       requestAnimationFrame(() => customerSearchInputRef.current?.focus());
       setCustomerDropdownOpen(true);
+    } else if (e.key === 'F7') {
+      e.preventDefault();
+      if (!e.repeat && !bookingId) voice.toggle();
     } else if (e.key === 'F8') {
       e.preventDefault();
       holdOrderRef.current();
@@ -1327,6 +1333,42 @@ const POS: React.FC = () => {
   checkoutRef.current = handleCheckout;
   holdOrderRef.current = handleHoldOrder;
 
+  // Voice sale: spoken items go on the bill through addToCart, like a tap; "save" runs the F9 checkout.
+  const voiceSellOptions = useLatestCallback((product: AvailableProduct): PosSellOption[] => posSellOptions(liveProduct(product), cart));
+  const addVoiceLine = useLatestCallback((product: AvailableProduct, option: PosSellOption, qty: number, amount?: number): string | null => {
+    const variantId = option.kind === 'loose' ? undefined : option.id;
+    const variant = variantId ? (product.variants || []).find((v: any) => v.id === variantId) : undefined;
+    // Checked here so the reason shows in the voice panel instead of a toast.
+    const problem = sellProblem(product, variantId, qty);
+    if (problem) return problem;
+    // A spoken rupee amount stays the line total, like an amount typed in quick entry.
+    return addToCart(product, qty, variant?.name, option.price, option.contains, variantId, amount) ? null : `${product.name}: could not add this item.`;
+  });
+  const removeVoiceProduct = useLatestCallback((productId: string): boolean => {
+    if (!cart.some(line => line.id === productId)) return false;
+    setCart(cart.filter(line => line.id !== productId));
+    return true;
+  });
+  const voiceCheckout = useLatestCallback(() => checkoutRef.current());
+  const closeReceiptForVoice = useCallback(() => setCompletedSaleModalOpen(false), []);
+  const voice = usePosVoice({
+    products: allAvailableProducts,
+    enabled: !bookingId && activeTabId === 'pos',
+    cart,
+    setCart,
+    sellOptions: voiceSellOptions,
+    addLine: addVoiceLine,
+    removeProduct: removeVoiceProduct,
+    checkout: voiceCheckout,
+    // The next customer's items close the last bill's receipt, so the cashier never has to touch the screen.
+    onItemsHeard: closeReceiptForVoice,
+  });
+  const voiceButton = useMemo(
+    () => (voice.supported ? <PosVoiceButton listening={voice.listening} onToggle={voice.toggle} /> : null),
+    [voice.supported, voice.listening, voice.toggle],
+  );
+  const showVoicePanel = voice.supported && (voice.listening || voice.results.length > 0 || Boolean(voice.micError));
+
   const handleOpenSaleReceipt = useCallback((sale: any) => {
     if (!sale) return;
     if (sale.invoiceNo && sale.grandTotal !== undefined && sale.items) {
@@ -1562,24 +1604,29 @@ const POS: React.FC = () => {
       )}
 
       <div className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden lg:flex-row">
-        <PosProductGrid
-          searchProduct={searchProduct}
-          setSearchProduct={setSearchProduct}
-          productSearchInputRef={productSearchInputRef}
-          selectedCategories={selectedCategories}
-          setSelectedCategories={setSelectedCategories}
-          validCategories={validCategories}
-          categoryCounts={categoryCounts}
-          allCount={allAvailableProducts.length}
-          availableProducts={availableProducts}
-          findFirstMatch={findFirstMatch}
-          cartQtyByProductId={cartQtyByProductId}
-          openQuickModal={openQuickModal}
-          addToCart={addToCart}
-          mobileTab={mobileTab}
-          showSearch={showProductSearch}
-          showCategories={showProductCategories}
-        />
+        {/* The voice panel sits over the products, so the bill keeps its full height. */}
+        <div className={`${mobileTab === 'catalog' ? 'flex flex-1' : showVoicePanel ? 'flex shrink-0' : 'hidden'} min-h-0 min-w-0 flex-col gap-3 lg:flex lg:flex-1`}>
+          {showVoicePanel && <PosVoicePanel voice={voice} />}
+          <PosProductGrid
+            searchProduct={searchProduct}
+            setSearchProduct={setSearchProduct}
+            productSearchInputRef={productSearchInputRef}
+            selectedCategories={selectedCategories}
+            setSelectedCategories={setSelectedCategories}
+            validCategories={validCategories}
+            categoryCounts={categoryCounts}
+            allCount={allAvailableProducts.length}
+            availableProducts={availableProducts}
+            findFirstMatch={findFirstMatch}
+            cartQtyByProductId={cartQtyByProductId}
+            openQuickModal={openQuickModal}
+            addToCart={addToCart}
+            mobileTab={mobileTab}
+            showSearch={showProductSearch}
+            showCategories={showProductCategories}
+            searchAction={voiceButton}
+          />
+        </div>
 
         <section
           aria-label="Bill"
