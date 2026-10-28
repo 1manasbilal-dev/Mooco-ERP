@@ -9,7 +9,8 @@ import { saleLineStock } from '../lib/sellUnits';
 import { proportionalRefund } from '../lib/moneyFlow';
 import { useManagerApproval } from '../components/ui/ManagerApproval';
 import {
-  Button, Card, Input, LoadMoreRow, SearchInput, SegmentedControl, Select, StatCard, TBody, TH, THead, Table, TableContainer, Toolbar,
+  Button, Card, Input, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, StatCard, StatGrid, TBody, TH, THead, Table,
+  TableContainer, Toolbar,
 } from '../components/ui';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { BREAKPOINTS, useMediaQuery } from '../hooks/useMediaQuery';
@@ -627,7 +628,14 @@ const SalesHistory: React.FC = () => {
     <div className="mx-auto flex max-w-7xl flex-col gap-4 pb-20">
       {approvalDialog}
 
-      <section aria-label="Sales summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatGrid
+        label="Sales summary"
+        storageKey="sales-history"
+        peek={[
+          { value: <Money amount={stats.net} compact />, label: 'net', tone: 'success' },
+          { value: stats.count, label: stats.count === 1 ? 'invoice' : 'invoices' },
+        ]}
+      >
         <StatCard
           label="Invoices"
           value={stats.count}
@@ -643,7 +651,7 @@ const SalesHistory: React.FC = () => {
           hint={`${stats.returned} Returned`}
         />
         <StatCard label="Net" value={<StatMoney amount={stats.net} />} icon={<Wallet />} tone="success" hint="Net Turnover" />
-      </section>
+      </StatGrid>
 
       <Toolbar>
         <SearchInput

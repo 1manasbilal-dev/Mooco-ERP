@@ -7,7 +7,7 @@ import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
 import { Supplier } from '../types';
 import {
-  Button, Card, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, Skeleton, StatCard,
+  Button, Card, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, Skeleton, StatCard, StatGrid,
   TBody, TH, THead, Table, TableContainer, Toolbar, confirmAction
 } from '../components/ui';
 import { CashPaymentDays, LedgerRangeBar, LedgerView } from '../components/suppliers/SupplierLedgerPanels';
@@ -586,7 +586,19 @@ const Suppliers: React.FC = () => {
               rangeLabel={rangeLabel}
             />
 
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <StatGrid
+              label={ledgerView === 'payments' ? 'Payments summary' : ledgerView === 'milk' ? 'Milk summary' : 'Ledger summary'}
+              storageKey="supplier-ledger"
+              gridClassName="lg:grid-cols-2 xl:grid-cols-4"
+              peek={ledgerView === 'payments' ? [
+                { value: <Money amount={ledgerDetails.cashOut - ledgerDetails.cashIn} compact />, label: 'net paid' },
+              ] : ledgerView === 'milk' ? (milkReport ? [
+                { value: `${formatQty(milkReport.litres)} L`, label: 'milk' },
+                { value: <Money amount={milkReport.amount} compact /> },
+              ] : undefined) : [
+                { value: <SupplierBalance value={ledgerDetails.closingBalance} compact />, label: 'at close' },
+              ]}
+            >
               {ledgerView === 'payments' ? (
                 <>
                   <StatCard label="Cash paid" icon={<Banknote />} tone="success" value={<Money amount={ledgerDetails.cashPaid} compact={isPhone} />} />
@@ -621,7 +633,7 @@ const Suppliers: React.FC = () => {
                   <StatCard label="Closing balance" icon={<Wallet />} value={<SupplierBalance value={ledgerDetails.closingBalance} compact={isPhone} />} />
                 </>
               )}
-            </div>
+            </StatGrid>
 
             {ledgerView !== 'milk' && (
               <Toolbar>
@@ -703,12 +715,19 @@ const Suppliers: React.FC = () => {
             printLabel="Print register"
             rangeLabel={paymentRegister?.rangeLabel || ''}
           />
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatGrid
+            label="Payments in this period"
+            storageKey="supplier-payments"
+            peek={paymentRegister ? [
+              { value: <Money amount={paymentRegister.net} compact />, label: 'paid' },
+              { value: paymentRegister.count, label: paymentRegister.count === 1 ? 'payment' : 'payments' },
+            ] : undefined}
+          >
             <StatCard label="Payments" icon={<Receipt />} value={paymentRegister?.count ?? 0} loading={!paymentRegister} />
             <StatCard label="Cash" icon={<Banknote />} tone="success" value={<Money amount={paymentRegister?.cashPaid || 0} compact={isPhone} />} loading={!paymentRegister} />
             <StatCard label="Bank / other" icon={<Landmark />} value={<Money amount={paymentRegister?.otherPaid || 0} compact={isPhone} />} loading={!paymentRegister} />
             <StatCard label="Net paid" icon={<Wallet />} value={<Money amount={paymentRegister?.net || 0} compact={isPhone} />} loading={!paymentRegister} />
-          </div>
+          </StatGrid>
           {paymentRegister && (
             <CashPaymentDays
               days={paymentRegister.days}
@@ -723,7 +742,14 @@ const Suppliers: React.FC = () => {
         </>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatGrid
+            label="Supplier summary"
+            storageKey="suppliers"
+            peek={isLoading ? undefined : [
+              { value: <Money amount={stats.payable} compact />, label: 'payable', tone: stats.payable > 0.5 ? 'danger' : undefined },
+              { value: <Money amount={stats.advance} compact />, label: 'advance', tone: stats.advance > 0.5 ? 'success' : undefined },
+            ]}
+          >
             <StatCard
               label="Payable"
               icon={<Wallet />}
@@ -759,7 +785,7 @@ const Suppliers: React.FC = () => {
               hint={<Money amount={monthMilk.amount} compact />}
               loading={isLoading}
             />
-          </div>
+          </StatGrid>
 
           <Toolbar>
             <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Name, phone, village..." aria-label="Supplier search" className="w-full sm:w-72" />

@@ -6,7 +6,7 @@ import {
 import { useDairy } from '../context/DairyContext';
 import { MODULE_METADATA, useTabs } from '../context/TabContext';
 import {
-  Badge, Button, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, Skeleton, StatCard,
+  Badge, Button, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, Skeleton, StatCard, StatGrid,
   TBody, TH, THead, Table, TableContainer, Toolbar,
 } from '../components/ui';
 import { useProgressiveList } from '../hooks/useProgressiveList';
@@ -403,7 +403,15 @@ const Items: React.FC = () => {
         </>}
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Catalog summary">
+      <StatGrid
+        label="Catalog summary"
+        storageKey="items"
+        peek={loading ? undefined : [
+          { value: stats.active, label: 'active' },
+          { value: stats.low, label: 'low', tone: stats.low ? 'warning' : undefined },
+          { value: stats.out, label: 'out', tone: stats.out ? 'danger' : undefined },
+        ]}
+      >
         <StatCard
           label="Active products"
           value={stats.active}
@@ -416,7 +424,7 @@ const Items: React.FC = () => {
         <StatCard label="Low stock" value={stats.low} icon={<AlertTriangle />} tone={stats.low ? 'warning' : 'neutral'} hint="below alert" loading={loading} onClick={() => setStockFilter(stockFilter === 'low' ? 'all' : 'low')} />
         <StatCard label="Out of stock" value={stats.out} icon={<PackageX />} tone={stats.out ? 'danger' : 'neutral'} hint="can't be sold" loading={loading} onClick={() => setStockFilter(stockFilter === 'out' ? 'all' : 'out')} />
         <StatCard label="Stock value" value={<Money amount={stats.value} compact />} icon={<Wallet />} hint="at cost" loading={loading} />
-      </section>
+      </StatGrid>
 
       <div className="flex flex-col gap-2">
         <Toolbar>

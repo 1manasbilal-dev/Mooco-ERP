@@ -8,7 +8,7 @@ import { CustomerOrder, CustomerOrderStatus } from '../types';
 import { changeCustomerOrderStatus, listCustomerOrders, localOrderDate, orderIsOpen } from '../lib/customerOrders';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { confirmAction } from '../components/ui/ConfirmDialog';
-import { Badge, Button, Card, EmptyState, IconButton, Input, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Skeleton, StatCard, Toolbar } from '../components/ui';
+import { Badge, Button, Card, EmptyState, IconButton, Input, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Skeleton, StatCard, StatGrid, Toolbar } from '../components/ui';
 import { STATUS_FILTERS, STATUS_TONE, StatusFilter, orderAdvance, orderBalance, orderMoney, prettyDate } from '../components/customer-orders/orderUi';
 
 // The booking form and the detail view are separate chunks, so the list paints sooner. They are
@@ -251,12 +251,19 @@ const CustomerOrders: React.FC = () => {
       </>}
     />
 
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <StatGrid
+      label="Orders summary"
+      storageKey="customer-orders"
+      peek={initialLoading ? undefined : [
+        { value: stats.active, label: 'active' },
+        { value: stats.dueToday, label: 'due today', tone: stats.dueToday > 0 ? 'warning' : undefined },
+      ]}
+    >
       <StatCard label="Active orders" value={stats.active} icon={<ClipboardCheck />} tone="brand" hint="Pending, confirmed & ready" loading={initialLoading} />
       <StatCard label="Due today" value={stats.dueToday} icon={<CalendarDays />} tone={stats.dueToday > 0 ? 'warning' : 'neutral'} hint="Pickup & delivery" loading={initialLoading} />
       <StatCard label="Ready to serve" value={stats.ready} icon={<Package />} hint="Finish billing in POS" loading={initialLoading} />
       <StatCard label="Open order value" value={<Money amount={stats.openValue} compact />} icon={<ShoppingBag />} hint="Bookings awaiting billing" loading={initialLoading} />
-    </div>
+    </StatGrid>
 
     {!online && !error && (
       <div role="status" className="flex items-center gap-3 rounded-card border border-warning/30 bg-warning-soft p-4 text-sm font-medium text-warning-fg">

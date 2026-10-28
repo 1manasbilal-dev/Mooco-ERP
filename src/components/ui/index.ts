@@ -5,6 +5,8 @@ export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export { Badge, TONE_DOT } from './Badge';
 export type { BadgeProps, Tone } from './Badge';
 export { StatCard } from './StatCard';
+export { StatGrid } from './StatGrid';
+export type { StatGridProps, StatPeek } from './StatGrid';
 export { PageHeader, Toolbar } from './PageHeader';
 export { SegmentedControl } from './SegmentedControl';
 export type { SegmentOption } from './SegmentedControl';

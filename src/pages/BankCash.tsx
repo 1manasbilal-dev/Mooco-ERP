@@ -10,7 +10,7 @@ import { formatCurrency } from '../lib/formatters';
 import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
 import { useReducedMotion } from '../hooks/useReducedMotion';
 import {
-  Badge, Button, Card, CardHeader, EmptyState, IconButton, Money, PageHeader, SearchInput, SegmentedControl, StatCard, Toolbar, confirmAction,
+  Badge, Button, Card, CardHeader, EmptyState, IconButton, Money, PageHeader, SearchInput, SegmentedControl, StatCard, StatGrid, Toolbar, confirmAction,
 } from '../components/ui';
 import { AccountCard, AccountCardSkeleton, AllAccountsCard } from '../components/finance/AccountCard';
 import { PeriodFilter } from '../components/finance/PeriodFilter';
@@ -302,7 +302,14 @@ const BankCash: React.FC = () => {
         ) : undefined}
       />
 
-      <section aria-label="Totals" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatGrid
+        label="Balances"
+        storageKey="bank-cash"
+        peek={loading ? undefined : [
+          { value: <Money amount={totals.total} compact />, label: 'total', tone: totals.total < 0 ? 'danger' : undefined },
+          { value: <Money amount={totals.cash} compact />, label: 'cash', tone: totals.cash < 0 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard
           label="Total balance"
           icon={<Landmark />}
@@ -333,14 +340,14 @@ const BankCash: React.FC = () => {
           value={<StatMoney amount={inTransit} />}
           hint={loading ? undefined : transitCount > 0 ? `${transitCount} remittance${transitCount > 1 ? 's' : ''} pending` : 'Nothing pending'}
         />
-      </section>
+      </StatGrid>
 
       {!loading && inTransit > 0 && (
         <p className="-mt-3 flex items-start gap-2 rounded-card border border-warning/25 bg-warning-soft px-4 py-3 text-[13px] leading-relaxed text-warning-fg">
           <Clock3 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <span>
             <strong className="font-semibold"><Money amount={inTransit} /> cash in transit</strong>: taken out of the drawer at shift close, not yet in any account.
-            It will reach the accounts here as soon as the head receives it. Total cash = accounts + in-transit.
+            <span className="hidden sm:inline"> It will reach the accounts here as soon as the head receives it. Total cash = accounts + in-transit.</span>
           </span>
         </p>
       )}

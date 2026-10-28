@@ -12,7 +12,7 @@ import { ReportTable } from '../components/reports/ReportTable';
 import { Insights, KPI_TONE, KpiGrid, NotesList, StatementCard } from '../components/reports/ReportBlocks';
 import { ReportIcon } from '../components/reports/ReportIcon';
 import { loadedExport, preloadExport } from '../components/reports/exportLoader';
-import { Button, Card, EmptyState, IconButton, Kbd, PageHeader, SearchInput, Skeleton, StatCard } from '../components/ui';
+import { Button, Card, EmptyState, IconButton, Kbd, PageHeader, SearchInput, Skeleton, StatCard, StatGrid } from '../components/ui';
 import { cn } from '../lib/cn';
 import { getReport, REPORT_CATEGORIES, REPORTS } from '../lib/reports/registry';
 import { presetLabel, presetRange, rangeText } from '../lib/reports/presets';
@@ -458,9 +458,20 @@ const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onToggleF
       />
 
       {overview?.length ? (
-        <section aria-label="Today at a glance" className="space-y-2">
-          <h3 className="text-xs font-semibold text-fg-muted">Today</h3>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="space-y-2">
+          <h3 className="hidden text-xs font-semibold text-fg-muted md:block">Today</h3>
+          <StatGrid
+            label="Today at a glance"
+            storageKey="reports-today"
+            peek={overview.slice(0, 2).map(k => {
+              const tone = KPI_TONE[k.tone || 'neutral'];
+              return {
+                value: formatValue(k.value, k.format || 'number', k.unit),
+                label: k.label.toLowerCase(),
+                tone: tone === 'danger' || tone === 'warning' ? tone : undefined,
+              };
+            })}
+          >
             {overview.map(k => {
               const text = formatValue(k.value, k.format || 'number', k.unit);
               return (
@@ -469,8 +480,8 @@ const ReportsHome = ({ favourites, recent, overview, isLocked, onOpen, onToggleF
                 </div>
               );
             })}
-          </div>
-        </section>
+          </StatGrid>
+        </div>
       ) : null}
 
       <SearchInput ref={searchRef as any} value={query} onChange={onQuery} placeholder="Find a report — sales, ledger, milk, stock, profit…" aria-label="Find a report" shortcut="/" className="max-w-xl" />

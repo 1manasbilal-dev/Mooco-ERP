@@ -15,8 +15,9 @@ export function PageHeader({ title, description, eyebrow, actions, className, ch
     <div className={cn('flex flex-col gap-4', className)} {...props}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
+          {/* Phones skip the eyebrow: the app header right above already names the screen. */}
           {eyebrow && (
-            <p className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-brand-fg">
+            <p className="mb-1 hidden items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-brand-fg sm:flex">
               <span className="size-1.5 rounded-full bg-brand-accent" aria-hidden="true" />
               {eyebrow}
             </p>

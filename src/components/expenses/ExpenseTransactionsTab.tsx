@@ -10,7 +10,7 @@ import { formatCurrency } from '../../lib/formatters';
 import { cn } from '../../lib/cn';
 import { useProgressiveList } from '../../hooks/useProgressiveList';
 import {
-  Button, Card, EmptyState, IconButton, Input, Kbd, LoadMoreRow, Money, SearchInput, SegmentedControl, StatCard, Toolbar,
+  Button, Card, EmptyState, IconButton, Input, Kbd, LoadMoreRow, Money, SearchInput, SegmentedControl, StatCard, StatGrid, Toolbar,
 } from '../ui';
 import type { SegmentOption } from '../ui';
 import {
@@ -311,7 +311,14 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatGrid
+        label={`Expenses · ${periodText}`}
+        storageKey="expenses"
+        peek={[
+          { value: <Money amount={stats.total} compact />, label: 'spent' },
+          { value: <Money amount={stats.vendorDues} compact />, label: 'vendor dues', tone: stats.vendorDues > 0 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard
           icon={<Receipt />}
           tone="brand"
@@ -343,7 +350,7 @@ export const ExpenseTransactionsTab: React.FC<ExpenseTransactionsTabProps> = ({
           onClick={onShowVendorDues}
           hint={stats.vendorDueCount > 0 ? `${plural(stats.vendorDueCount, 'vendor')} to pay${stats.onCredit > 0 ? ` · ${formatCurrency(stats.onCredit)} new` : ''}` : 'All vendors settled'}
         />
-      </div>
+      </StatGrid>
 
       <Toolbar className="print:hidden">
         <SearchInput

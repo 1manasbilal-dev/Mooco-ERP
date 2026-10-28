@@ -11,7 +11,7 @@ import { cn } from '../../lib/cn';
 import { RichSelect } from '../RichSelect';
 import { useProgressiveList } from '../../hooks/useProgressiveList';
 import {
-  Badge, Button, Card, EmptyState, IconButton, Input, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, StatCard, Toolbar,
+  Badge, Button, Card, EmptyState, IconButton, Input, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, StatCard, StatGrid, Toolbar,
 } from '../ui';
 import type { SegmentOption } from '../ui';
 import { Avatar, DayHeader, Dot, MiniStat, SettlementBar, dayKey, paidOf, pkToday, plural } from './ExpenseUI';
@@ -384,7 +384,15 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <div className={cn('grid-cols-2 gap-3 lg:grid-cols-4 print:hidden', view === 'directory' && isMobileLedgerOpen ? 'hidden xl:grid' : 'grid')}>
+      <StatGrid
+        label="Vendor summary"
+        storageKey="expense-vendors"
+        className={cn('print:hidden', view === 'directory' && isMobileLedgerOpen && 'hidden xl:grid')}
+        peek={[
+          { value: <Money amount={vendorStats.payable} compact />, label: 'you owe', tone: vendorStats.payable > 0 ? 'danger' : undefined },
+          { value: <Money amount={vendorStats.advance} compact />, label: 'advance', tone: vendorStats.advance > 0 ? 'success' : undefined },
+        ]}
+      >
         <StatCard
           icon={<BookUser />}
           tone={vendorStats.payable > 0 ? 'danger' : 'success'}
@@ -413,7 +421,7 @@ export const ExpenseVendorsTab: React.FC<ExpenseVendorsTabProps> = ({
           value={<span className="text-xl sm:text-2xl lg:text-[28px]">{vendorStats.active}</span>}
           hint={`${expenseVendors.length} total${statusCounts.Inactive ? ` · ${statusCounts.Inactive} inactive` : ''}`}
         />
-      </div>
+      </StatGrid>
 
       {view === 'payments' ? (
         <div className="flex flex-col gap-3">

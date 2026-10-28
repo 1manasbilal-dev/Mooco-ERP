@@ -9,7 +9,7 @@ import { MilkType } from '../../types';
 import { cn } from '../../lib/cn';
 import { roundCurrency, roundQuantity } from '../../lib/db';
 import { formatQty, normalizeTransactionTimestamp } from '../../lib/formatters';
-import { Badge, Button, Card, confirmAction, controlClass, Input, Kbd, Money, StatCard } from '../ui';
+import { Badge, Button, Card, confirmAction, controlClass, Input, Kbd, Money, StatCard, StatGrid } from '../ui';
 import { SmartNumberInput } from '../SmartNumberInput';
 import { Avatar, PillGroup, PillOption, ProcurementHeader, SectionLabel, SettlementBar, ShiftIcon, varietyDot } from './ProcurementUI';
 import { SupplierPicker } from './SupplierPicker';
@@ -408,7 +408,14 @@ const MilkCollection: React.FC = () => {
         }
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label={`Collection summary for ${prettyDate(form.date)}`}>
+      <StatGrid
+        label={`Collection summary · ${dayLabel}`}
+        storageKey="milk-collection"
+        peek={[
+          { value: `${formatQty(daySummary.liters)} L`, label: 'collected' },
+          { value: <Money amount={daySummary.due} compact />, label: 'on credit', tone: daySummary.due > 0.5 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard
           label={`Collected · ${dayLabel}`}
           value={`${formatQty(daySummary.liters)} L`}
@@ -436,7 +443,7 @@ const MilkCollection: React.FC = () => {
           tone={daySummary.due > 0.5 ? 'danger' : 'neutral'}
           hint={<>Paid <Money amount={Math.max(0, daySummary.amount - daySummary.due)} /></>}
         />
-      </section>
+      </StatGrid>
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <Card className="flex flex-col lg:col-span-8">

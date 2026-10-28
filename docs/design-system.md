@@ -50,7 +50,8 @@ Workspace accents (cyan for milk, violet for products, rose for expenses) stay a
 | `Button` | Every button. Variants `primary` (one per area), `secondary`, `ghost`, `soft`, `danger`, `danger-soft`; sizes `sm` `md` `lg`; `loading`, `leftIcon`, `rightIcon`, `fullWidth`. Defaults to `type="button"`. |
 | `IconButton` | Icon-only actions (`aria-label` required, becomes the tooltip). |
 | `Card`, `CardHeader`, `CardBody`, `CardFooter` | Content blocks. `variant="inset"` for panels inside a card, `interactive` for clickable cards. |
-| `StatCard` | KPI tiles: label, value, icon, `tone`, `trend` (%), `trendGoodWhen="down"` for expenses/dues, `hint`, `loading`, `onClick`. |
+| `StatCard` | KPI tiles: label, value, icon, `tone`, `trend` (%), `trendGoodWhen="down"` for expenses/dues, `hint`, `loading`, `onClick`. The icon is hidden on phones so the label fits. |
+| `StatGrid` | The row of `StatCard`s at the top of a screen. Always wrap them in it: on phones it folds them into one bar (`label` + one or two `peek` figures), a tap opens them and the choice is remembered per `storageKey`. `gridClassName` for column overrides. |
 | `Badge` | Status pills. `tone` + `soft`/`solid`, optional `dot`. |
 | `Money` | Every rupee amount. `tone="balance"` (ledger balance: positive due = red, negative advance = green), `tone="signed"` (cash flow), `compact`. |
 | `PageHeader` | Top of a screen: `eyebrow`, optional `title` (the app header already shows the screen name), `description`, `actions`, and children for a tab/filter row. |
@@ -68,13 +69,14 @@ Workspace accents (cyan for milk, violet for products, rose for expenses) stay a
 
 ```
 PageHeader            eyebrow + description + primary action(s), tab/period row
-StatCard grid         2 columns on phones, 4 on desktop (grid-cols-2 lg:grid-cols-4, gap-3)
+StatGrid              StatCards: one folded bar on phones, 2 columns on tablets, 4 on desktop
 Toolbar               SearchInput, filters (SegmentedControl), secondary actions, primary action
 Content               TableContainer / Cards; EmptyState when empty; Skeleton while loading
 ```
 
 - Page padding comes from the workspace container; inside a page use `gap-4`/`gap-6` between blocks, `p-4 sm:p-5` inside cards.
 - Phones (390px wide) must work: no horizontal page scroll, tables scroll inside their container, toolbars wrap, primary action stays reachable.
+- Phones show the work first: the form or list a screen is for sits near the top. KPI cards fold into one `StatGrid` bar, and `PageHeader` drops its eyebrow there (the app header already names the screen).
 - Headings: page `text-2xl font-bold tracking-tight`, card `text-[15px] font-bold`, labels `text-xs font-semibold text-fg-muted` in sentence case. Uppercase only for table heads and eyebrows.
 - All copy is plain English: no Roman Urdu or Urdu, in toasts and dialogs too. Business words: ledger (a customer, supplier or vendor account; not "khata"), on credit, due, advance, shift, drawer.
 

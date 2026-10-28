@@ -7,7 +7,7 @@ import { ProductionStage, type ItemDefinition, type ProductionBatch } from '../t
 import { cleanNumber, formatQty } from '../lib/formatters';
 import { businessDate } from '../lib/dashboardAnalytics';
 import { BREAKPOINTS, useMediaQuery } from '../hooks/useMediaQuery';
-import { Badge, Card, Money, PageHeader, SegmentedControl, Skeleton, StatCard } from '../components/ui';
+import { Badge, Card, Money, PageHeader, SegmentedControl, Skeleton, StatCard, StatGrid } from '../components/ui';
 import { cn } from '../lib/cn';
 import { BatchCard } from '../components/milk-ops/BatchCard';
 import { BOARD_STAGES, stageLabel } from '../components/milk-ops/productionStages';
@@ -245,7 +245,14 @@ const Production: React.FC = () => {
         }
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Production summary">
+      <StatGrid
+        label="Production summary"
+        storageKey="production"
+        peek={[
+          { value: board.active, label: board.active === 1 ? 'active batch' : 'active batches' },
+          { value: `${formatQty(board.milkInProcess, 3)} L`, label: 'in process' },
+        ]}
+      >
         <StatCard
           label="Active batches"
           value={board.active}
@@ -270,7 +277,7 @@ const Production: React.FC = () => {
           tone={board.profitToday < 0 ? 'danger' : board.profitToday > 0 ? 'success' : 'neutral'}
           hint={board.profitMissing > 0 ? `Profit not saved for ${board.profitMissing} ${board.profitMissing === 1 ? 'batch' : 'batches'}` : 'Complete batches'}
         />
-      </section>
+      </StatGrid>
 
       {activeView === 'board' ? (
         <>

@@ -6,7 +6,8 @@ import {
 import { useDairy } from '../context/DairyContext';
 import { useToast } from '../context/ToastContext';
 import {
-  Button, Card, CardBody, EmptyState, PageHeader, SearchInput, SegmentedControl, SkeletonText, StatCard, Toolbar, confirmAction,
+  Button, Card, CardBody, EmptyState, Money, PageHeader, SearchInput, SegmentedControl, SkeletonText, StatCard, StatGrid, Toolbar,
+  confirmAction,
 } from '../components/ui';
 import { CoaTable } from '../components/finance/CoaTable';
 import { StatMoney } from '../components/finance/StatMoney';
@@ -211,7 +212,14 @@ const Accounts: React.FC = () => {
 
       {activeTab === 'chart' && (
         <>
-          <section aria-label="Totals" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatGrid
+            label="Totals"
+            storageKey="accounts"
+            peek={loading ? undefined : [
+              { value: <Money amount={totals.assets} compact />, label: 'assets' },
+              { value: <Money amount={Math.abs(totals.net)} compact />, label: totals.net >= 0 ? 'net income' : 'net loss', tone: totals.net >= 0 ? 'success' : 'danger' },
+            ]}
+          >
             <StatCard label="Total assets" icon={<Wallet />} loading={loading} value={<StatMoney amount={totals.assets} />} hint="Debit balance" />
             <StatCard label="Liabilities" icon={<Landmark />} loading={loading} value={<StatMoney amount={totals.liabilities} />} hint="Credit balance" />
             <StatCard
@@ -229,7 +237,7 @@ const Accounts: React.FC = () => {
               value={<StatMoney amount={Math.abs(totals.net)} />}
               hint="Income − expenses, all time"
             />
-          </section>
+          </StatGrid>
 
           <section aria-label="Chart of accounts" className="flex flex-col gap-3">
             <Toolbar>

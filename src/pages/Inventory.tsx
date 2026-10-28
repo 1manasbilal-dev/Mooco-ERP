@@ -6,7 +6,7 @@ import { useToast } from '../context/ToastContext';
 import { BREAKPOINTS, useMediaQuery } from '../hooks/useMediaQuery';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import {
-  Button, Card, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, StatCard, TBody, TH, THead, Table,
+  Button, Card, EmptyState, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, StatCard, StatGrid, TBody, TH, THead, Table,
   TableContainer, Toolbar,
 } from '../components/ui';
 import { alertOf, buildStockRows, canSetOpening, type StockRow } from '../components/milk-ops/inventoryStock';
@@ -233,7 +233,15 @@ const Inventory: React.FC = () => {
         }
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Stock summary">
+      <StatGrid
+        label="Stock summary"
+        storageKey="inventory"
+        peek={[
+          { value: <Money amount={stats.totalValue} compact />, label: 'at cost' },
+          { value: stats.low, label: 'low', tone: stats.low > 0 ? 'warning' : undefined },
+          { value: stats.out, label: 'out', tone: stats.out > 0 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard label="Total items" value={stats.totalItems} icon={<Package />} hint={hasFilters ? 'Matching filters' : undefined} />
         <StatCard
           label="Stock value (cost)"
@@ -258,7 +266,7 @@ const Inventory: React.FC = () => {
           hint={statusFilter === 'out' ? 'Filter on' : stats.out > 0 ? 'View' : undefined}
           onClick={() => setStatusFilter(current => (current === 'out' ? 'all' : 'out'))}
         />
-      </section>
+      </StatGrid>
 
       {stats.fix > 0 && statusFilter !== 'fix' && (
         <p className="flex flex-wrap items-center gap-2 rounded-control bg-warning-soft px-3 py-2.5 text-[13px] font-semibold text-warning-fg ring-1 ring-inset ring-warning/25">

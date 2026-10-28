@@ -57,7 +57,8 @@ export function StatCard({
       )}
     >
       <div className="flex items-center gap-2.5">
-        {icon && <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4', ICON_TONE[tone])}>{icon}</span>}
+        {/* Two cards share a phone row: the label gets the icon's room there, so it is not cut off. */}
+        {icon && <span className={cn('hidden size-8 shrink-0 items-center justify-center rounded-lg sm:flex [&_svg]:size-4', ICON_TONE[tone])}>{icon}</span>}
         <span className="truncate text-[13px] font-semibold text-fg-subtle">{label}</span>
       </div>
       {loading ? (

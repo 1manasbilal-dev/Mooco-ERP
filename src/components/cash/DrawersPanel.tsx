@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, memo, useCallback, useMemo, useState } from 'react';
 import { ArrowRightLeft, ExternalLink, Plus, Store, Wallet } from 'lucide-react';
-import { Badge, Button, Card, EmptyState, Money, StatCard } from '../ui';
+import { Badge, Button, Card, EmptyState, Money, StatCard, StatGrid } from '../ui';
 import { useDairy } from '../../context/DairyContext';
 import type { FinancialAccount, ShiftSession } from '../../types';
 import { roundCurrency } from '../../lib/db';
@@ -68,10 +68,17 @@ const DrawersPanel: React.FC<DrawersPanelProps> = ({ run, busyKey, todayLocked, 
       </div>
 
       {drawers.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatGrid
+          label="Drawers summary"
+          storageKey="cash-drawers"
+          peek={[
+            { value: <Money amount={total} compact />, label: 'in drawers' },
+            { value: inUse, label: 'in use' },
+          ]}
+        >
           <StatCard label="Cash in drawers" icon={<Wallet />} tone="brand" value={<Money amount={total} compact />} hint={`${drawers.length} drawer${drawers.length === 1 ? '' : 's'}`} />
           <StatCard label="In use" icon={<Store />} tone={inUse > 0 ? 'success' : 'neutral'} value={inUse} hint="Live shifts" />
-        </div>
+        </StatGrid>
       )}
 
       {drawers.length === 0 ? (

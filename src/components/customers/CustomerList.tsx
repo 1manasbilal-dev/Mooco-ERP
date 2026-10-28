@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import { Archive, ArrowUpDown, FileText, MessageCircle, Pencil, Trash2, UserCheck, UserPlus, Users, Wallet, WalletCards } from 'lucide-react';
 import {
-  Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, Skeleton, StatCard,
+  Badge, Button, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, Skeleton, StatCard, StatGrid,
   TBody, TD, TH, THead, TR, Table, TableContainer, Toolbar,
 } from '../ui';
 import { cn } from '../../lib/cn';
@@ -49,7 +49,15 @@ const tileLabel = (short: string, full: string) => <><span className="sm:hidden"
 export const CustomerStats = ({
   stats, loading, compact, onPick,
 }: { stats: CustomerStatsData; loading: boolean; compact: boolean; onPick: (balance: BalanceFilter, status: StatusFilter) => void }) => (
-  <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 print:hidden" aria-label="Customer summary">
+  <StatGrid
+    label="Customer summary"
+    storageKey="customers"
+    className="print:hidden"
+    peek={loading ? undefined : [
+      { value: <Money amount={stats.dueTotal} compact />, label: 'due', tone: stats.dueTotal > 0.5 ? 'danger' : undefined },
+      { value: <Money amount={stats.advanceTotal} compact />, label: 'advance', tone: stats.advanceTotal > 0.5 ? 'success' : undefined },
+    ]}
+  >
     <StatCard
       label={tileLabel('Clients', 'Total clients')}
       value={stats.total.toLocaleString('en-PK')}
@@ -84,7 +92,7 @@ export const CustomerStats = ({
       loading={loading}
       onClick={() => onPick('Advance', 'All')}
     />
-  </section>
+  </StatGrid>
 );
 
 interface RowHandlers {

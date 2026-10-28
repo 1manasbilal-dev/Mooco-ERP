@@ -10,7 +10,7 @@ import {
 } from '../components/procurement/procurementData';
 import {
   Badge, Button, EmptyState, IconButton, Input, LoadMoreRow, Money, SearchInput, SegmentedControl, Select, TBody, TD, TH, THead, TR, Table,
-  TableContainer, Toolbar,
+  StatGrid, TableContainer, Toolbar,
 } from '../components/ui';
 import { useDairy } from '../context/DairyContext';
 import { useTabs } from '../context/TabContext';
@@ -348,7 +348,15 @@ const MilkCollectionDetails: React.FC = () => {
         </div>
       )}
 
-      <section className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Collection totals">
+      <StatGrid
+        label="Collection totals"
+        storageKey="collection-details"
+        gridClassName="lg:grid-cols-2 xl:grid-cols-4"
+        peek={[
+          { value: `${formatQty(totals.liters)} L`, label: 'collected' },
+          { value: <Money amount={totals.due} compact />, label: 'on credit', tone: totals.due > 0.5 ? 'danger' : undefined },
+        ]}
+      >
         <StatTile className="col-span-2 sm:col-span-1" icon={Droplets} tone="lime" label="Collected" value={`${formatQty(totals.liters)} L`} hint={`${slips.length} slips · ${farmers.length} farmers`}>
           <MixBar buffalo={totals.buffalo} cow={totals.cow} mixed={totals.mixed} />
         </StatTile>
@@ -358,7 +366,7 @@ const MilkCollectionDetails: React.FC = () => {
         </StatTile>
         <div className="col-span-2 flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 shadow-e1 sm:col-span-1">
           <div className="flex items-center gap-2.5">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-warning-soft text-warning-fg"><Sun size={16} aria-hidden="true" /></span>
+            <span className="hidden size-8 shrink-0 items-center justify-center rounded-lg bg-warning-soft text-warning-fg sm:flex"><Sun size={16} aria-hidden="true" /></span>
             <span className="truncate text-[13px] font-semibold text-fg-subtle">By shift</span>
           </div>
           {totals.shiftTotals.length === 0 ? (
@@ -380,7 +388,7 @@ const MilkCollectionDetails: React.FC = () => {
             </div>
           )}
         </div>
-      </section>
+      </StatGrid>
 
       {slips.length === 0 ? (
         <TableContainer>

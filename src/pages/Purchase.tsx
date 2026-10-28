@@ -12,7 +12,8 @@ function ProcurementSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading">
       <Skeleton className="h-16 w-full max-w-xl" />
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <Skeleton className="h-[54px] rounded-card md:hidden" />
+      <div className="hidden grid-cols-2 gap-3 md:grid lg:grid-cols-4">
         {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-28 rounded-card" />)}
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">

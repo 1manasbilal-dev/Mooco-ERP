@@ -57,7 +57,9 @@ export const PageLoadingFallback: React.FC<{ message?: string; submessage?: stri
         </div>
         <Skeleton className="hidden h-10 w-32 rounded-control sm:block" />
       </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-hidden="true">
+      {/* Phones show the KPI cards folded into one bar (StatGrid). */}
+      <Skeleton className="h-[54px] rounded-card md:hidden" />
+      <div className="hidden grid-cols-2 gap-3 md:grid lg:grid-cols-4" aria-hidden="true">
         {[0, 1, 2, 3].map(i => (
           <div key={i} className="space-y-3 rounded-card border border-line bg-surface p-4 shadow-e1">
             <Skeleton className="h-3 w-20" />

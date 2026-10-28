@@ -76,7 +76,7 @@ export const StatTile: React.FC<{
 }> = ({ icon: Icon, label, value, hint, tone = 'slate', valueTone, className, children }) => (
   <div className={cn('flex min-w-0 flex-col gap-2 rounded-card border border-line bg-surface p-4 shadow-e1', className)}>
     <div className="flex items-center gap-2.5">
-      <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg', TONE[tone].tile)}>
+      <span className={cn('hidden size-8 shrink-0 items-center justify-center rounded-lg sm:flex', TONE[tone].tile)}>
         <Icon size={16} aria-hidden="true" />
       </span>
       <span className="truncate text-[13px] font-semibold text-fg-subtle">{label}</span>

@@ -15,7 +15,7 @@ import { cleanQty, formatCurrency, formatQty, normalizeTransactionTimestamp } fr
 import { formatBaseQty, pileBreakdown, readStock, STOCK_STATUS_LABEL, type StockReading, type StockStatus } from '../../lib/stockRules';
 import { convertQuantity } from '../../lib/unitConversion';
 import {
-  Badge, Button, Card, confirmAction, controlClass, EmptyState, IconButton, Input, Money, StatCard, TBody, TD, TH, THead, TR, Table,
+  Badge, Button, Card, confirmAction, controlClass, EmptyState, IconButton, Input, Money, StatCard, StatGrid, TBody, TD, TH, THead, TR, Table,
 } from '../ui';
 import type { Tone } from '../ui';
 import { Avatar, ProcurementHeader, SectionLabel, SettlementBar } from './ProcurementUI';
@@ -382,7 +382,14 @@ const SuppliesPurchase: React.FC = () => {
         actions={<Button variant="secondary" leftIcon={<History />} onClick={() => setLogOpen(true)}>Log</Button>}
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Supplies bought today">
+      <StatGrid
+        label="Supplies bought today"
+        storageKey="supplies-purchase"
+        peek={[
+          { value: <Money amount={todayStats.amount} compact />, label: 'spent' },
+          { value: <Money amount={Math.max(0, todayStats.amount - todayStats.paid)} compact />, label: 'on credit', tone: todayStats.amount - todayStats.paid > 0.5 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard label="Bills today" value={todayStats.bills} icon={<Receipt />} tone="info" hint={`${todayStats.lines} item lines`} />
         <StatCard label="Spent today" value={<Money amount={todayStats.amount} compact />} icon={<Wallet />} />
         <StatCard label="Paid today" value={<Money amount={todayStats.paid} compact />} icon={<Banknote />} tone="success" />
@@ -392,7 +399,7 @@ const SuppliesPurchase: React.FC = () => {
           icon={<BookOpen />}
           tone={todayStats.amount - todayStats.paid > 0.5 ? 'danger' : 'neutral'}
         />
-      </section>
+      </StatGrid>
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <Card className="lg:col-span-8">

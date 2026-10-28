@@ -8,7 +8,7 @@ import { cleanNumber, formatCurrency, formatQty } from '../lib/formatters';
 import { getRetailMilkStock } from '../lib/retailMilkStock';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import {
-  Badge, Button, Card, EmptyState, Field, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, StatCard,
+  Badge, Button, Card, EmptyState, Field, LoadMoreRow, Money, PageHeader, SearchInput, SegmentedControl, Select, StatCard, StatGrid,
 } from '../components/ui';
 import {
   CartLine, SourceRow, cartLineError, displaySourceName, type CartItem, type MilkSource, type SourceEntry,
@@ -363,7 +363,14 @@ const Allocation: React.FC = () => {
         description="Send collected milk to the retail counter or to production. The milk left in each lot shows here."
       />
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Milk pool summary">
+      <StatGrid
+        label="Milk pool summary"
+        storageKey="allocation"
+        peek={[
+          { value: `${formatQty(pool.remaining, 3)} L`, label: 'to allocate' },
+          { value: `${formatQty(totals.volume, 3)} L`, label: 'in cart' },
+        ]}
+      >
         <PoolSummary className="col-span-2" remaining={pool.remaining} allocated={pool.allocated} inCart={totals.fresh} lots={freshEntries.length} />
         <StatCard
           label="Counter milk"
@@ -381,7 +388,7 @@ const Allocation: React.FC = () => {
           hint={cart.length > 0 ? `Avg ${formatCurrency(cleanNumber(totals.averageRate, 1))}/L` : 'Empty'}
           onClick={() => setMobileTab('cart')}
         />
-      </section>
+      </StatGrid>
 
       <SegmentedControl
         aria-label="Allocation panel"

@@ -159,7 +159,8 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
 
   return (
     <div className="min-h-full bg-canvas">
-      <header className="sticky top-0 z-30 border-b border-line bg-surface">
+      {/* Phones already show "Settings" in the app header right above, so this bar starts at `sm`. */}
+      <header className="sticky top-0 z-30 hidden border-b border-line bg-surface sm:block">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-8">
           <IconButton variant="secondary" icon={<ArrowLeft />} aria-label="Back" onClick={onBack} />
           <div className="min-w-0">

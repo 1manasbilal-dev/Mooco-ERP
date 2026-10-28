@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import {
   Badge, Button, Card, CardBody, CardFooter, CardHeader, EmptyState, Field, IconButton, Input, Modal, Money, PageHeader,
-  SearchInput, SegmentedControl, Select, Skeleton, SkeletonText, StatCard, TBody, TD, TH, THead, TR, Table, TableContainer,
+  SearchInput, SegmentedControl, Select, Skeleton, SkeletonText, StatCard, StatGrid, TBody, TD, TH, THead, TR, Table, TableContainer,
   Textarea, Toolbar,
 } from '../components/ui';
 import { useThemeMode } from '../components/shell/preferences';
@@ -59,12 +59,19 @@ export default function UiGallery() {
           />
         </PageHeader>
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatGrid
+          label="Today's summary"
+          storageKey="ui-gallery"
+          peek={[
+            { value: <Money amount={128450} compact />, label: 'sales' },
+            { value: <Money amount={101000} compact />, label: 'due', tone: 'danger' },
+          ]}
+        >
           <StatCard label="Total sales" value={<Money amount={128450} />} icon={<Banknote />} tone="brand" trend={51.1} trendLabel="vs yesterday" />
           <StatCard label="Milk collected" value="580 L" icon={<Milk />} tone="info" trend={-8.4} trendLabel="vs yesterday" hint="2 collections" />
           <StatCard label="Due receivables" value={<Money amount={101000} />} icon={<Wallet />} tone="danger" trend={-3.2} trendGoodWhen="down" onClick={() => setTab('due')} />
           <StatCard label="Loading example" value="" icon={<ReceiptText />} loading />
-        </section>
+        </StatGrid>
 
         <section className="flex flex-col gap-3">
           <Toolbar>

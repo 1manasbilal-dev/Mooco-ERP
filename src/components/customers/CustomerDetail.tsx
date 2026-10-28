@@ -4,7 +4,7 @@ import {
   ChevronDown, ReceiptText, Wallet, CalendarClock, ListOrdered,
 } from 'lucide-react';
 import {
-  Badge, Button, Card, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, StatCard,
+  Badge, Button, Card, EmptyState, IconButton, LoadMoreRow, Money, SearchInput, SegmentedControl, StatCard, StatGrid,
   TBody, TD, TH, THead, TR, Table, TableContainer, Toolbar,
 } from '../ui';
 import { cn } from '../../lib/cn';
@@ -358,7 +358,16 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
             </div>
           )}
 
-          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4 print:hidden" aria-label="Ledger summary">
+          <StatGrid
+            label="Ledger summary"
+            storageKey="customer-ledger"
+            className="print:hidden"
+            gridClassName="lg:grid-cols-2 xl:grid-cols-4"
+            peek={[
+              { value: <Money amount={ledger.totalDebit} compact />, label: 'billed' },
+              { value: <Money amount={ledger.totalCredit} compact />, label: 'received', tone: 'success' },
+            ]}
+          >
             <StatCard
               label={tileLabel('Billed', 'Total billed')}
               value={<Money amount={ledger.totalDebit} compact={!isMdScreen} />}
@@ -378,7 +387,7 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
               icon={<CalendarClock />}
               hint={lastPayment ? lastPayment.dateLabel : 'None yet'}
             />
-          </section>
+          </StatGrid>
 
           <Toolbar className="print:hidden">
             <SearchInput

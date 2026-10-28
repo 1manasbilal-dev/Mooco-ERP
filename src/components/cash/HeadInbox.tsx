@@ -3,7 +3,7 @@ import {
   AlertTriangle, ArrowRightLeft, Check, CheckCircle2, ChevronDown, Clock3, ShieldCheck, WalletCards,
 } from 'lucide-react';
 import {
-  Badge, Button, Card, CardHeader, EmptyState, Field, Money, Select, StatCard, TBody, TD, TH, THead, TR, Table, TableContainer, Textarea,
+  Badge, Button, Card, CardHeader, EmptyState, Field, Money, Select, StatCard, StatGrid, TBody, TD, TH, THead, TR, Table, TableContainer, Textarea,
 } from '../ui';
 import { useDairy } from '../../context/DairyContext';
 import type { CashHandover, CashRemittance, CashVariance, FinancialAccount, ShiftSession } from '../../types';
@@ -80,7 +80,14 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatGrid
+        label="Cash summary"
+        storageKey="head-inbox"
+        peek={[
+          { value: <Money amount={cashInTransit.amount} compact />, label: 'in transit', tone: cashInTransit.count > 0 ? 'warning' : undefined },
+          { value: openVarianceCount, label: openVarianceCount === 1 ? 'open variance' : 'open variances', tone: openVarianceCount > 0 ? 'danger' : undefined },
+        ]}
+      >
         <StatCard
           label="Cash in transit"
           icon={<WalletCards />}
@@ -98,7 +105,7 @@ const HeadInbox: React.FC<HeadInboxProps> = ({ run, busyKey, onOpenTab }) => {
           hint={openVarianceCount > 0 ? 'Needs review' : 'All clear'}
           onClick={() => onOpenTab('audit')}
         />
-      </div>
+      </StatGrid>
 
       <section aria-labelledby="remittances-heading" className="flex flex-col gap-3">
         <div className="flex flex-wrap items-end justify-between gap-2">
