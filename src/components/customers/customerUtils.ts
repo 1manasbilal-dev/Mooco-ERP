@@ -203,6 +203,12 @@ export const indexByCustomer = <T,>(rows: T[], customerIdOf: (row: T) => string 
 
 export const saleCustomerId = (s: POSBill) => s.customer_id || s.details?.customer_id;
 
+// Value returned, once per bill. The ledger Return row of a bill is the same goods as the bill's
+// refund, so adding both (or a returned bill's full debit) counted the return twice.
+const returnedValue = (entries: LedgerEntry[]) => roundCurrency(entries
+  .filter(e => e.sale && !e.rawTx && (e.isReturned || e.isPartiallyReturned))
+  .reduce((sum, e) => sum + (Number(e.refund_amount || 0) || (e.isReturned ? e.debit : 0)), 0));
+
 /**
  * The customer's ledger: POS bills plus manual ledger rows, oldest first for the running balance,
  * returned newest first. Pure, so the page can memoise it per customer.
@@ -315,19 +321,44 @@ export function buildLedger(
     return { ...entry, dateLabel: formatDay(entry.date), runningBalance: roundCurrency(running) };
   });
 
-  // Value returned, once per bill. The ledger Return row of a bill is the same goods as the bill's
-  // refund, so adding both (or a returned bill's full debit) counted the return twice.
-  const returnedAmount = roundCurrency(withBalance
-    .filter(e => e.sale && !e.rawTx && (e.isReturned || e.isPartiallyReturned))
-    .reduce((sum, e) => sum + (Number(e.refund_amount || 0) || (e.isReturned ? e.debit : 0)), 0));
-
   return {
     entries: withBalance.reverse(),
     totalDebit: roundCurrency(totalDebit),
     totalCredit: roundCurrency(totalCredit),
     ledgerGap: roundCurrency(Number(customer.balance || 0) - running),
     returnedCount: withBalance.filter(e => e.isReturned).length,
-    returnedAmount,
+    returnedAmount: returnedValue(withBalance),
+  };
+}
+
+export interface LedgerPeriod {
+  /** Entries of the duration, newest first, keeping the running balance of the full ledger. */
+  entries: LedgerEntry[];
+  /** Balance carried in from before the duration. */
+  openingBalance: number;
+  totalDebit: number;
+  totalCredit: number;
+  closingBalance: number;
+  returnedAmount: number;
+}
+
+/**
+ * One duration of the ledger ("YYYY-MM-DD" business days, both included; a blank end is open).
+ * Opening + debit - credit always equals closing, so a printed statement adds up on paper.
+ */
+export function ledgerForPeriod(entries: LedgerEntry[], from: string, to: string): LedgerPeriod {
+  const shown = entries.filter(e => (!from || e.date >= from) && (!to || e.date <= to));
+  // Entries are newest first, so the first one before the duration holds the balance carried in.
+  const openingBalance = from ? entries.find(e => e.date < from)?.runningBalance ?? 0 : 0;
+  const totalDebit = roundCurrency(shown.reduce((sum, e) => sum + e.debit, 0));
+  const totalCredit = roundCurrency(shown.reduce((sum, e) => sum + e.credit, 0));
+  return {
+    entries: shown,
+    openingBalance,
+    totalDebit,
+    totalCredit,
+    closingBalance: roundCurrency(openingBalance + totalDebit - totalCredit),
+    returnedAmount: returnedValue(shown),
   };
 }
 

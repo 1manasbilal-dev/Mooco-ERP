@@ -1,4 +1,4 @@
-import React, { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, Eye, FileText, MapPin, MessageCircle, Pencil, Phone, Plus, Printer, RotateCcw, ShoppingCart, Trash2,
   ChevronDown, ReceiptText, Wallet, CalendarClock, ListOrdered,
@@ -11,15 +11,17 @@ import { cn } from '../../lib/cn';
 import { formatCurrency } from '../../lib/formatters';
 import { useProgressiveList } from '../../hooks/useProgressiveList';
 import type { Customer } from '../../types';
-import { BalanceBadge, CustomerAvatar, EntryTypeBadge, KhataBalance, usePrintMode } from './CustomerBits';
+import { rangeLabel } from '../../lib/supplierStatement';
+import { BalanceBadge, CustomerAvatar, EntryTypeBadge, KhataBalance } from './CustomerBits';
+import { ALL_TIME, LedgerPeriodPicker, periodRange, type PeriodChoice } from './LedgerPeriodPicker';
 import {
-  balanceState, customerPhones, filterLedger, formatDay, hasWhatsApp, isReturnEntry, matchesLedgerType,
+  balanceState, customerPhones, filterLedger, hasWhatsApp, isReturnEntry, ledgerForPeriod, matchesLedgerType,
   type LedgerEntry, type LedgerFilter, type LedgerSummary,
 } from './customerUtils';
 import type { ShopInfo } from './printDocs';
 
-// A4 portrait leaves about 700px: printed cells drop the screen padding so all six columns fit.
-const PRINT_CELL = 'print:px-1.5 print:py-1 print:first:pl-0';
+// The statement template loads on first use, so the ledger renders from a small chunk.
+const CustomerStatementDialog = lazy(() => import('./CustomerStatementDialog'));
 
 const isBillEntry =(entry: LedgerEntry) => Boolean(entry.sale) || entry.type === 'Sale' || entry.description.includes('POS Bill');
 
@@ -64,17 +66,17 @@ const LedgerTableRow = memo(function LedgerTableRow({ entry, onOpen, onDelete }:
   const bill = isBillEntry(entry);
   return (
     <TR className={cn(ret && 'bg-danger-soft/40', entry.isPartiallyReturned && 'bg-warning-soft/40')}>
-      <TD className={cn('whitespace-nowrap tabular-nums text-fg-muted', PRINT_CELL)}>{entry.dateLabel}</TD>
-      <TD className={cn('min-w-[240px] print:min-w-0', PRINT_CELL)}>
-        <button type="button" onClick={() => onOpen(entry)} className="w-full cursor-pointer rounded-md text-left text-[13px] hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring print:text-[11px]" title="View details">
+      <TD className="whitespace-nowrap tabular-nums text-fg-muted">{entry.dateLabel}</TD>
+      <TD className="min-w-[240px]">
+        <button type="button" onClick={() => onOpen(entry)} className="w-full cursor-pointer rounded-md text-left text-[13px] hover:text-brand-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="View details">
           <EntryDetails entry={entry} />
         </button>
       </TD>
-      <TD className={cn('text-center', PRINT_CELL)}><EntryTypeBadge entry={entry} /></TD>
-      <TD numeric className={PRINT_CELL}>{amountCell(entry.debit, 'text-danger-fg', ret)}</TD>
-      <TD numeric className={PRINT_CELL}>{amountCell(entry.credit, 'text-success-fg', ret)}</TD>
-      <TD numeric className={cn('whitespace-nowrap bg-surface-2/50', PRINT_CELL)}><KhataBalance balance={entry.runningBalance} label="drcr" /></TD>
-      <TD className="print:hidden">
+      <TD className="text-center"><EntryTypeBadge entry={entry} /></TD>
+      <TD numeric>{amountCell(entry.debit, 'text-danger-fg', ret)}</TD>
+      <TD numeric>{amountCell(entry.credit, 'text-success-fg', ret)}</TD>
+      <TD numeric className="whitespace-nowrap bg-surface-2/50"><KhataBalance balance={entry.runningBalance} label="drcr" /></TD>
+      <TD>
         <div className="flex items-center justify-end gap-1">
           {bill ? (
             <Button variant="soft" size="sm" leftIcon={<FileText />} onClick={() => onOpen(entry)}>Bill</Button>
@@ -132,54 +134,6 @@ const LedgerCard = memo(function LedgerCard({ entry, onOpen, onDelete }: { entry
   );
 });
 
-/** Statement letterhead: only on paper, where the screen's profile card and buttons are hidden. */
-const StatementPrintHeader = ({
-  customer, ledger, shop, filter, search, shownCount,
-}: { customer: Customer; ledger: LedgerSummary; shop: ShopInfo; filter: LedgerFilter; search: string; shownCount: number }) => {
-  const today = formatDay(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Karachi' }));
-  const state = balanceState(customer.balance);
-  const filtered = filter !== 'All' || search.trim() !== '';
-  return (
-    <div className="hidden text-black print:block">
-      <div className="flex items-start justify-between border-b-2 border-black pb-3">
-        <div>
-          <h1 className="text-xl font-black tracking-tight">{shop.companyName}</h1>
-          {shop.address && <p className="text-xs">{shop.address}</p>}
-          {shop.phone && <p className="text-xs">Tel: {shop.phone}</p>}
-        </div>
-        <div className="text-right">
-          <p className="text-base font-bold uppercase tracking-wider">Ledger Statement</p>
-          <p className="text-xs">Date: {today}</p>
-        </div>
-      </div>
-      <div className="flex items-start justify-between gap-6 py-3 text-xs">
-        <div>
-          <p className="text-sm font-bold">{customer.name}</p>
-          {customer.phone && <p>Phone: {customer.phone}</p>}
-          {(customer.city || customer.address) && <p>{[customer.city, customer.address].filter(Boolean).join(' — ')}</p>}
-        </div>
-        <table className="text-right text-xs">
-          <tbody>
-            <tr><td className="pr-3">Total billed</td><td className="font-bold">{formatCurrency(ledger.totalDebit)}</td></tr>
-            <tr><td className="pr-3">Total received</td><td className="font-bold">{formatCurrency(ledger.totalCredit)}</td></tr>
-            <tr>
-              <td className="pr-3">Current balance</td>
-              <td className="font-black">
-                {formatCurrency(Math.abs(customer.balance || 0))} {state === 'due' ? 'Due (Dr)' : state === 'advance' ? 'Advance (Cr)' : 'Settled'}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      {filtered && (
-        <p className="mb-2 border border-black px-2 py-1 text-[11px]">
-          Filtered statement: {FILTER_LABELS[filter]}{search.trim() ? `, search "${search.trim()}"` : ''} — {shownCount} of {ledger.entries.length} entries.
-        </p>
-      )}
-    </div>
-  );
-};
-
 export interface CustomerDetailProps {
   customer: Customer;
   ledger: LedgerSummary;
@@ -208,7 +162,8 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
   const [search, setSearch] = useState('');
   const [showContact, setShowContact] = useState(false);
   const deferredSearch = useDeferredValue(search);
-  const printing = usePrintMode();
+  const [periodChoice, setPeriodChoice] = useState<PeriodChoice>(ALL_TIME);
+  const [statementOpen, setStatementOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Opening a ledger from far down the list used to land in the middle of it.
@@ -216,42 +171,45 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
     rootRef.current?.closest('.workspace-pane')?.scrollTo({ top: 0 });
   }, []);
 
-  const entries = useMemo(() => filterLedger(ledger.entries, filter, deferredSearch), [ledger.entries, filter, deferredSearch]);
+  const { from, to } = periodRange(periodChoice);
+  const hasPeriod = Boolean(from || to);
+  const period = useMemo(() => ledgerForPeriod(ledger.entries, from, to), [ledger.entries, from, to]);
+  const entries = useMemo(() => filterLedger(period.entries, filter, deferredSearch), [period.entries, filter, deferredSearch]);
   const typeCounts = useMemo(() => {
-    const counts: Record<LedgerFilter, number> = { All: ledger.entries.length, Sale: 0, Payment: 0, Charge: 0, Return: 0 };
-    for (const entry of ledger.entries) {
+    const counts: Record<LedgerFilter, number> = { All: period.entries.length, Sale: 0, Payment: 0, Charge: 0, Return: 0 };
+    for (const entry of period.entries) {
       (['Sale', 'Payment', 'Charge', 'Return'] as const).forEach(type => { if (matchesLedgerType(entry, type)) counts[type] += 1; });
     }
     return counts;
-  }, [ledger.entries]);
+  }, [period.entries]);
   const lastPayment = useMemo(() => ledger.entries.find(e => e.type === 'Payment' && e.credit > 0), [ledger.entries]);
 
-  const ledgerWindow = useProgressiveList<LedgerEntry>(entries, 60, `${filter}|${deferredSearch}`);
+  const ledgerWindow = useProgressiveList<LedgerEntry>(entries, 60, `${filter}|${deferredSearch}|${from}|${to}`);
   const phones = customerPhones(customer);
   const wa = hasWhatsApp(customer);
   const isActive = customer.isActive !== false;
   const state = balanceState(customer.balance);
-  const showTable = isMdScreen || printing;
   const contactOpen = isMdScreen || showContact;
   const gap = Math.abs(ledger.ledgerGap || 0) >= 1;
+  const statementNote = filter !== 'All' || deferredSearch.trim() !== ''
+    ? `Filtered statement: ${FILTER_LABELS[filter]}${deferredSearch.trim() ? `, search "${deferredSearch.trim()}"` : ''}. ${entries.length} of ${period.entries.length} entries are listed; the balances cover all of them.`
+    : undefined;
 
   return (
     <div ref={rootRef} className="flex flex-col gap-4 animate-fade-up">
-      <StatementPrintHeader customer={customer} ledger={ledger} shop={shop} filter={filter} search={deferredSearch} shownCount={entries.length} />
-
-      <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Button variant="ghost" leftIcon={<ArrowLeft />} onClick={onBack}>All customers</Button>
         <div className="flex items-center gap-1.5">
           {canOrders && <IconButton variant="secondary" aria-label="Customer orders" icon={<ShoppingCart />} onClick={() => onOpenOrders(customer)} />}
           {wa && <IconButton variant="secondary" aria-label="Send statement on WhatsApp" icon={<MessageCircle />} onClick={() => onWhatsApp(customer)} />}
-          <IconButton variant="secondary" aria-label="Print statement" icon={<Printer />} onClick={() => window.print()} />
+          <IconButton variant="secondary" aria-label="Print or save statement as PDF" icon={<Printer />} onClick={() => setStatementOpen(true)} />
           {canEdit && <IconButton variant="secondary" aria-label="Edit customer" icon={<Pencil />} onClick={() => onEdit(customer)} />}
         </div>
       </div>
 
       {/* Side by side only on very wide screens; below that the ledger gets the full width it needs. */}
-      <div className="grid items-start gap-4 2xl:grid-cols-[320px_minmax(0,1fr)] print:block">
-        <Card className="overflow-hidden print:hidden 2xl:sticky 2xl:top-4">
+      <div className="grid items-start gap-4 2xl:grid-cols-[320px_minmax(0,1fr)]">
+        <Card className="overflow-hidden 2xl:sticky 2xl:top-4">
           <div className="grid md:grid-cols-2 2xl:block">
             <div className="pb-4 sm:pb-5">
               <div className="flex items-start gap-3 p-4 sm:p-5">
@@ -361,25 +319,24 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
           <StatGrid
             label="Ledger summary"
             storageKey="customer-ledger"
-            className="print:hidden"
             gridClassName="lg:grid-cols-2 xl:grid-cols-4"
             peek={[
-              { value: <Money amount={ledger.totalDebit} compact />, label: 'billed' },
-              { value: <Money amount={ledger.totalCredit} compact />, label: 'received', tone: 'success' },
+              { value: <Money amount={period.totalDebit} compact />, label: 'billed' },
+              { value: <Money amount={period.totalCredit} compact />, label: 'received', tone: 'success' },
             ]}
           >
             <StatCard
               label={tileLabel('Billed', 'Total billed')}
-              value={<Money amount={ledger.totalDebit} compact={!isMdScreen} />}
+              value={<Money amount={period.totalDebit} compact={!isMdScreen} />}
               icon={<ReceiptText />}
-              hint={ledger.returnedAmount > 0 ? `${formatCurrency(ledger.returnedAmount)} returned` : 'Total debit'}
+              hint={period.returnedAmount > 0 ? `${formatCurrency(period.returnedAmount)} returned` : 'Total debit'}
             />
-            <StatCard label={tileLabel('Received', 'Total received')} value={<Money amount={ledger.totalCredit} compact={!isMdScreen} />} icon={<Wallet />} tone="success" hint="Total credit" />
+            <StatCard label={tileLabel('Received', 'Total received')} value={<Money amount={period.totalCredit} compact={!isMdScreen} />} icon={<Wallet />} tone="success" hint="Total credit" />
             <StatCard
               label="Entries"
-              value={ledger.entries.length.toLocaleString('en-PK')}
+              value={period.entries.length.toLocaleString('en-PK')}
               icon={<ListOrdered />}
-              hint={entries.length !== ledger.entries.length ? `${entries.length} shown` : undefined}
+              hint={entries.length !== period.entries.length ? `${entries.length} shown` : undefined}
             />
             <StatCard
               label={tileLabel('Last paid', 'Last payment')}
@@ -389,7 +346,8 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
             />
           </StatGrid>
 
-          <Toolbar className="print:hidden">
+          <Toolbar>
+            <LedgerPeriodPicker value={periodChoice} onChange={setPeriodChoice} />
             <SearchInput
               value={search}
               onChange={setSearch}
@@ -411,31 +369,37 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                 count: isMdScreen ? typeCounts[key] : undefined,
               }))}
             />
-            <div className="ml-auto hidden sm:block">
-              <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={() => window.print()}>Print</Button>
-            </div>
+            <Button variant="secondary" size="sm" leftIcon={<Printer />} onClick={() => setStatementOpen(true)} className="w-full sm:ml-auto sm:w-auto">Print / PDF</Button>
           </Toolbar>
 
-          {showTable ? (
-            <TableContainer className="print:border-0 print:shadow-none">
+          {hasPeriod && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-control border border-line bg-surface-2 px-3 py-2 text-xs text-fg-muted">
+              <span className="font-semibold text-fg">{rangeLabel(from, to)}</span>
+              <span className="inline-flex items-baseline gap-1.5">Opening <KhataBalance balance={period.openingBalance} label="drcr" /></span>
+              <span className="inline-flex items-baseline gap-1.5">Closing <KhataBalance balance={period.closingBalance} label="drcr" /></span>
+            </div>
+          )}
+
+          {isMdScreen ? (
+            <TableContainer>
               {entries.length === 0 ? (
                 <EmptyState
                   size="compact"
                   icon={<FileText />}
-                  title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match this filter'}
-                  description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different search or filter.'}
+                  title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match'}
+                  description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different duration, search or filter.'}
                 />
               ) : (
                 <Table>
                   <THead>
                     <tr>
-                      <TH className={PRINT_CELL}>Date</TH>
-                      <TH className={PRINT_CELL}>Description / items</TH>
-                      <TH className={cn('text-center', PRINT_CELL)}>Type</TH>
-                      <TH numeric className={PRINT_CELL}>Debit (sale)</TH>
-                      <TH numeric className={PRINT_CELL}>Credit (paid)</TH>
-                      <TH numeric className={PRINT_CELL}>Running balance</TH>
-                      <TH className="w-24 text-right print:hidden">Action</TH>
+                      <TH>Date</TH>
+                      <TH>Description / items</TH>
+                      <TH className="text-center">Type</TH>
+                      <TH numeric>Debit (sale)</TH>
+                      <TH numeric>Credit (paid)</TH>
+                      <TH numeric>Running balance</TH>
+                      <TH className="w-24 text-right">Action</TH>
                     </tr>
                   </THead>
                   <TBody>
@@ -454,8 +418,8 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
                   <EmptyState
                     size="compact"
                     icon={<FileText />}
-                    title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match this filter'}
-                    description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different search or filter.'}
+                    title={ledger.entries.length === 0 ? 'No entries yet' : 'No entries match'}
+                    description={ledger.entries.length === 0 ? 'The ledger starts with a payment or a POS bill.' : 'Try a different duration, search or filter.'}
                   />
                 </div>
               ) : (
@@ -466,6 +430,22 @@ export const CustomerDetail: React.FC<CustomerDetailProps> = function CustomerDe
           )}
         </div>
       </div>
+
+      <Suspense fallback={null}>
+        {statementOpen && (
+          <CustomerStatementDialog
+            customer={customer}
+            shop={shop}
+            period={period}
+            rows={entries}
+            filterNote={statementNote}
+            ledgerGap={ledger.ledgerGap}
+            choice={periodChoice}
+            onChoiceChange={setPeriodChoice}
+            onClose={() => setStatementOpen(false)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

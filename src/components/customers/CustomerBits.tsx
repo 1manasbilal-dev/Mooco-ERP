@@ -1,5 +1,4 @@
-import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import React, { memo, useCallback, useLayoutEffect, useRef } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { Badge, Money } from '../ui';
 import { cn } from '../../lib/cn';
@@ -95,23 +94,4 @@ export function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R)
     ref.current = fn;
   });
   return useCallback((...args: A) => ref.current(...args), []);
-}
-
-/**
- * True while the browser prints. The ledger uses it to print the full table on phones too, where the
- * screen shows cards; flushSync makes the table render before the print snapshot is taken.
- */
-export function usePrintMode() {
-  const [printing, setPrinting] = useState(false);
-  useEffect(() => {
-    const before = () => flushSync(() => setPrinting(true));
-    const after = () => setPrinting(false);
-    window.addEventListener('beforeprint', before);
-    window.addEventListener('afterprint', after);
-    return () => {
-      window.removeEventListener('beforeprint', before);
-      window.removeEventListener('afterprint', after);
-    };
-  }, []);
-  return printing;
 }
